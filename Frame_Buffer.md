@@ -43,7 +43,8 @@
 
 ## 3. 发送主循环的数据有效性门控
 
-这里的“主循环”指 `PoseStreamer.run_once()` 被 `_pose_stream_common()` 周期调用：
+这里的“主循环”指 `PoseStreamer.run_
+once()` 被 `_pose_stream_common()` 周期调用：
 - `while ...: streamer.run_once()`
 - 代码：`.../pico_manager_thread_server.py:858-860`
 
