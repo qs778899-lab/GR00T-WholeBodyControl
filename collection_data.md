@@ -16,7 +16,12 @@
 1. 标定时：走路时手和脚的动作幅度要大；走路的时长要准确控制，最后要保持静止。
 
 
-# 
+# VLA训练的讨论点：
+
+1. human motion会超调，作为VLA的监督信号合不合适？所以监督universal token比较好？
+2. human motion和robot motion怎么时间戳对齐？在一个while中，human motion和robot motion时间差大吗？SONIC到底是如何对齐时间戳的？
+
+
 
 
 
