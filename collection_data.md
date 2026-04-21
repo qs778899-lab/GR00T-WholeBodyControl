@@ -8,7 +8,7 @@
 # SONIC摇操收集数据的缺点：
 
 1. 上半身会强行保持竖直，无法大幅度弯腰前倾等，导致手的可触达范围有限
-2. 后退时机器人容易踉踉跄跄 (PICO五点增强模式可以解决)
+2. 后退时机器人容易踉踉跄跄 (网络延迟是主要原因，PICO五点增强模式有辅助作用)
 
 
 # 惯性动捕（诺亦腾）
@@ -20,6 +20,7 @@
 
 1. human motion会超调，作为VLA的监督信号合不合适？所以监督universal token比较好？
 2. human motion和robot motion怎么时间戳对齐？在一个while中，human motion和robot motion时间差大吗？SONIC到底是如何对齐时间戳的？
+3. robot control和robot motion都会超调吗？
 
 
 
