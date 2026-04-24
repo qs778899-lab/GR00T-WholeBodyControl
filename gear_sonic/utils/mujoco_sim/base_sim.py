@@ -559,13 +559,9 @@ class BaseSimulator:
                 f"Only 'default' is supported in this minimal build."
             )
 
-        try:
-            if self.config.get("INTERFACE", None):
-                ChannelFactoryInitialize(self.config["DOMAIN_ID"], self.config["INTERFACE"])
-            else:
-                ChannelFactoryInitialize(self.config["DOMAIN_ID"])
-        except Exception as e:
-            print(f"Note: Channel factory initialization attempt: {e}")
+        # ChannelFactory is initialized in run_sim_loop.py via
+        # gear_sonic.utils.mujoco_sim.simulator_factory.init_channel().
+        # Re-initializing here can trigger CycloneDDS domain conflicts.
 
         self.init_unitree_bridge()
         self.sim_env.set_unitree_bridge(self.unitree_bridge)
