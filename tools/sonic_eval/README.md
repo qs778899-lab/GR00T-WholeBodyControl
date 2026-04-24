@@ -1,0 +1,109 @@
+# SONIC MuJoCo Inference Test Utilities
+
+These scripts are standalone helpers for your requested workflow without modifying project core logic.
+
+## Files
+
+- `parquet_to_mujoco_motion.py`
+  - Read one official exported parquet and generate deploy-compatible motion CSV folder.
+  - Handles joint-order conversion for deploy motion input.
+- `visualize_realtime_error.py`
+  - Compute and print instantaneous error + end-effector accuracy.
+  - Modes:
+    - `live_zmq`: read `g1_debug` directly (needs `pyzmq + msgpack_numpy`)
+    - `tail_logs`: realtime-like tailing of deploy `q.csv/action.csv` (no zmq python deps)
+    - `offline_logs`: post-hoc metrics from complete logs.
+- `compute_eef_accuracy_offline.py`
+  - Offline FK consistency check: `observation.state` vs `observation.eef_state`.
+- `run_mujoco_chain.sh`
+  - Convenience script: convert parquet + start sim + start deploy.
+
+## 1) Convert parquet -> deploy motion folder
+
+```bash
+source /home/lab/miniconda3/etc/profile.d/conda.sh
+conda activate sonic
+
+python tools/sonic_eval/parquet_to_mujoco_motion.py \
+  --parquet /home/lab/Desktop/data/data/chunk-000/episode_000000.parquet \
+  --meta-info-json /home/lab/Desktop/data/meta/info.json \
+  --output-root /tmp/sonic_motions_from_parquet \
+  --motion-name episode_000000_from_parquet
+```
+
+Generated folder:
+- `/tmp/sonic_motions_from_parquet/episode_000000_from_parquet`
+
+## 2) Run MuJoCo + deploy policy (manual)
+
+Terminal A (sim loop):
+```bash
+# use your existing environment that has unitree_sdk2py + tyro + mujoco runtime
+python gear_sonic/scripts/run_sim_loop.py --interface sim --simulator mujoco --env-name default
+```
+
+Terminal B (deploy):
+```bash
+cd gear_sonic_deploy
+# NOTE: deploy build needs TensorRT_ROOT + just + successful cmake build
+./deploy.sh sim \
+  --motion-data /tmp/sonic_motions_from_parquet/episode_000000_from_parquet \
+  --obs-config policy/release/observation_config.yaml \
+  --input-type manager \
+  --output-type all \
+  --zmq-host localhost
+```
+
+## 3) Realtime instantaneous error + end-effector accuracy
+
+### Option A: tail deploy logs (works without pyzmq)
+
+Run after deploy starts and writes logs (`--enable-csv-logs --logs-dir ...` in deploy argv if needed):
+
+```bash
+source /home/lab/miniconda3/etc/profile.d/conda.sh
+conda activate sonic
+
+python tools/sonic_eval/visualize_realtime_error.py \
+  --mode tail_logs \
+  --parquet /home/lab/Desktop/data/data/chunk-000/episode_000000.parquet \
+  --logs-dir /path/to/deploy/logs/xx-xx-xx/xx-xx-xx \
+  --print-every 10 \
+  --out-json /tmp/sonic_error_metrics_tail.json
+```
+
+### Option B: direct ZMQ stream
+
+```bash
+python tools/sonic_eval/visualize_realtime_error.py \
+  --mode live_zmq \
+  --parquet /home/lab/Desktop/data/data/chunk-000/episode_000000.parquet \
+  --zmq-host 127.0.0.1 --zmq-port 5557 --zmq-topic g1_debug \
+  --print-every 10 \
+  --out-json /tmp/sonic_error_metrics_zmq.json
+```
+
+## 4) Offline EEF sanity metric (dataset-level)
+
+```bash
+source /home/lab/miniconda3/etc/profile.d/conda.sh
+conda activate sonic
+
+python tools/sonic_eval/compute_eef_accuracy_offline.py \
+  --parquet /home/lab/Desktop/data/data/chunk-000/episode_000000.parquet \
+  --out-json /tmp/sonic_eef_offline.json
+```
+
+## Environment caveats observed on this machine
+
+Current `sonic` env has:
+- yes: `numpy/pandas/pyarrow/scipy/matplotlib/pinocchio`
+- no: `pyzmq/msgpack_numpy`
+- no: `tyro`
+- no: `unitree_sdk2py`
+
+Current system missing for deploy build/runtime:
+- `TensorRT_ROOT` unresolved (cmake fails)
+- `just` missing
+
+So you can already run conversion/offline metrics now; full MuJoCo+deploy runtime needs your deploy/runtime env fixed first.

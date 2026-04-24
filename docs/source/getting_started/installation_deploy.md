@@ -28,9 +28,15 @@ You **must** use the exact TensorRT versions listed above. Using a different ver
 ```sh
 sudo apt-get install -y pv
 pv TensorRT-*.tar.gz | tar -xz -f -
+
+pv TensorRT-10.13.0.35.Linux.x86_64-gnu.cuda-11.8.tar.gz | tar -xz -f -
+
+
 ```
 
 Move the unzipped TensorRT to `~/TensorRT` (or similar) and add to your `~/.bashrc`:
+
+mv TensorRT-10.13*  ~/TensorRT
 
 ```sh
 export TensorRT_ROOT=$HOME/TensorRT
