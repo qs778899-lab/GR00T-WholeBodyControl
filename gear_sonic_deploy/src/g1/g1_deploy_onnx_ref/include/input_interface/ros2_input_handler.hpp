@@ -607,9 +607,8 @@ public:
                     // Set current motion and frame to reference motion (lock mutex)
                     {
                         std::lock_guard<std::mutex> lock(current_motion_mutex);
-                        auto temp_motion = std::make_shared<MotionSequence>(*current_motion);
-                        temp_motion->name = "temporary_motion";
-                        current_motion = temp_motion;
+                        current_motion = motion_reader.GetMotionShared(motion_reader.current_motion_index_);
+                        current_frame = 0;
                     }
 
                     // Now it is safe to enable planner

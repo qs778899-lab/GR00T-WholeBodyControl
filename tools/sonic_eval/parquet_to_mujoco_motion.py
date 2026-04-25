@@ -19,6 +19,9 @@ Output directory layout (single motion folder):
 Notes:
 - No modification to project core files.
 - Uses official meta/info.json joint names when available.
+- Supports taking encoder motion joints from either:
+  - `observation.state` (default-compatible behavior), or
+  - `action.wbc` (robot control from collected data; requested sim2sim analysis path).
 - Body part indexes defaults to [0] (root only), which is sufficient for encoder_mode_4 +
   motion_joint_positions_10frame_step5 + motion_joint_velocities_10frame_step5 +
   motion_anchor_orientation_10frame_step5 in g1 mode.
@@ -126,17 +129,14 @@ def convert(
     motion_name: str,
     meta_info_json: Path | None = None,
     dt_override: float | None = None,
+    joint_source: str = "observation.state",
+    joint_vel_source: str | None = None,
 ) -> Path:
     if not parquet_path.exists():
         raise FileNotFoundError(f"parquet file not found: {parquet_path}")
 
     df = pd.read_parquet(parquet_path)
-    required_cols = [
-        "action.wbc",
-        "observation.state",
-        "observation.body_dq",
-        "observation.root_orientation",
-    ]
+    required_cols = ["action.wbc", "observation.state", "observation.root_orientation"]
     for c in required_cols:
         if c not in df.columns:
             raise KeyError(f"missing required parquet column: {c}")
@@ -171,30 +171,23 @@ def convert(
         body_indices = [name_to_idx[n] for n in MUJOCO_29_NAMES]
 
     # IMPORTANT: deploy motion reader expects joint_pos in ISAACLAB order internally.
-    # The official parquet observation.state body slice is in MuJoCo order.
+    # The official parquet body slice is in MuJoCo order.
     # This remap matches policy_parameters.hpp mujoco_to_isaaclab.
     mujoco_to_isaaclab = [
         0, 6, 12, 1, 7, 13, 2, 8, 14, 3, 9, 15, 22, 4, 10, 16, 23, 5, 11, 17, 24, 18, 25, 19, 26, 20, 27, 21, 28
     ]
 
-    body_pos_mujoco = observation_state[:, body_indices]
+    if joint_source == "observation.state":
+        source_43 = observation_state
+    elif joint_source == "action.wbc":
+        source_43 = action_wbc
+    else:
+        raise ValueError(f"unsupported joint_source: {joint_source}")
+
+    body_pos_mujoco = source_43[:, body_indices]
     joint_pos = body_pos_mujoco[:, mujoco_to_isaaclab]
 
-    body_dq = _ensure_2d_array(df["observation.body_dq"], "observation.body_dq")
-    if body_dq.shape[1] != 29:
-        raise ValueError(f"observation.body_dq must have 29 dims, got {body_dq.shape[1]}")
-    joint_vel = body_dq[:, mujoco_to_isaaclab]
-
-    root_quat = _ensure_2d_array(df["observation.root_orientation"], "observation.root_orientation")
-    if root_quat.shape[1] != 4:
-        raise ValueError(f"observation.root_orientation must have 4 dims, got {root_quat.shape[1]}")
-
-    # Root position is not directly in this export; set to zeros for minimal g1 encoder-required path.
-    n = len(df)
-    body_pos = np.zeros((n, 3), dtype=np.float64)
-    body_quat = root_quat.astype(np.float64)
-
-    # Time step
+    # Time step for finite-difference velocity (also used by body velocity synthesis below).
     if dt_override is not None:
         dt = float(dt_override)
     elif "timestamp" in df.columns and len(df) >= 2:
@@ -204,6 +197,35 @@ def convert(
         dt = float(np.median(dts)) if len(dts) else 0.02
     else:
         dt = 0.02
+
+    # Velocity source policy:
+    # - If user explicitly set --joint-vel-source, follow it.
+    # - Otherwise:
+    #   - action.wbc source -> finite_diff (self-consistent control-domain motion)
+    #   - observation.state source -> observation.body_dq (dataset measured velocity)
+    if joint_vel_source is None:
+        joint_vel_source = "finite_diff" if joint_source == "action.wbc" else "observation.body_dq"
+
+    if joint_vel_source == "observation.body_dq":
+        if "observation.body_dq" not in df.columns:
+            raise KeyError("missing required parquet column for velocity source: observation.body_dq")
+        body_dq = _ensure_2d_array(df["observation.body_dq"], "observation.body_dq")
+        if body_dq.shape[1] != 29:
+            raise ValueError(f"observation.body_dq must have 29 dims, got {body_dq.shape[1]}")
+        joint_vel = body_dq[:, mujoco_to_isaaclab]
+    elif joint_vel_source == "finite_diff":
+        joint_vel = _finite_diff(joint_pos, dt)
+    else:
+        raise ValueError(f"unsupported joint_vel_source: {joint_vel_source}")
+
+    root_quat = _ensure_2d_array(df["observation.root_orientation"], "observation.root_orientation")
+    if root_quat.shape[1] != 4:
+        raise ValueError(f"observation.root_orientation must have 4 dims, got {root_quat.shape[1]}")
+
+    # Root position is not directly in this export; set to zeros for minimal g1 encoder-required path.
+    n = len(df)
+    body_pos = np.zeros((n, 3), dtype=np.float64)
+    body_quat = root_quat.astype(np.float64)
 
     body_lin_vel = _finite_diff(body_pos, dt)
 
@@ -255,9 +277,15 @@ def convert(
         "input_dims": {
             "action.wbc": int(action_wbc.shape[1]),
             "observation.state": int(observation_state.shape[1]),
-            "observation.body_dq": int(body_dq.shape[1]),
+            "observation.body_dq": int(
+                _ensure_2d_array(df["observation.body_dq"], "observation.body_dq").shape[1]
+            )
+            if "observation.body_dq" in df.columns
+            else None,
             "observation.root_orientation": int(root_quat.shape[1]),
         },
+        "joint_source": joint_source,
+        "joint_vel_source": joint_vel_source,
         "body_joint_names_mujoco_29": MUJOCO_29_NAMES,
         "selected_body_indices_from_state": body_indices,
         "joint_order_written_to_motion_csv": "isaaclab_order_29",
@@ -302,6 +330,20 @@ def parse_args() -> argparse.Namespace:
         help="Optional explicit path to dataset meta/info.json",
     )
     parser.add_argument(
+        "--joint-source",
+        type=str,
+        choices=["observation.state", "action.wbc"],
+        default="observation.state",
+        help="Source column used to build motion joint positions for encoder input",
+    )
+    parser.add_argument(
+        "--joint-vel-source",
+        type=str,
+        choices=["observation.body_dq", "finite_diff"],
+        default=None,
+        help="Joint velocity source; default auto-selects by --joint-source",
+    )
+    parser.add_argument(
         "--dt",
         type=float,
         default=None,
@@ -318,6 +360,8 @@ def main() -> None:
         motion_name=args.motion_name,
         meta_info_json=args.meta_info_json,
         dt_override=args.dt,
+        joint_source=args.joint_source,
+        joint_vel_source=args.joint_vel_source,
     )
     print(f"[OK] Motion folder generated: {motion_dir}")
 

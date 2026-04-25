@@ -292,9 +292,8 @@ public:
                 external_token_state_.SetData({});
                 operator_state.play = false;
                 reinitialize_heading = true;
-                auto temp_motion = std::make_shared<MotionSequence>(*current_motion);
-                temp_motion->name = "temporary_motion";
-                current_motion = temp_motion;
+                current_motion = motion_reader.GetMotionShared(motion_reader.current_motion_index_);
+                current_frame = 0;
                 if (has_planner && planner_state.enabled) {
                     planner_state.enabled = false;
                     planner_state.initialized = false;
