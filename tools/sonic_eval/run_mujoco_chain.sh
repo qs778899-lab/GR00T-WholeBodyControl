@@ -15,6 +15,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PARQUET_PATH="${1:-/home/lab/Desktop/data/data/chunk-000/episode_000000.parquet}"
 MOTION_NAME="${2:-episode_000000_from_parquet}"
 MOTION_ROOT="${3:-/tmp/sonic_motions_from_parquet}"
+JOINT_SOURCE="${4:-action.wbc}"
 
 cd "$REPO_ROOT"
 
@@ -29,7 +30,8 @@ python tools/sonic_eval/parquet_to_mujoco_motion.py \
   --parquet "$PARQUET_PATH" \
   --output-root "$MOTION_ROOT" \
   --motion-name "$MOTION_NAME" \
-  --meta-info-json /home/lab/Desktop/data/meta/info.json
+  --meta-info-json /home/lab/Desktop/data/meta/info.json \
+  --joint-source "$JOINT_SOURCE"
 
 MOTION_DIR="$MOTION_ROOT/$MOTION_NAME"
 echo "[INFO] motion dir: $MOTION_DIR"
@@ -45,9 +47,8 @@ sleep 3
 cd gear_sonic_deploy
 # Auto-confirm deploy.sh prompt
 printf 'Y\n' | bash ./deploy.sh sim \
-  --motion-data "$MOTION_DIR" \
+  --motion-data "$MOTION_ROOT" \
   --obs-config policy/release/observation_config.yaml \
   --input-type manager \
   --output-type all \
   --zmq-host localhost
-

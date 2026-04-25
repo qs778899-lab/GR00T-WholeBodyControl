@@ -208,9 +208,12 @@ show_usage() {
     echo "  --obs-config PATH       Set the observation config file (default: policy/configs/example.yaml)"
     echo "  --planner PATH          Set the planner model path (default: planner/example.onnx)"
     echo "  --motion-data PATH      Set the motion data path (default: reference/example_motion/)"
+    echo "  --motion-name NAME      Select one motion subfolder under --motion-data"
     echo "  --input-type TYPE       Set the input type (default: zmq_manager)"
     echo "  --output-type TYPE      Set the output type (default: ros2)"
     echo "  --zmq-host HOST         Set the ZMQ host (default: localhost)"
+    echo "  --enable-csv-logs       Enable deploy CSV logging (q.csv/action.csv/etc.)"
+    echo "  --logs-dir PATH         Set deploy CSV logs directory (default: logs/<timestamp>/)"
     echo ""
     echo "Interface modes:"
     echo "  sim              Use loopback interface for simulation (MuJoCo)"
@@ -239,18 +242,24 @@ CHECKPOINT_DEFAULT="policy/release/model"
 OBS_CONFIG_DEFAULT="policy/release/observation_config.yaml"
 PLANNER_DEFAULT="planner/target_vel/V2/planner_sonic.onnx"
 MOTION_DATA_DEFAULT="reference/example/"
+MOTION_NAME_DEFAULT=""
 INPUT_TYPE_DEFAULT="manager"
 OUTPUT_TYPE_DEFAULT="all"
 ZMQ_HOST_DEFAULT="localhost"
+ENABLE_CSV_LOGS_DEFAULT="false"
+LOGS_DIR_DEFAULT=""
 
 # Initialize with defaults (will be set after parsing)
 CHECKPOINT="$CHECKPOINT_DEFAULT"
 OBS_CONFIG="$OBS_CONFIG_DEFAULT"
 PLANNER="$PLANNER_DEFAULT"
 MOTION_DATA="$MOTION_DATA_DEFAULT"
+MOTION_NAME="$MOTION_NAME_DEFAULT"
 INPUT_TYPE="$INPUT_TYPE_DEFAULT"
 OUTPUT_TYPE="$OUTPUT_TYPE_DEFAULT"
 ZMQ_HOST="$ZMQ_HOST_DEFAULT"
+ENABLE_CSV_LOGS="$ENABLE_CSV_LOGS_DEFAULT"
+LOGS_DIR="$LOGS_DIR_DEFAULT"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -291,6 +300,14 @@ while [[ $# -gt 0 ]]; do
             MOTION_DATA="$2"
             shift 2
             ;;
+        --motion-name)
+            if [[ -z "$2" ]]; then
+                echo -e "${RED}Error: --motion-name requires a name argument${NC}" >&2
+                exit 1
+            fi
+            MOTION_NAME="$2"
+            shift 2
+            ;;
         --input-type)
             if [[ -z "$2" ]]; then
                 echo -e "${RED}Error: --input-type requires a type argument${NC}" >&2
@@ -313,6 +330,18 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             ZMQ_HOST="$2"
+            shift 2
+            ;;
+        --enable-csv-logs)
+            ENABLE_CSV_LOGS="true"
+            shift
+            ;;
+        --logs-dir)
+            if [[ -z "$2" ]]; then
+                echo -e "${RED}Error: --logs-dir requires a path argument${NC}" >&2
+                exit 1
+            fi
+            LOGS_DIR="$2"
             shift 2
             ;;
         sim|real)
@@ -363,6 +392,8 @@ CHECKPOINT_ENCODER="${CHECKPOINT}_encoder.onnx"
 
 # Motion data path (set via command line or default)
 # MOTION_DATA is already set from argument parsing above
+EFFECTIVE_MOTION_DATA="$MOTION_DATA"
+MOTION_SELECT_TMP_DIR=""
 
 # Observation config (set via command line or default)
 # OBS_CONFIG is already set from argument parsing above
@@ -433,6 +464,20 @@ if [ -d "$MOTION_DATA" ]; then
 else
     echo -e "${RED}❌ Missing directory: $MOTION_DATA${NC}"
     MISSING_FILES=$((MISSING_FILES + 1))
+fi
+
+# Optional motion selection by name (single subfolder under --motion-data).
+if [[ -n "$MOTION_NAME" ]]; then
+    SELECTED_MOTION_PATH="${MOTION_DATA%/}/$MOTION_NAME"
+    if [[ ! -d "$SELECTED_MOTION_PATH" ]]; then
+        echo -e "${RED}❌ Selected motion folder not found: $SELECTED_MOTION_PATH${NC}"
+        echo "   Hint: ensure --motion-name matches a direct subfolder under --motion-data."
+        exit 1
+    fi
+    MOTION_SELECT_TMP_DIR="$(mktemp -d /tmp/g1_deploy_motion_XXXXXX)"
+    ln -s "$SELECTED_MOTION_PATH" "$MOTION_SELECT_TMP_DIR/$MOTION_NAME"
+    EFFECTIVE_MOTION_DATA="$MOTION_SELECT_TMP_DIR"
+    echo -e "${GREEN}✅ Motion selected by name: $MOTION_NAME${NC}"
 fi
 
 if [ $MISSING_FILES -gt 0 ]; then
@@ -510,11 +555,21 @@ echo -e "  Network Interface:  ${GREEN}$TARGET${NC}"
 echo -e "  Decoder Model:      ${GREEN}$CHECKPOINT_DECODER${NC}"
 echo -e "  Encoder Model:      ${GREEN}$CHECKPOINT_ENCODER${NC}"
 echo -e "  Motion Data:        ${GREEN}$MOTION_DATA${NC}"
+if [[ -n "$MOTION_NAME" ]]; then
+echo -e "  Motion Name:        ${GREEN}$MOTION_NAME${NC}"
+echo -e "  Effective Data Dir: ${GREEN}$EFFECTIVE_MOTION_DATA${NC}"
+fi
 echo -e "  Obs Config:         ${GREEN}$OBS_CONFIG${NC}"
 echo -e "  Planner:            ${GREEN}$PLANNER${NC}"
 echo -e "  Input Type:         ${GREEN}$INPUT_TYPE${NC}"
 echo -e "  Output Type:        ${GREEN}$OUTPUT_TYPE${NC}"
 echo -e "  ZMQ Host:           ${GREEN}$ZMQ_HOST${NC}"
+if [[ "$ENABLE_CSV_LOGS" == "true" ]]; then
+echo -e "  CSV Logs:           ${GREEN}enabled${NC}"
+if [[ -n "$LOGS_DIR" ]]; then
+echo -e "  Logs Dir:           ${GREEN}$LOGS_DIR${NC}"
+fi
+fi
 if [[ -n "$EXTRA_ARGS" ]]; then
 echo -e "  Extra Args:         ${GREEN}$EXTRA_ARGS${NC}"
 fi
@@ -523,13 +578,19 @@ echo -e "${CYAN}═════════════════════�
 echo ""
 echo -e "${YELLOW}The following command will be executed:${NC}"
 echo ""
-echo -e "${BLUE}just run g1_deploy_onnx_ref $TARGET $CHECKPOINT_DECODER $MOTION_DATA \\${NC}"
+echo -e "${BLUE}just run g1_deploy_onnx_ref $TARGET $CHECKPOINT_DECODER $EFFECTIVE_MOTION_DATA \\${NC}"
 echo -e "${BLUE}    --obs-config $OBS_CONFIG \\${NC}"
 echo -e "${BLUE}    --encoder-file $CHECKPOINT_ENCODER \\${NC}"
 echo -e "${BLUE}    --planner-file $PLANNER \\${NC}"
 echo -e "${BLUE}    --input-type $INPUT_TYPE \\${NC}"
 echo -e "${BLUE}    --output-type $OUTPUT_TYPE \\${NC}"
 echo -e "${BLUE}    --zmq-host $ZMQ_HOST${NC}"
+if [[ "$ENABLE_CSV_LOGS" == "true" ]]; then
+echo -e "${BLUE}    --enable-csv-logs \\${NC}"
+if [[ -n "$LOGS_DIR" ]]; then
+echo -e "${BLUE}    --logs-dir $LOGS_DIR \\${NC}"
+fi
+fi
 if [[ -n "$EXTRA_ARGS" ]]; then
 echo -e "${BLUE}    $EXTRA_ARGS${NC}"
 fi
@@ -551,27 +612,36 @@ if [[ "$confirm" =~ ^[Yy]$ ]] || [[ -z "$confirm" ]]; then
     echo -e "${GREEN}🚀 Starting deployment...${NC}"
     echo ""
     
-    # Build the command with optional extra args
-    if [[ -n "$EXTRA_ARGS" ]]; then
-        just run g1_deploy_onnx_ref "$TARGET" "$CHECKPOINT_DECODER" "$MOTION_DATA" \
-            --obs-config "$OBS_CONFIG" \
-            --encoder-file "$CHECKPOINT_ENCODER" \
-            --planner-file "$PLANNER" \
-            --input-type "$INPUT_TYPE" \
-            --output-type "$OUTPUT_TYPE" \
-            --zmq-host "$ZMQ_HOST" \
-            $EXTRA_ARGS
-    else
-        just run g1_deploy_onnx_ref "$TARGET" "$CHECKPOINT_DECODER" "$MOTION_DATA" \
-            --obs-config "$OBS_CONFIG" \
-            --encoder-file "$CHECKPOINT_ENCODER" \
-            --planner-file "$PLANNER" \
-            --input-type "$INPUT_TYPE" \
-            --output-type "$OUTPUT_TYPE" \
-            --zmq-host "$ZMQ_HOST"
+    DEPLOY_CMD=(
+        just run g1_deploy_onnx_ref "$TARGET" "$CHECKPOINT_DECODER" "$EFFECTIVE_MOTION_DATA"
+        --obs-config "$OBS_CONFIG"
+        --encoder-file "$CHECKPOINT_ENCODER"
+        --planner-file "$PLANNER"
+        --input-type "$INPUT_TYPE"
+        --output-type "$OUTPUT_TYPE"
+        --zmq-host "$ZMQ_HOST"
+    )
+
+    if [[ "$ENABLE_CSV_LOGS" == "true" ]]; then
+        DEPLOY_CMD+=(--enable-csv-logs)
+        if [[ -n "$LOGS_DIR" ]]; then
+            DEPLOY_CMD+=(--logs-dir "$LOGS_DIR")
+        fi
+    fi
+
+    # shellcheck disable=SC2086  # EXTRA_ARGS may contain multiple flags by design
+    DEPLOY_CMD+=($EXTRA_ARGS)
+    "${DEPLOY_CMD[@]}"
+
+    # Cleanup temporary single-motion selection dir if created.
+    if [[ -n "$MOTION_SELECT_TMP_DIR" ]] && [[ -d "$MOTION_SELECT_TMP_DIR" ]]; then
+        rm -rf "$MOTION_SELECT_TMP_DIR"
     fi
 else
     echo ""
     echo -e "${YELLOW}Deployment cancelled.${NC}"
+    if [[ -n "$MOTION_SELECT_TMP_DIR" ]] && [[ -d "$MOTION_SELECT_TMP_DIR" ]]; then
+        rm -rf "$MOTION_SELECT_TMP_DIR"
+    fi
     exit 0
 fi

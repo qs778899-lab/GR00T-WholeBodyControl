@@ -1,0 +1,560 @@
+#!/usr/bin/env python3
+"""
+Compute Isaac-eval-style tracking metrics from MuJoCo sim2sim logs.
+
+This script tries to reuse the same metric function as Isaac eval:
+`smpl_sim.smpllib.smpl_eval.compute_metrics_lite`.
+
+If `smpl_sim` is unavailable, it falls back to a local implementation for:
+- mpjpe_g / mpjpe_l / mpjpe_pa
+and their subset variants:
+- *_legs, *_vr_3points, *_other_upper_bodies, *_foot
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
+import pinocchio as pin
+
+
+MUJOCO_29_NAMES = [
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    "waist_yaw_joint",
+    "waist_roll_joint",
+    "waist_pitch_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "left_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint",
+]
+
+STATE43_NAMES = [
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    "waist_yaw_joint",
+    "waist_roll_joint",
+    "waist_pitch_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "left_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+    "left_hand_index_0_joint",
+    "left_hand_index_1_joint",
+    "left_hand_middle_0_joint",
+    "left_hand_middle_1_joint",
+    "left_hand_thumb_0_joint",
+    "left_hand_thumb_1_joint",
+    "left_hand_thumb_2_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint",
+    "right_hand_index_0_joint",
+    "right_hand_index_1_joint",
+    "right_hand_middle_0_joint",
+    "right_hand_middle_1_joint",
+    "right_hand_thumb_0_joint",
+    "right_hand_thumb_1_joint",
+    "right_hand_thumb_2_joint",
+]
+
+MUJOCO_TO_ISAACLAB_29 = [
+    0,
+    6,
+    12,
+    1,
+    7,
+    13,
+    2,
+    8,
+    14,
+    3,
+    9,
+    15,
+    22,
+    4,
+    10,
+    16,
+    23,
+    5,
+    11,
+    17,
+    24,
+    18,
+    25,
+    19,
+    26,
+    20,
+    27,
+    21,
+    28,
+]
+ISAACLAB_TO_MUJOCO_29 = [0] * 29
+for mj_i, isa_i in enumerate(MUJOCO_TO_ISAACLAB_29):
+    ISAACLAB_TO_MUJOCO_29[isa_i] = mj_i
+
+BODY_FRAMES = [
+    "pelvis",
+    "left_hip_roll_link",
+    "left_knee_link",
+    "left_ankle_roll_link",
+    "right_hip_roll_link",
+    "right_knee_link",
+    "right_ankle_roll_link",
+    "torso_link",
+    "left_shoulder_roll_link",
+    "left_elbow_link",
+    "left_wrist_yaw_link",
+    "right_shoulder_roll_link",
+    "right_elbow_link",
+    "right_wrist_yaw_link",
+]
+SUBSET_NAMES = {
+    "legs": [
+        "left_hip_roll_link",
+        "left_knee_link",
+        "left_ankle_roll_link",
+        "right_hip_roll_link",
+        "right_knee_link",
+        "right_ankle_roll_link",
+    ],
+    "vr_3points": ["torso_link", "left_wrist_yaw_link", "right_wrist_yaw_link"],
+    "other_upper_bodies": [
+        "pelvis",
+        "left_shoulder_roll_link",
+        "left_elbow_link",
+        "right_shoulder_roll_link",
+        "right_elbow_link",
+    ],
+    "foot": ["left_ankle_roll_link", "right_ankle_roll_link"],
+}
+
+
+def _mean_or_zero(x: np.ndarray) -> float:
+    if x.size == 0:
+        return 0.0
+    return float(np.mean(x))
+
+
+@dataclass
+class GTData:
+    q43_source: np.ndarray
+    motion_keys: list[str]
+
+    @property
+    def num_frames(self) -> int:
+        return int(self.q43_source.shape[0])
+
+
+def _target_motion_name(gt_motion_dir: Path | None, target_motion_name: str | None) -> str | None:
+    if target_motion_name:
+        return target_motion_name
+    if gt_motion_dir is not None:
+        return gt_motion_dir.name
+    return None
+
+
+def _load_log_mask(logs_dir: Path, target_motion_name: str | None) -> np.ndarray | None:
+    motion_playing_csv = logs_dir / "motion_playing.csv"
+    motion_name_csv = logs_dir / "motion_name.csv"
+
+    play_mask = None
+    name_mask = None
+
+    if motion_playing_csv.exists():
+        play_df = pd.read_csv(motion_playing_csv)
+        play_val = play_df.select_dtypes(include=[np.number]).to_numpy(dtype=np.float64)
+        if play_val.shape[1] >= 1:
+            play_mask = play_val[:, -1] > 0.5
+
+    if target_motion_name is not None and motion_name_csv.exists():
+        motion_name_df = pd.read_csv(motion_name_csv)
+        name_mask = motion_name_df.iloc[:, -1].astype(str).to_numpy() == target_motion_name
+
+    if play_mask is None and name_mask is None:
+        return None
+
+    masks = [m for m in [play_mask, name_mask] if m is not None]
+    n = min(len(m) for m in masks)
+    out = np.ones((n,), dtype=bool)
+    for m in masks:
+        out &= m[:n]
+    return out
+
+
+def read_logs_q29(logs_dir: Path, target_motion_name: str | None) -> np.ndarray:
+    q_csv = logs_dir / "q.csv"
+    if not q_csv.exists():
+        raise FileNotFoundError(f"missing {q_csv}")
+    q_df = pd.read_csv(q_csv)
+    q_val = q_df.select_dtypes(include=[np.number]).to_numpy(dtype=np.float64)
+    if q_val.shape[1] < 29:
+        raise ValueError("q.csv numeric columns less than 29")
+    q29 = q_val[:, -29:]
+
+    log_mask = _load_log_mask(logs_dir, target_motion_name)
+    if log_mask is None:
+        return q29
+
+    n = min(len(q29), len(log_mask))
+    q29 = q29[:n]
+    log_mask = log_mask[:n]
+
+    if not np.any(log_mask):
+        motion_desc = target_motion_name if target_motion_name is not None else "<unknown>"
+        raise ValueError(
+            "No valid log rows matched the requested motion/play mask. "
+            f"target_motion_name={motion_desc}"
+        )
+    return q29[log_mask]
+
+
+def load_gt_body_q29_from_motion_dir(motion_dir: Path) -> np.ndarray:
+    joint_pos_csv = motion_dir / "joint_pos.csv"
+    if not joint_pos_csv.exists():
+        raise FileNotFoundError(f"missing {joint_pos_csv}")
+    jp = pd.read_csv(joint_pos_csv).select_dtypes(include=[np.number]).to_numpy(dtype=np.float64)
+    if jp.shape[1] < 29:
+        raise ValueError("joint_pos.csv numeric columns less than 29")
+    jp_isaac = jp[:, :29]
+    return jp_isaac[:, ISAACLAB_TO_MUJOCO_29]
+
+
+def load_gt(parquet: Path, gt_source: str, gt_motion_dir: Path | None = None) -> GTData:
+    df = pd.read_parquet(parquet)
+    state = np.stack(df["observation.state"].apply(np.asarray).to_numpy(), axis=0).astype(np.float64)
+    action = np.stack(df["action.wbc"].apply(np.asarray).to_numpy(), axis=0).astype(np.float64)
+    if state.shape[1] != 43:
+        raise ValueError(f"observation.state must be 43D, got {state.shape[1]}")
+    if action.shape[1] != 43:
+        raise ValueError(f"action.wbc must be 43D, got {action.shape[1]}")
+
+    if gt_source == "observation.state":
+        q43 = state
+    elif gt_source == "action.wbc":
+        q43 = action
+    else:
+        raise ValueError(f"unsupported gt_source: {gt_source}")
+
+    idx43 = {n: i for i, n in enumerate(STATE43_NAMES)}
+    body29_idx = [idx43[n] for n in MUJOCO_29_NAMES]
+
+    if gt_motion_dir is not None:
+        body29_mj = load_gt_body_q29_from_motion_dir(gt_motion_dir)
+        n_sync = min(len(q43), len(body29_mj))
+        q43 = q43[:n_sync].copy()
+        q43[:, body29_idx] = body29_mj[:n_sync]
+
+    motion_keys = [f"frame_{i:06d}" for i in range(len(q43))]
+    return GTData(q43_source=q43, motion_keys=motion_keys)
+
+
+class BodyFK:
+    def __init__(self, urdf: Path, body_frames: list[str]):
+        self.model = pin.buildModelFromUrdf(str(urdf))
+        self.data = self.model.createData()
+        self.frame_ids = [self.model.getFrameId(n) for n in body_frames]
+        if any(fid >= len(self.model.frames) for fid in self.frame_ids):
+            raise ValueError("Some body frames not found in URDF")
+
+    def body_pos(self, q43: np.ndarray) -> np.ndarray:
+        pin.framesForwardKinematics(self.model, self.data, q43)
+        return np.stack(
+            [np.asarray(self.data.oMf[fid].translation, dtype=np.float64) for fid in self.frame_ids],
+            axis=0,
+        )
+
+
+def _similarity_transform(pred: np.ndarray, gt: np.ndarray) -> np.ndarray:
+    mu_x = pred.mean(axis=0, keepdims=True)
+    mu_y = gt.mean(axis=0, keepdims=True)
+    x0 = pred - mu_x
+    y0 = gt - mu_y
+    var_x = np.sum(x0 * x0)
+    if var_x < 1e-12:
+        return pred.copy()
+    k = x0.T @ y0
+    u, s, vt = np.linalg.svd(k)
+    r = vt.T @ u.T
+    if np.linalg.det(r) < 0:
+        vt[-1, :] *= -1.0
+        r = vt.T @ u.T
+    scale = float(np.sum(s) / var_x)
+    t = mu_y - scale * (mu_x @ r)
+    return scale * (pred @ r) + t
+
+
+def _mpjpe_mm(pred: np.ndarray, gt: np.ndarray) -> np.ndarray:
+    return np.linalg.norm(pred - gt, axis=-1) * 1000.0
+
+
+def _compute_metrics_lite_fallback(pred_pos_all: list[np.ndarray], gt_pos_all: list[np.ndarray]) -> dict[str, list[np.ndarray]]:
+    out_g: list[np.ndarray] = []
+    out_l: list[np.ndarray] = []
+    out_pa: list[np.ndarray] = []
+    for p_seq, g_seq in zip(pred_pos_all, gt_pos_all):
+        t = p_seq.shape[0]
+        g_arr = np.zeros((t,), dtype=np.float64)
+        l_arr = np.zeros((t,), dtype=np.float64)
+        pa_arr = np.zeros((t,), dtype=np.float64)
+        for i in range(t):
+            p = p_seq[i]
+            g = g_seq[i]
+            g_arr[i] = float(_mpjpe_mm(p, g).mean())
+            p_l = p - p[0:1]
+            g_l = g - g[0:1]
+            l_arr[i] = float(_mpjpe_mm(p_l, g_l).mean())
+            p_pa = _similarity_transform(p, g)
+            pa_arr[i] = float(_mpjpe_mm(p_pa, g).mean())
+        out_g.append(g_arr)
+        out_l.append(l_arr)
+        out_pa.append(pa_arr)
+    return {"mpjpe_g": out_g, "mpjpe_l": out_l, "mpjpe_pa": out_pa}
+
+
+def _compute_metrics_with_optional_smpl(pred_pos_all: list[np.ndarray], gt_pos_all: list[np.ndarray]) -> tuple[dict[str, list[np.ndarray]], str]:
+    try:
+        from smpl_sim.smpllib.smpl_eval import compute_metrics_lite  # type: ignore
+    except Exception:
+        return _compute_metrics_lite_fallback(pred_pos_all, gt_pos_all), "fallback_local_mpjpe"
+    metrics = compute_metrics_lite(pred_pos_all, gt_pos_all, concatenate=False)  # type: ignore
+    return metrics, "smpl_sim.compute_metrics_lite"
+
+
+def _aggregate_metrics_per_motion(metrics: dict[str, list[np.ndarray]]) -> dict[str, np.ndarray]:
+    """
+    Match Isaac callback reduction:
+    - if key contains 'mpjpe': mean over time
+    - else: sum over time
+    """
+    reduced: dict[str, np.ndarray] = {}
+    for k, seq_list in metrics.items():
+        vals = []
+        for arr in seq_list:
+            a = np.asarray(arr, dtype=np.float64)
+            vals.append(float(np.mean(a)) if "mpjpe" in k else float(np.sum(a)))
+        reduced[k] = np.asarray(vals, dtype=np.float64)
+    return reduced
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="MuJoCo sim2sim Isaac-style eval metrics")
+    parser.add_argument("--parquet", type=Path, required=True)
+    parser.add_argument("--logs-dir", type=Path, required=True, help="deploy logs dir containing q.csv")
+    parser.add_argument(
+        "--gt-source",
+        type=str,
+        choices=["observation.state", "action.wbc"],
+        default="action.wbc",
+    )
+    parser.add_argument("--gt-motion-dir", type=Path, default=None)
+    parser.add_argument("--target-motion-name", type=str, default=None)
+    parser.add_argument(
+        "--urdf",
+        type=Path,
+        default=Path("gear_sonic/data/robot_model/model_data/g1/g1_29dof_with_hand.urdf"),
+    )
+    parser.add_argument("--success-thresh-mpjpe-l-mm", type=float, default=30.0)
+    parser.add_argument("--success-thresh-mpjpe-g-mm", type=float, default=200.0)
+    parser.add_argument("--success-thresh-mpjpe-pa-mm", type=float, default=30.0)
+    parser.add_argument("--out-json", type=Path, default=Path("/tmp/sonic_mujoco_eval_metrics.json"))
+    args = parser.parse_args()
+
+    gt = load_gt(args.parquet, args.gt_source, args.gt_motion_dir)
+    target_motion_name = _target_motion_name(args.gt_motion_dir, args.target_motion_name)
+    q29 = read_logs_q29(args.logs_dir, target_motion_name)
+    fk = BodyFK(args.urdf, BODY_FRAMES)
+
+    idx43 = {n: i for i, n in enumerate(STATE43_NAMES)}
+    body29_idx_in_43 = [idx43[n] for n in MUJOCO_29_NAMES]
+    body_name_to_idx = {n: i for i, n in enumerate(BODY_FRAMES)}
+    subset_indices = {
+        "": np.arange(len(BODY_FRAMES), dtype=np.int64),
+        "_legs": np.asarray([body_name_to_idx[n] for n in SUBSET_NAMES["legs"]], dtype=np.int64),
+        "_vr_3points": np.asarray([body_name_to_idx[n] for n in SUBSET_NAMES["vr_3points"]], dtype=np.int64),
+        "_other_upper_bodies": np.asarray(
+            [body_name_to_idx[n] for n in SUBSET_NAMES["other_upper_bodies"]],
+            dtype=np.int64,
+        ),
+        "_foot": np.asarray([body_name_to_idx[n] for n in SUBSET_NAMES["foot"]], dtype=np.int64),
+    }
+
+    n = min(len(q29), gt.num_frames)
+    q29 = q29[:n]
+    q43_gt = gt.q43_source[:n]
+
+    pred_pos_all: list[np.ndarray] = []
+    gt_pos_all: list[np.ndarray] = []
+    for i in range(n):
+        q_pred = q43_gt[i].copy()
+        q_pred[body29_idx_in_43] = q29[i]
+        pred_pos_all.append(fk.body_pos(q_pred))
+        gt_pos_all.append(fk.body_pos(q43_gt[i]))
+    pred_pos_arr = np.stack(pred_pos_all, axis=0)  # [T, B, 3]
+    gt_pos_arr = np.stack(gt_pos_all, axis=0)
+
+    # Build per-sequence format expected by compute_metrics_lite: list of [T, B, 3]
+    metrics_all_raw, metrics_impl = _compute_metrics_with_optional_smpl(
+        [pred_pos_arr],
+        [gt_pos_arr],
+    )
+    reduced_all = _aggregate_metrics_per_motion(metrics_all_raw)
+
+    # Subsets
+    subset_raw: dict[str, dict[str, list[np.ndarray]]] = {}
+    for suffix, sidx in subset_indices.items():
+        if suffix == "":
+            continue
+        subset_raw[suffix], _ = _compute_metrics_with_optional_smpl(
+            [pred_pos_arr[:, sidx, :]],
+            [gt_pos_arr[:, sidx, :]],
+        )
+    reduced_subsets = {sfx: _aggregate_metrics_per_motion(m) for sfx, m in subset_raw.items()}
+
+    # Merge metrics (Isaac-like key naming)
+    per_motion_metrics: dict[str, np.ndarray] = {}
+    for k, v in reduced_all.items():
+        per_motion_metrics[k] = v
+    for sfx, d in reduced_subsets.items():
+        for k, v in d.items():
+            per_motion_metrics[f"{k}{sfx}"] = v
+
+    # For this script each frame is treated as one "motion key"
+    # (single-episode online eval proxy).
+    # Derive frame-level proxy metrics for termination/success from unaggregated all-body mpjpe.
+    # If smpl_sim path returned extra keys, we still use mpjpe_* for termination.
+    mpjpe_g_frame = _compute_metrics_lite_fallback([pred_pos_arr], [gt_pos_arr])["mpjpe_g"][0]
+    mpjpe_l_frame = _compute_metrics_lite_fallback([pred_pos_arr], [gt_pos_arr])["mpjpe_l"][0]
+    mpjpe_pa_frame = _compute_metrics_lite_fallback([pred_pos_arr], [gt_pos_arr])["mpjpe_pa"][0]
+
+    terminated = (
+        (mpjpe_l_frame > args.success_thresh_mpjpe_l_mm)
+        | (mpjpe_g_frame > args.success_thresh_mpjpe_g_mm)
+        | (mpjpe_pa_frame > args.success_thresh_mpjpe_pa_mm)
+    )
+    success_mask = ~terminated
+    progress = np.ones_like(mpjpe_l_frame, dtype=np.float64)
+
+    # Expand aggregated metrics to frame-wise arrays for all_metrics_dict compatibility.
+    # For keys lacking frame-level definition, repeat scalar mean per frame.
+    all_metrics_dict: dict[str, Any] = {}
+    for k, v in per_motion_metrics.items():
+        scalar = float(v[0]) if v.size else 0.0
+        all_metrics_dict[k] = [scalar] * n
+
+    # Overwrite known frame-level keys with true per-frame values.
+    all_metrics_dict["mpjpe_g"] = mpjpe_g_frame.tolist()
+    all_metrics_dict["mpjpe_l"] = mpjpe_l_frame.tolist()
+    all_metrics_dict["mpjpe_pa"] = mpjpe_pa_frame.tolist()
+
+    # Fill subset frame-level via fallback exact computation.
+    for suffix, sidx in subset_indices.items():
+        if suffix == "":
+            continue
+        sub = _compute_metrics_lite_fallback(
+            [pred_pos_arr[:, sidx, :]],
+            [gt_pos_arr[:, sidx, :]],
+        )
+        all_metrics_dict[f"mpjpe_g{suffix}"] = sub["mpjpe_g"][0].tolist()
+        all_metrics_dict[f"mpjpe_l{suffix}"] = sub["mpjpe_l"][0].tolist()
+        all_metrics_dict[f"mpjpe_pa{suffix}"] = sub["mpjpe_pa"][0].tolist()
+
+    all_metrics_dict["terminated"] = terminated.tolist()
+    all_metrics_dict["progress"] = progress.tolist()
+    all_metrics_dict["motion_keys"] = gt.motion_keys[:n]
+    all_metrics_dict["sampling_prob"] = [1.0 / n] * n if n > 0 else []
+
+    failed_idx = np.nonzero(terminated)[0]
+    failed_metrics_dict: dict[str, Any] = {}
+    for k, v in all_metrics_dict.items():
+        if isinstance(v, list) and len(v) == n:
+            failed_metrics_dict[k] = [v[i] for i in failed_idx.tolist()]
+    failed_metrics_dict["motion_keys"] = [gt.motion_keys[i] for i in failed_idx.tolist()]
+    failed_metrics_dict["sampling_prob"] = [1.0 / n] * len(failed_idx) if n > 0 else []
+
+    metrics_all = {}
+    metrics_success = {}
+    for k, v in all_metrics_dict.items():
+        if not isinstance(v, list) or len(v) != n or k in {"motion_keys", "sampling_prob", "terminated", "progress"}:
+            continue
+        arr = np.asarray(v, dtype=np.float64)
+        metrics_all[k] = _mean_or_zero(arr)
+        metrics_success[k] = _mean_or_zero(arr[success_mask]) if np.any(success_mask) else 0.0
+    metrics_success["success_rate"] = float(np.mean(success_mask.astype(np.float64))) if n > 0 else 0.0
+    metrics_success["progress_rate"] = float(np.mean(progress)) if n > 0 else 0.0
+
+    result = {
+        "parquet": str(args.parquet),
+        "logs_dir": str(args.logs_dir),
+        "num_frames": int(n),
+        "gt_source": args.gt_source,
+        "gt_motion_dir": str(args.gt_motion_dir) if args.gt_motion_dir is not None else None,
+        "target_motion_name": target_motion_name,
+        "metric_backend": metrics_impl,
+        "thresholds": {
+            "mpjpe_l_mm": float(args.success_thresh_mpjpe_l_mm),
+            "mpjpe_g_mm": float(args.success_thresh_mpjpe_g_mm),
+            "mpjpe_pa_mm": float(args.success_thresh_mpjpe_pa_mm),
+        },
+        "metrics_all": metrics_all,
+        "metrics_success": metrics_success,
+        "all_metrics_dict": all_metrics_dict,
+        "failed_metrics_dict": failed_metrics_dict,
+        "failed_idxes": failed_idx.tolist(),
+        "failed_keys": failed_metrics_dict.get("motion_keys", []),
+        "success_keys": [gt.motion_keys[i] for i in np.nonzero(success_mask)[0].tolist()],
+    }
+
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    if args.out_json:
+        args.out_json.parent.mkdir(parents=True, exist_ok=True)
+        args.out_json.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(f"[OK] wrote {args.out_json}")
+
+
+if __name__ == "__main__":
+    main()
