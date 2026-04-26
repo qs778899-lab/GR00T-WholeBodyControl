@@ -26,14 +26,21 @@
 3. robot control和robot motion都会超调吗？
 4. rrd的robot control可视化的原理是？它只是让电机理想化转动这个关节角度，并没有在仿真器中运行，也就是没有考虑重力摩擦等真实阻力？
 5. sim2sim error分析的意义是，在mujoco中看sonic的tracking精度？ 那应该找一些超调不是这么离谱的动作数据？
+6. VLA真机推理动作不流畅，很多碎小动作，目前是motion token 直接做平滑处理，效果不好
 
 
+待解决问题：
+脚踝：
+仿真是串联， 真机是并联两个电机？怎么直观理解？
+宇树做了串并联转换
 
 
+robot encoder之前load motion, 取10帧，相当于10HZ(发送频率又是多少？它相邻两次发送的10帧之间有overlap吗)，这个和retarget的raw 30HZ插值到50HZ（又为什么要插值到50HZ），有什么关系吗？
+这个和frame buffer又有关系吗？
+
+robot encoder的输入为啥会需要超调动作，SONIC训练的数据的输入会带有超调吗/
 
 
-
-
-
+在tracker中脚踝的跟踪是比较难的，reward中无论是否有脚踝相关的，训出来的policy效果区别不大
 
 
