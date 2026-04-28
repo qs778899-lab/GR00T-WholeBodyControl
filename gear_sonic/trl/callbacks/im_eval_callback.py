@@ -133,19 +133,22 @@ class ImEvalCallback(TrainerCallback):
             metrics_eval = self.evaluate_policy()
 
     def save_metrics_eval(self, metrics_eval):
-        metrics_json = {}
-        for k, v in metrics_eval.items():
-            if k in ["eval/all_metrics_dict", "eval/failed_metrics_dict"]:
-                metrics_json[k] = {}
-                for kk, vv in v.items():
-                    if isinstance(vv, np.ndarray):
-                        metrics_json[k][kk] = vv.tolist()
-                    else:
-                        metrics_json[k][kk] = vv
-            elif isinstance(v, np.ndarray):
-                metrics_json[k] = v.tolist()
-            else:
-                metrics_json[k] = v
+        def _to_jsonable(x):
+            if isinstance(x, dict):
+                return {k: _to_jsonable(v) for k, v in x.items()}
+            if isinstance(x, (list, tuple)):
+                return [_to_jsonable(v) for v in x]
+            if isinstance(x, np.ndarray):
+                return x.tolist()
+            if isinstance(x, np.generic):
+                return x.item()
+            if torch.is_tensor(x):
+                if x.ndim == 0:
+                    return x.item()
+                return x.detach().cpu().tolist()
+            return x
+
+        metrics_json = _to_jsonable(metrics_eval)
 
         os.makedirs(self.output_dir, exist_ok=True)
         with open(os.path.join(self.output_dir, "metrics_eval.json"), "w") as f:

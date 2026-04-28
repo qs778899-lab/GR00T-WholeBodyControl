@@ -392,8 +392,7 @@ source /home/lab/miniconda3/etc/profile.d/conda.sh
 conda activate sonic
 python gear_sonic/eval_agent_trl.py +checkpoint=/home/lab/Desktop/GR00T-WholeBodyControl/models/sonic_release/last.pt +headless=True ++eval_callbacks=im_eval ++run_eval_loop=False ++num_envs=1 "+manager_env/terminations=tracking/eval" "++manager_env.commands.motion.motion_lib_cfg.motion_file=/home/lab/Desktop/GR00T-WholeBodyControl/sample_data/robot_filtered/210531/walk_forward_amateur_001__A001.pkl" "++manager_env.commands.motion.motion_lib_cfg.filter_motion_keys=['walk_forward_amateur_001__A001']" "++manager_env.commands.motion.filter_motion_keys=['walk_forward_amateur_001__A001']" "++eval_output_dir=/tmp/isaac_eval_walk_a001"
 
-
-
+/tmp/isaac_eval_walk_a001/metrics_eval.json
 
 
 
