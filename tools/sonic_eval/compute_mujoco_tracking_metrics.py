@@ -5,10 +5,13 @@ Compute Isaac-eval-style tracking metrics from MuJoCo sim2sim logs.
 This script tries to reuse the same metric function as Isaac eval:
 `smpl_sim.smpllib.smpl_eval.compute_metrics_lite`.
 
-If `smpl_sim` is unavailable, it falls back to a local implementation for:
+If `smpl_sim` is unavailable, it can fall back to a local implementation for:
 - mpjpe_g / mpjpe_l / mpjpe_pa
 and their subset variants:
 - *_legs, *_vr_3points, *_other_upper_bodies, *_foot
+
+To strictly match IsaacSim eval definitions, run with default behavior
+(fallback disabled) and ensure `smpl_sim` is importable.
 """
 
 from __future__ import annotations
@@ -509,10 +512,10 @@ def _similarity_transform(pred: np.ndarray, gt: np.ndarray) -> np.ndarray:
         return pred.copy()
     k = x0.T @ y0
     u, s, vt = np.linalg.svd(k)
-    r = vt.T @ u.T
+    r = u @ vt
     if np.linalg.det(r) < 0:
         vt[-1, :] *= -1.0
-        r = vt.T @ u.T
+        r = u @ vt
     scale = float(np.sum(s) / var_x)
     t = mu_y - scale * (mu_x @ r)
     return scale * (pred @ r) + t
@@ -546,10 +549,20 @@ def _compute_metrics_lite_fallback(pred_pos_all: list[np.ndarray], gt_pos_all: l
     return {"mpjpe_g": out_g, "mpjpe_l": out_l, "mpjpe_pa": out_pa}
 
 
-def _compute_metrics_with_optional_smpl(pred_pos_all: list[np.ndarray], gt_pos_all: list[np.ndarray]) -> tuple[dict[str, list[np.ndarray]], str]:
+def _compute_metrics_with_optional_smpl(
+    pred_pos_all: list[np.ndarray],
+    gt_pos_all: list[np.ndarray],
+    allow_fallback_metrics: bool,
+) -> tuple[dict[str, list[np.ndarray]], str]:
     try:
         from smpl_sim.smpllib.smpl_eval import compute_metrics_lite  # type: ignore
-    except Exception:
+    except Exception as e:
+        if not allow_fallback_metrics:
+            raise RuntimeError(
+                "smpl_sim.smpllib.smpl_eval.compute_metrics_lite is required for IsaacSim-aligned metrics, "
+                "but import failed. Install/activate env with smpl_sim, or pass --allow-fallback-metrics "
+                "if you explicitly accept non-official fallback metrics."
+            ) from e
         return _compute_metrics_lite_fallback(pred_pos_all, gt_pos_all), "fallback_local_mpjpe"
     metrics = compute_metrics_lite(pred_pos_all, gt_pos_all, concatenate=False)  # type: ignore
     return metrics, "smpl_sim.compute_metrics_lite"
@@ -625,6 +638,11 @@ def main() -> None:
     parser.add_argument("--align-lag-min", type=int, default=-150, help="min lag for auto_q29")
     parser.add_argument("--align-lag-max", type=int, default=150, help="max lag for auto_q29")
     parser.add_argument("--align-min-overlap", type=int, default=200, help="min overlap for auto_q29")
+    parser.add_argument(
+        "--allow-fallback-metrics",
+        action="store_true",
+        help="allow local fallback metric implementation when smpl_sim is unavailable (not IsaacSim-official)",
+    )
     parser.add_argument(
         "--gt-source",
         type=str,
@@ -775,6 +793,7 @@ def main() -> None:
     metrics_all_raw, metrics_impl = _compute_metrics_with_optional_smpl(
         [pred_pos_arr],
         [gt_pos_arr],
+        allow_fallback_metrics=args.allow_fallback_metrics,
     )
     reduced_all = _aggregate_metrics_per_motion(metrics_all_raw)
 
@@ -786,6 +805,7 @@ def main() -> None:
         subset_raw[suffix], _ = _compute_metrics_with_optional_smpl(
             [pred_pos_arr[:, sidx, :]],
             [gt_pos_arr[:, sidx, :]],
+            allow_fallback_metrics=args.allow_fallback_metrics,
         )
     reduced_subsets = {sfx: _aggregate_metrics_per_motion(m) for sfx, m in subset_raw.items()}
 

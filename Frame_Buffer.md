@@ -5,7 +5,7 @@
 ## 0. 注：
 
 frame  buffer 默认服务于human motion encoder的输入，而不会robot motion encoder的输入
-/
+
 
 ## 1. Buffer 结构与语义
 
@@ -52,7 +52,6 @@ frame  buffer 默认服务于human motion encoder的输入，而不会robot moti
 once()` 被 `_pose_stream_common()` 周期调用：
 - `while ...: streamer.run_once()`
 - 代码：`.../pico_manager_thread_server.py:858-860`
-
 在 `run_once()` 中，写入 buffer 前有几层门控：
 
 1. 无样本直接返回：
