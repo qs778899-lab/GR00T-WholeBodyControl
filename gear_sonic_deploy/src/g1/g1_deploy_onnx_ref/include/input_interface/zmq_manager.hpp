@@ -369,6 +369,19 @@ class ZMQManager : public InputInterface {
                           has_planner, planner_state, movement_state_buffer,
                           current_motion_mutex);
       } else {
+        // In streamed-motion mode the command topic is owned by ZMQManager,
+        // not by the nested pose interface.  Without this handoff,
+        // start=true/planner=false switches modes but never starts CONTROL.
+        if (start_control_ && !operator_state.start) {
+          operator_state.start = true;
+          {
+            std::lock_guard<std::mutex> lock(current_motion_mutex);
+            operator_state.play = false;
+            reinitialize_heading = true;
+          }
+          std::cout << "[ZMQManager] Start control requested in STREAMED MOTION mode" << std::endl;
+        }
+
         // Streamed motion mode: delegate to pose interface
         if (pose_interface_) {
           pose_interface_->handle_input(motion_reader, current_motion, current_frame,

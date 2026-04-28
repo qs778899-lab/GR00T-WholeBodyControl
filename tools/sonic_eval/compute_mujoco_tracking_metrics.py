@@ -23,6 +23,14 @@ import numpy as np
 import pandas as pd
 import pinocchio as pin
 
+if __package__ is None or __package__ == "":
+    import sys
+
+    sys.path.append(str(Path(__file__).resolve().parents[2]))
+
+from tools.sonic_eval.motionlib_provider import load_motionlib_sequence
+from tools.sonic_eval.motionlib_provider import G1_DEFAULT_ANGLES_ISAACLAB
+
 
 MUJOCO_29_NAMES = [
     "left_hip_pitch_joint",
@@ -198,14 +206,18 @@ def _target_motion_name(gt_motion_dir: Path | None, target_motion_name: str | No
     return None
 
 
-def _load_log_mask(logs_dir: Path, target_motion_name: str | None) -> np.ndarray | None:
+def _load_log_mask(
+    logs_dir: Path,
+    target_motion_name: str | None,
+    use_motion_playing_mask: bool = True,
+) -> np.ndarray | None:
     motion_playing_csv = logs_dir / "motion_playing.csv"
     motion_name_csv = logs_dir / "motion_name.csv"
 
     play_mask = None
     name_mask = None
 
-    if motion_playing_csv.exists():
+    if use_motion_playing_mask and motion_playing_csv.exists():
         play_df = pd.read_csv(motion_playing_csv)
         play_val = play_df.select_dtypes(include=[np.number]).to_numpy(dtype=np.float64)
         if play_val.shape[1] >= 1:
@@ -226,7 +238,19 @@ def _load_log_mask(logs_dir: Path, target_motion_name: str | None) -> np.ndarray
     return out
 
 
-def read_logs_q29(logs_dir: Path, target_motion_name: str | None) -> np.ndarray:
+def _load_motion_name_series(logs_dir: Path) -> np.ndarray | None:
+    motion_name_csv = logs_dir / "motion_name.csv"
+    if not motion_name_csv.exists():
+        return None
+    motion_name_df = pd.read_csv(motion_name_csv)
+    return motion_name_df.iloc[:, -1].astype(str).to_numpy()
+
+
+def read_logs_q29(
+    logs_dir: Path,
+    target_motion_name: str | None,
+    use_motion_playing_mask: bool = True,
+) -> np.ndarray:
     q_csv = logs_dir / "q.csv"
     if not q_csv.exists():
         raise FileNotFoundError(f"missing {q_csv}")
@@ -236,7 +260,11 @@ def read_logs_q29(logs_dir: Path, target_motion_name: str | None) -> np.ndarray:
         raise ValueError("q.csv numeric columns less than 29")
     q29 = q_val[:, -29:]
 
-    log_mask = _load_log_mask(logs_dir, target_motion_name)
+    log_mask = _load_log_mask(
+        logs_dir=logs_dir,
+        target_motion_name=target_motion_name,
+        use_motion_playing_mask=use_motion_playing_mask,
+    )
     if log_mask is None:
         return q29
 
@@ -251,6 +279,76 @@ def read_logs_q29(logs_dir: Path, target_motion_name: str | None) -> np.ndarray:
             f"target_motion_name={motion_desc}"
         )
     return q29[log_mask]
+
+
+def _finite_difference(values: np.ndarray, fps: int) -> np.ndarray:
+    if len(values) <= 1:
+        return np.zeros_like(values, dtype=np.float64)
+    vel = np.zeros_like(values, dtype=np.float64)
+    vel[1:-1] = (values[2:] - values[:-2]) * (0.5 * fps)
+    vel[0] = (values[1] - values[0]) * fps
+    vel[-1] = (values[-1] - values[-2]) * fps
+    return vel
+
+
+def _prepend_stand_transition_q29(
+    q29_mujoco: np.ndarray,
+    target_fps: int,
+    stand_frames: int,
+    blend_frames: int,
+) -> np.ndarray:
+    if stand_frames <= 0 and blend_frames <= 0:
+        return q29_mujoco
+    if len(q29_mujoco) == 0:
+        return q29_mujoco
+
+    default_pose_isaac = G1_DEFAULT_ANGLES_ISAACLAB.detach().cpu().numpy().astype(np.float64)
+    # Convert default pose to MuJoCo order.
+    default_pose_mj = default_pose_isaac[ISAACLAB_TO_MUJOCO_29]
+    prefix_parts = []
+    if stand_frames > 0:
+        prefix_parts.append(np.repeat(default_pose_mj[None, :], stand_frames, axis=0))
+    if blend_frames > 0:
+        alpha = np.linspace(0.0, 1.0, blend_frames + 1, dtype=np.float64)[:-1, None]
+        prefix_parts.append((1.0 - alpha) * default_pose_mj[None, :] + alpha * q29_mujoco[:1])
+    if not prefix_parts:
+        return q29_mujoco
+    prefix = np.concatenate(prefix_parts, axis=0).astype(np.float64)
+    out = np.concatenate([prefix, q29_mujoco], axis=0).astype(np.float64)
+    _ = _finite_difference(out, target_fps)  # Keep parity with stream preprocessing pipeline.
+    return out
+
+
+def _auto_align_by_q29_mae(
+    q29_log: np.ndarray,
+    q29_gt: np.ndarray,
+    lag_min: int,
+    lag_max: int,
+    min_overlap: int,
+) -> tuple[int, int, float]:
+    best_lag = 0
+    best_overlap = 0
+    best_mae = float("inf")
+    for lag in range(lag_min, lag_max + 1):
+        if lag >= 0:
+            a = q29_log[lag:]
+            b = q29_gt
+        else:
+            a = q29_log
+            b = q29_gt[-lag:]
+        overlap = min(len(a), len(b))
+        if overlap < min_overlap:
+            continue
+        mae = float(np.mean(np.abs(a[:overlap] - b[:overlap])))
+        if mae < best_mae:
+            best_mae = mae
+            best_lag = lag
+            best_overlap = overlap
+    if not np.isfinite(best_mae):
+        raise ValueError(
+            f"auto alignment failed: no overlap >= {min_overlap} in lag range [{lag_min}, {lag_max}]"
+        )
+    return best_lag, best_overlap, best_mae
 
 
 def load_gt_body_q29_from_motion_dir(motion_dir: Path) -> np.ndarray:
@@ -290,6 +388,51 @@ def load_gt(parquet: Path, gt_source: str, gt_motion_dir: Path | None = None) ->
         q43[:, body29_idx] = body29_mj[:n_sync]
 
     motion_keys = [f"frame_{i:06d}" for i in range(len(q43))]
+    return GTData(q43_source=q43, motion_keys=motion_keys)
+
+
+def load_gt_motionlib(
+    motion_file: Path,
+    motion_name: str | None,
+    target_fps: int,
+    num_future_frames: int,
+    dt_future_ref_frames: float,
+    device: str,
+    prefer_motionlib_robot: bool,
+    use_isaacsim_app: bool,
+    stream_start_frame: int,
+    stream_prepend_stand_frames: int,
+    stream_blend_from_stand_frames: int,
+) -> GTData:
+    seq = load_motionlib_sequence(
+        motion_file=motion_file,
+        motion_name=motion_name,
+        target_fps=target_fps,
+        num_future_frames=num_future_frames,
+        dt_future_ref_frames=dt_future_ref_frames,
+        device=device,
+        prefer_motionlib_robot=prefer_motionlib_robot,
+        use_isaacsim_app=use_isaacsim_app,
+    )
+    q43 = np.zeros((seq.num_frames, len(STATE43_NAMES)), dtype=np.float64)
+    idx43 = {n: i for i, n in enumerate(STATE43_NAMES)}
+    body29_idx = [idx43[n] for n in MUJOCO_29_NAMES]
+    q29 = seq.q29_mujoco().astype(np.float64)
+    if stream_start_frame > 0:
+        if stream_start_frame >= len(q29):
+            raise ValueError(
+                f"--stream-start-frame={stream_start_frame} is out of range for GT length {len(q29)}"
+            )
+        q29 = q29[stream_start_frame:]
+    q29 = _prepend_stand_transition_q29(
+        q29_mujoco=q29,
+        target_fps=target_fps,
+        stand_frames=max(0, stream_prepend_stand_frames),
+        blend_frames=max(0, stream_blend_from_stand_frames),
+    )
+    q43 = np.zeros((len(q29), len(STATE43_NAMES)), dtype=np.float64)
+    q43[:, body29_idx] = q29
+    motion_keys = [f"{seq.motion_name}:frame_{i:06d}" for i in range(len(q43))]
     return GTData(q43_source=q43, motion_keys=motion_keys)
 
 
@@ -383,8 +526,58 @@ def _aggregate_metrics_per_motion(metrics: dict[str, list[np.ndarray]]) -> dict[
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="MuJoCo sim2sim Isaac-style eval metrics")
-    parser.add_argument("--parquet", type=Path, required=True)
+    parser.add_argument("--gt-format", choices=["parquet", "motionlib"], default="parquet")
+    parser.add_argument("--parquet", type=Path, default=None)
+    parser.add_argument("--motion-file", type=Path, default=None)
+    parser.add_argument("--motion-name", type=str, default=None)
+    parser.add_argument("--target-fps", type=int, default=50)
+    parser.add_argument("--num-future-frames", type=int, default=10)
+    parser.add_argument("--dt-future-ref-frames", type=float, default=0.1)
+    parser.add_argument("--motionlib-device", type=str, default="cpu")
+    parser.add_argument("--no-motionlib-robot", action="store_true")
+    parser.add_argument(
+        "--use-isaacsim-app",
+        action="store_true",
+        help="start IsaacSim SimulationApp before official TrackingCommand preprocessing",
+    )
+    parser.add_argument(
+        "--stream-start-frame",
+        type=int,
+        default=0,
+        help="match stream_motionlib_to_deploy --start-frame when using --gt-format motionlib",
+    )
+    parser.add_argument(
+        "--stream-prepend-stand-frames",
+        type=int,
+        default=0,
+        help="match stream_motionlib_to_deploy --prepend-stand-frames for GT reconstruction",
+    )
+    parser.add_argument(
+        "--stream-blend-from-stand-frames",
+        type=int,
+        default=0,
+        help="match stream_motionlib_to_deploy --blend-from-stand-frames for GT reconstruction",
+    )
     parser.add_argument("--logs-dir", type=Path, required=True, help="deploy logs dir containing q.csv")
+    parser.add_argument(
+        "--ignore-motion-playing-mask",
+        action="store_true",
+        help="ignore motion_playing.csv mask (useful for streamed/ZMQ runs where playing_0 may stay 0)",
+    )
+    parser.add_argument(
+        "--streamed-only",
+        action="store_true",
+        help="evaluate only rows where motion_name == 'streamed'",
+    )
+    parser.add_argument(
+        "--align-mode",
+        choices=["index", "auto_q29"],
+        default="index",
+        help="frame alignment mode: index (legacy) or auto_q29 (search lag by q29 MAE)",
+    )
+    parser.add_argument("--align-lag-min", type=int, default=-150, help="min lag for auto_q29")
+    parser.add_argument("--align-lag-max", type=int, default=150, help="max lag for auto_q29")
+    parser.add_argument("--align-min-overlap", type=int, default=200, help="min overlap for auto_q29")
     parser.add_argument(
         "--gt-source",
         type=str,
@@ -404,9 +597,47 @@ def main() -> None:
     parser.add_argument("--out-json", type=Path, default=Path("/tmp/sonic_mujoco_eval_metrics.json"))
     args = parser.parse_args()
 
-    gt = load_gt(args.parquet, args.gt_source, args.gt_motion_dir)
-    target_motion_name = _target_motion_name(args.gt_motion_dir, args.target_motion_name)
-    q29 = read_logs_q29(args.logs_dir, target_motion_name)
+    if args.gt_format == "parquet":
+        if args.parquet is None:
+            raise ValueError("--parquet is required when --gt-format parquet")
+        gt = load_gt(args.parquet, args.gt_source, args.gt_motion_dir)
+        target_motion_name = _target_motion_name(args.gt_motion_dir, args.target_motion_name)
+    else:
+        if args.motion_file is None:
+            raise ValueError("--motion-file is required when --gt-format motionlib")
+        gt = load_gt_motionlib(
+            motion_file=args.motion_file,
+            motion_name=args.motion_name,
+            target_fps=args.target_fps,
+            num_future_frames=args.num_future_frames,
+            dt_future_ref_frames=args.dt_future_ref_frames,
+            device=args.motionlib_device,
+            prefer_motionlib_robot=not args.no_motionlib_robot,
+            use_isaacsim_app=args.use_isaacsim_app,
+            stream_start_frame=max(0, args.stream_start_frame),
+            stream_prepend_stand_frames=max(0, args.stream_prepend_stand_frames),
+            stream_blend_from_stand_frames=max(0, args.stream_blend_from_stand_frames),
+        )
+        # ZMQ streamed motions are named by deploy (usually "streamed"), not by
+        # the source motion_lib key. Only filter by name when explicitly asked.
+        target_motion_name = args.target_motion_name
+    q29 = read_logs_q29(
+        logs_dir=args.logs_dir,
+        target_motion_name=target_motion_name,
+        use_motion_playing_mask=not args.ignore_motion_playing_mask,
+    )
+    motion_name_series = _load_motion_name_series(args.logs_dir)
+    streamed_row_start = None
+    if args.streamed_only and motion_name_series is not None:
+        nname = min(len(motion_name_series), len(q29))
+        streamed_mask = motion_name_series[:nname] == "streamed"
+        if np.any(streamed_mask):
+            streamed_idx = np.nonzero(streamed_mask)[0]
+            streamed_row_start = int(streamed_idx[0])
+            q29 = q29[:nname][streamed_mask]
+        else:
+            raise ValueError("--streamed-only was set but motion_name.csv has no 'streamed' rows")
+
     fk = BodyFK(args.urdf, BODY_FRAMES)
 
     idx43 = {n: i for i, n in enumerate(STATE43_NAMES)}
@@ -423,9 +654,26 @@ def main() -> None:
         "_foot": np.asarray([body_name_to_idx[n] for n in SUBSET_NAMES["foot"]], dtype=np.int64),
     }
 
-    n = min(len(q29), gt.num_frames)
-    q29 = q29[:n]
-    q43_gt = gt.q43_source[:n]
+    align_lag_frames = 0
+    align_overlap = None
+    align_q29_mae = None
+    if args.align_mode == "auto_q29":
+        align_lag_frames, align_overlap, align_q29_mae = _auto_align_by_q29_mae(
+            q29_log=q29,
+            q29_gt=gt.q43_source[:, [idx43[nm] for nm in MUJOCO_29_NAMES]],
+            lag_min=args.align_lag_min,
+            lag_max=args.align_lag_max,
+            min_overlap=max(1, args.align_min_overlap),
+        )
+    if align_lag_frames >= 0:
+        q29_aligned = q29[align_lag_frames:]
+        q43_gt_aligned = gt.q43_source
+    else:
+        q29_aligned = q29
+        q43_gt_aligned = gt.q43_source[-align_lag_frames:]
+    n = min(len(q29_aligned), len(q43_gt_aligned))
+    q29 = q29_aligned[:n]
+    q43_gt = q43_gt_aligned[:n]
 
     pred_pos_all: list[np.ndarray] = []
     gt_pos_all: list[np.ndarray] = []
@@ -528,9 +776,20 @@ def main() -> None:
     metrics_success["progress_rate"] = float(np.mean(progress)) if n > 0 else 0.0
 
     result = {
-        "parquet": str(args.parquet),
+        "gt_format": args.gt_format,
+        "parquet": str(args.parquet) if args.parquet is not None else None,
+        "motion_file": str(args.motion_file) if args.motion_file is not None else None,
+        "motion_name": args.motion_name,
         "logs_dir": str(args.logs_dir),
         "num_frames": int(n),
+        "alignment": {
+            "mode": args.align_mode,
+            "lag_frames_log_vs_gt": int(align_lag_frames),
+            "auto_overlap_frames": int(align_overlap) if align_overlap is not None else None,
+            "auto_q29_mae_rad": float(align_q29_mae) if align_q29_mae is not None else None,
+            "streamed_only": bool(args.streamed_only),
+            "streamed_row_start_in_logs": streamed_row_start,
+        },
         "gt_source": args.gt_source,
         "gt_motion_dir": str(args.gt_motion_dir) if args.gt_motion_dir is not None else None,
         "target_motion_name": target_motion_name,

@@ -2,6 +2,11 @@
 
 本文聚焦 `gear_sonic/scripts/pico_manager_thread_server.py` 中 `PoseStreamer.frame_buffer` 的构建与发送逻辑。
 
+## 0. 注：
+
+frame  buffer 默认服务于human motion encoder的输入，而不会robot motion encoder的输入
+/
+
 ## 1. Buffer 结构与语义
 
 `frame_buffer` 初始化为：
