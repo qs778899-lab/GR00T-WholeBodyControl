@@ -24,9 +24,8 @@
 1. human motion会超调，作为VLA的监督信号合不合适？所以监督universal token比较好？
 2. human motion和robot motion怎么时间戳对齐？在一个while中，human motion和robot motion时间差大吗？SONIC到底是如何对齐时间戳的？
 3. robot control和robot motion都会超调吗？
-4. rrd的robot control可视化的原理是？它只是让电机理想化转动这个关节角度，并没有在仿真器中运行，也就是没有考虑重力摩擦等真实阻力？
-5. sim2sim error分析的意义是，在mujoco中看sonic的tracking精度？ 那应该找一些超调不是这么离谱的动作数据？
-6. VLA真机推理动作不流畅，很多碎小动作，目前是motion token 直接做平滑处理，效果不好
+4. rrd的robot control可视化的原理: 它只是让电机理想化转动这个关节角度，并没有在仿真器中运行，也就是没有考虑重力摩擦等真实阻力，只是简单replay
+5. VLA真机推理动作不流畅，很多碎小动作，目前是motion token 直接做平滑处理，效果不好。后面引入RTC。猜测可以：RTC 应该处理的是 解码后的 robot target/control 层，例如 joint target、end-effector target、root/body target、短 horizon trajectory，而不是直接处理离散 token。它会根据当前机器人状态，把 VLA 每次输出的跳变动作变成连续可执行动作。
 
 
 待解决问题：
