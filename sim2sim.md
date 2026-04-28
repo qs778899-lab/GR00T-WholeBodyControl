@@ -43,6 +43,159 @@ human motion和robot control都作为输入，分析tracking精度
     --zmq-host localhost \
     --zmq-port 5556 \
     --enable-csv-logs \
+    --logs-dir /tmp/sonic_logs/official_walk_zmq01 \
+    --enable-motion-recording \
+    --target-motion-logfile /tmp/sonic_logs/official_walk_zmq01/target_motion.csv \
+    --policy-input-logfile /tmp/sonic_logs/official_walk_zmq01/policy_input.csv \
+    sim
+
+
+### 3) 终端C: 发送 official pkl motion  
+
+   source /home/lab/miniconda3/etc/profile.d/conda.sh
+   conda activate sonic
+   python tools/sonic_eval/stream_motionlib_to_deploy.py \
+    --motion-file sample_data/robot_filtered/210531/walk_forward_amateur_001__A001.pkl \
+    --motion-name walk_forward_amateur_001__A001 \
+    --host 127.0.0.1 \
+    --port 5556 \
+    --target-fps 50 \
+    --chunk-size 20 \
+    --start-frame 1215 \
+    --prepend-stand-frames 50 \
+    --blend-from-stand-frames 100 \
+    --initial-burst-frames 160 \
+    --realtime \
+    --send-command \
+    --use-isaacsim-app \
+    --command-repeat 10 \
+    --command-interval 0.1 \
+    --command-heartbeat-interval 0.5
+
+   换 pkl 就改这两个参数：
+    --motion-file sample_data/robot_filtered/210531/walk_forward_amateur_001__A001_M.pkl
+    --motion-name walk_forward_amateur_001__A001_M
+   如果 pkl 里只有一个 motion，理论上可以省略 --motion-name
+
+
+### 4) 终端 D：计算 offline tracking metrics
+   
+   source /home/lab/miniconda3/etc/profile.d/conda.sh
+   conda activate sonic
+   python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
+    --gt-format motionlib \
+    --motion-file sample_data/robot_filtered/210531/walk_forward_amateur_001__A001.pkl \
+    --motion-name walk_forward_amateur_001__A001 \
+    --logs-dir /tmp/sonic_logs/official_walk_zmq01 \
+    --out-json /tmp/sonic_official_motionlib_metrics.json \
+    --no-motionlib-robot \
+    --ignore-motion-playing-mask \
+    --streamed-only \
+    --stream-start-frame 1215 \
+    --stream-prepend-stand-frames 50 \
+    --stream-blend-from-stand-frames 100 \
+    --align-mode source_frame_index
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+--------------------------------------------------------------------------------------------------------
+### 2) 终端B: 启动 policy 推理（deploy）
+
+   source /home/lab/miniconda3/etc/profile.d/conda.sh
+   conda activate sonic
+   bash deploy.sh \
+    --motion-data /tmp/sonic_motion_action_only \
+    --motion-name episode_000001_action \
+    --obs-config policy/release/observation_config.yaml \
+    --input-type zmq_manager \
+    --output-type all \
+    --zmq-host localhost \
+    --zmq-port 5556 \
+    --enable-csv-logs \
     --logs-dir /tmp/sonic_logs/official_walk_zmq \
     --enable-motion-recording \
     --target-motion-logfile /tmp/sonic_logs/official_walk_zmq/target_motion.csv \
@@ -95,96 +248,7 @@ human motion和robot control都作为输入，分析tracking精度
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+-----------------------------------------------------------------------------------------------
 
 
 

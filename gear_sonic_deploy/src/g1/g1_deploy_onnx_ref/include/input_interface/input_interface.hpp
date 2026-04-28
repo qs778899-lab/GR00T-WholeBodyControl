@@ -156,6 +156,22 @@ public:
       }
       return {false, {}};
     }
+
+    /**
+     * @brief Return source-frame index for the currently active streamed target, if available.
+     *
+     * For ZMQ streamed motions this corresponds to the sender's frame_index timeline
+     * (the same index domain used by the motion streamer).  Interfaces that do not
+     * carry streamed frame IDs should return std::nullopt.
+     *
+     * @param current_motion Current motion pointer used by the control loop.
+     * @param current_frame  Current local frame cursor inside current_motion.
+     */
+    virtual std::optional<int64_t> GetSourceFrameIndex(const MotionSequence* current_motion, int current_frame) const {
+      (void)current_motion;
+      (void)current_frame;
+      return std::nullopt;
+    }
     
     // ------------------------------------------------------------------
     // VR 3-point tracking data accessors
