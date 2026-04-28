@@ -457,6 +457,13 @@ class ZMQManager : public InputInterface {
       return InputInterface::GetLastUpdateTime();
     }
 
+    std::optional<int64_t> GetSourceFrameIndex(const MotionSequence* current_motion, int current_frame) const override {
+      if ((active_mode_ == ManagedMode::STREAMED_MOTION) && pose_interface_) {
+        return pose_interface_->GetSourceFrameIndex(current_motion, current_frame);
+      }
+      return std::nullopt;
+    }
+
   private:
     // Handle planner mode input (similar to GamepadManager::handleGamepadPlannerInput)
     void handlePlannerInput(MotionDataReader& motion_reader,

@@ -121,6 +121,7 @@ public:
     std::shared_ptr<MotionSequence> streamed_motion_;
     /// Global frame index corresponding to streamed_motion_[0].
     int stream_window_start_ = 0;
+    int last_frame_step_ = 1;
 
     static constexpr std::string_view LOCALHOST = "localhost";
 
@@ -441,6 +442,7 @@ public:
                         new_motion = result.motion;
                         std::cout << "[ZMQEndpointInterface] motion name: " << new_motion->name << std::endl;
                         stream_window_start_ = result.window_start;
+                        last_frame_step_ = std::max(1, result.frame_step);
                         frame_offset_adjustment = result.frame_offset_adjustment;
                         did_catchup = result.did_catchup_reset;
                         
@@ -580,6 +582,20 @@ public:
       }
       return last_receive_time_;
     }
+
+    std::optional<int64_t> GetSourceFrameIndex(const MotionSequence* current_motion, int current_frame) const override {
+      if (!current_motion) {
+        return std::nullopt;
+      }
+      if (current_motion->name != "streamed") {
+        return std::nullopt;
+      }
+      if (current_frame < 0) {
+        return std::nullopt;
+      }
+      return static_cast<int64_t>(stream_window_start_) +
+             static_cast<int64_t>(last_frame_step_) * static_cast<int64_t>(current_frame);
+    }
     
 private:
     /// Reset the streamed motion buffer, merger state, and protocol version.
@@ -592,6 +608,7 @@ private:
         streamed_motion_->name = "streamed";
         streamed_motion_->ReserveCapacity(15000, 29, 1, 1, 0, 0); // max 15k frames, 29 joints, 1 body, 1 quat
         stream_window_start_ = 0;
+        last_frame_step_ = 1;
         data_timestamp_.reset();
         last_receive_time_.reset();
     }

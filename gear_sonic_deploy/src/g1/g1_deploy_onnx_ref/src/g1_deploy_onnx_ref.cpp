@@ -3932,7 +3932,19 @@ class G1Deploy {
           // This must be called after GatherObservations() which populates token_state_data_
           if (state_logger_) {
             std::string motion_name = current_motion_copy ? current_motion_copy->name : "";
-            if (!state_logger_->LogPostState(std::span(token_state_data_), current_encoder_mode_copy, motion_name, current_play_copy)) {
+            int64_t source_frame_index = -1;
+            if (input_interface_) {
+              auto maybe_source_idx = input_interface_->GetSourceFrameIndex(current_motion_copy.get(), current_frame_copy);
+              if (maybe_source_idx.has_value()) {
+                source_frame_index = *maybe_source_idx;
+              }
+            }
+            if (!state_logger_->LogPostState(
+                  std::span(token_state_data_),
+                  current_encoder_mode_copy,
+                  motion_name,
+                  current_play_copy,
+                  source_frame_index)) {
               std::cerr << "[WARNING] Failed to log token state to state logger" << std::endl;
             }
           }
@@ -4465,4 +4477,3 @@ int main(int argc, char const* argv[]) {
   std::cout << "[DEBUG] Program exiting normally..." << std::endl;
   return 0;
 }
-

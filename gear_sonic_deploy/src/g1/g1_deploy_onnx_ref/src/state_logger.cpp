@@ -61,6 +61,7 @@ StateLogger::StateLogger(std::string csv_dir, size_t ring_capacity, int num_join
   sink_token_state_(enable_csv, csv_path_, "token_state", "token", FileSink::HeaderType::VECTOR),
   sink_encoder_mode_(enable_csv, csv_path_, "encoder_mode", "encoder_mode", FileSink::HeaderType::VECTOR),
   sink_motion_playing_(enable_csv, csv_path_, "motion_playing", "playing", FileSink::HeaderType::VECTOR),
+  sink_source_frame_index_(enable_csv, csv_path_, "source_frame_index", "source_frame_index", FileSink::HeaderType::VECTOR),
 
   robot_config_(std::move(robot_config)) {
   // Open motion_name CSV file
@@ -136,7 +137,11 @@ uint64_t StateLogger::LogFullState(const std::array<double, 4>& base_quat,
   return e.index;
 }
 
-bool StateLogger::LogPostState(const std::span<double>& token_state, int encoder_mode, const std::string& motion_name, bool play) {
+bool StateLogger::LogPostState(const std::span<double>& token_state,
+                               int encoder_mode,
+                               const std::string& motion_name,
+                               bool play,
+                               int64_t source_frame_index) {
   std::lock_guard<std::mutex> lock(ring_mutex_);
 
   // Check if we have any entries
@@ -161,6 +166,7 @@ bool StateLogger::LogPostState(const std::span<double>& token_state, int encoder
   newest.encoder_mode = encoder_mode;
   newest.motion_name = motion_name;
   newest.play = play;
+  newest.source_frame_index = source_frame_index;
   newest.has_post_state_data = true;
 
   // Write to CSV if enabled (token state gets its own file)
@@ -338,6 +344,10 @@ void StateLogger::appendTokenStateToCSV_(const Entry& e) {
   // Write motion playing state to separate file (convert bool to double for FileSink)
   std::array<double, 1> motion_playing_arr = {e.play ? 1.0 : 0.0};
   sink_motion_playing_.writeLine(e.index, t_ms, t_realtime_ms, t_monotonic_ms, e.ros_timestamp, std::span(motion_playing_arr));
+
+  // Write source frame index (convert int64 to double for FileSink)
+  std::array<double, 1> source_frame_idx_arr = {static_cast<double>(e.source_frame_index)};
+  sink_source_frame_index_.writeLine(e.index, t_ms, t_realtime_ms, t_monotonic_ms, e.ros_timestamp, std::span(source_frame_idx_arr));
   
   // Write motion name to separate file (custom string handling)
   writeMotionNameLine_(e.index, t_ms, t_realtime_ms, t_monotonic_ms, e.ros_timestamp, e.motion_name);
@@ -503,4 +513,3 @@ Entry StateLogger::makeZeroEntry_() const {
   e.token_state.clear();
   return e;
 }
-

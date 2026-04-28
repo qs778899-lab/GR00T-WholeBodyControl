@@ -198,6 +198,13 @@ class GTData:
         return int(self.q43_source.shape[0])
 
 
+@dataclass
+class LogData:
+    q29: np.ndarray
+    row_index: np.ndarray
+    motion_name: np.ndarray | None
+
+
 def _target_motion_name(gt_motion_dir: Path | None, target_motion_name: str | None) -> str | None:
     if target_motion_name:
         return target_motion_name
@@ -279,6 +286,46 @@ def read_logs_q29(
             f"target_motion_name={motion_desc}"
         )
     return q29[log_mask]
+
+
+def read_logs_data(
+    logs_dir: Path,
+    target_motion_name: str | None,
+    use_motion_playing_mask: bool = True,
+) -> LogData:
+    q_csv = logs_dir / "q.csv"
+    if not q_csv.exists():
+        raise FileNotFoundError(f"missing {q_csv}")
+    q_df = pd.read_csv(q_csv)
+    q_val = q_df.select_dtypes(include=[np.number]).to_numpy(dtype=np.float64)
+    if q_val.shape[1] < 29:
+        raise ValueError("q.csv numeric columns less than 29")
+    q29 = q_val[:, -29:]
+    row_idx = np.arange(len(q29), dtype=np.int64)
+
+    log_mask = _load_log_mask(
+        logs_dir=logs_dir,
+        target_motion_name=target_motion_name,
+        use_motion_playing_mask=use_motion_playing_mask,
+    )
+    if log_mask is not None:
+        n = min(len(q29), len(log_mask))
+        q29 = q29[:n]
+        row_idx = row_idx[:n]
+        log_mask = log_mask[:n]
+        if not np.any(log_mask):
+            motion_desc = target_motion_name if target_motion_name is not None else "<unknown>"
+            raise ValueError(
+                "No valid log rows matched the requested motion/play mask. "
+                f"target_motion_name={motion_desc}"
+            )
+        q29 = q29[log_mask]
+        row_idx = row_idx[log_mask]
+
+    motion_name = _load_motion_name_series(logs_dir)
+    if motion_name is not None:
+        motion_name = motion_name[row_idx]
+    return LogData(q29=q29, row_index=row_idx, motion_name=motion_name)
 
 
 def _finite_difference(values: np.ndarray, fps: int) -> np.ndarray:
@@ -571,9 +618,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--align-mode",
-        choices=["index", "auto_q29"],
-        default="index",
-        help="frame alignment mode: index (legacy) or auto_q29 (search lag by q29 MAE)",
+        choices=["source_frame_index", "index", "auto_q29"],
+        default="source_frame_index",
+        help="frame alignment mode: source_frame_index (strict), index (legacy), auto_q29 (lag search)",
     )
     parser.add_argument("--align-lag-min", type=int, default=-150, help="min lag for auto_q29")
     parser.add_argument("--align-lag-max", type=int, default=150, help="max lag for auto_q29")
@@ -621,20 +668,23 @@ def main() -> None:
         # ZMQ streamed motions are named by deploy (usually "streamed"), not by
         # the source motion_lib key. Only filter by name when explicitly asked.
         target_motion_name = args.target_motion_name
-    q29 = read_logs_q29(
+    logs = read_logs_data(
         logs_dir=args.logs_dir,
         target_motion_name=target_motion_name,
         use_motion_playing_mask=not args.ignore_motion_playing_mask,
     )
-    motion_name_series = _load_motion_name_series(args.logs_dir)
+    q29 = logs.q29
+    motion_name_series = logs.motion_name
+    row_idx = logs.row_index
     streamed_row_start = None
     if args.streamed_only and motion_name_series is not None:
-        nname = min(len(motion_name_series), len(q29))
-        streamed_mask = motion_name_series[:nname] == "streamed"
+        streamed_mask = motion_name_series == "streamed"
         if np.any(streamed_mask):
             streamed_idx = np.nonzero(streamed_mask)[0]
-            streamed_row_start = int(streamed_idx[0])
-            q29 = q29[:nname][streamed_mask]
+            streamed_row_start = int(row_idx[streamed_idx[0]])
+            q29 = q29[streamed_mask]
+            row_idx = row_idx[streamed_mask]
+            motion_name_series = motion_name_series[streamed_mask]
         else:
             raise ValueError("--streamed-only was set but motion_name.csv has no 'streamed' rows")
 
@@ -657,7 +707,37 @@ def main() -> None:
     align_lag_frames = 0
     align_overlap = None
     align_q29_mae = None
-    if args.align_mode == "auto_q29":
+    source_frame_valid = None
+    source_frame_kept = None
+    eval_motion_keys: list[str] = []
+    if args.align_mode == "source_frame_index":
+        sf_csv = args.logs_dir / "source_frame_index.csv"
+        if not sf_csv.exists():
+            raise FileNotFoundError(
+                f"missing {sf_csv}; rebuild/re-run deploy with updated logger to enable strict frame-index alignment"
+            )
+        sf_df = pd.read_csv(sf_csv)
+        sf_val = sf_df.select_dtypes(include=[np.number]).to_numpy(dtype=np.float64)
+        if sf_val.shape[1] < 1:
+            raise ValueError("source_frame_index.csv numeric columns are empty")
+        sf_all = sf_val[:, -1]
+        if np.max(row_idx, initial=-1) >= len(sf_all):
+            raise ValueError(
+                "source_frame_index.csv shorter than q.csv after filtering; logs are inconsistent"
+            )
+        source_frame_idx = np.rint(sf_all[row_idx]).astype(np.int64)
+        valid = source_frame_idx >= 0
+        valid &= source_frame_idx < gt.num_frames
+        if not np.any(valid):
+            raise ValueError("No valid source_frame_index rows for strict alignment")
+        source_frame_valid = int(np.sum(valid))
+        source_frame_kept = int(np.sum(valid))
+        q29 = q29[valid]
+        src = source_frame_idx[valid]
+        q43_gt = gt.q43_source[src]
+        n = len(q29)
+        eval_motion_keys = [gt.motion_keys[int(i)] for i in src.tolist()]
+    elif args.align_mode == "auto_q29":
         align_lag_frames, align_overlap, align_q29_mae = _auto_align_by_q29_mae(
             q29_log=q29,
             q29_gt=gt.q43_source[:, [idx43[nm] for nm in MUJOCO_29_NAMES]],
@@ -665,15 +745,21 @@ def main() -> None:
             lag_max=args.align_lag_max,
             min_overlap=max(1, args.align_min_overlap),
         )
-    if align_lag_frames >= 0:
-        q29_aligned = q29[align_lag_frames:]
-        q43_gt_aligned = gt.q43_source
+        if align_lag_frames >= 0:
+            q29_aligned = q29[align_lag_frames:]
+            q43_gt_aligned = gt.q43_source
+        else:
+            q29_aligned = q29
+            q43_gt_aligned = gt.q43_source[-align_lag_frames:]
+        n = min(len(q29_aligned), len(q43_gt_aligned))
+        q29 = q29_aligned[:n]
+        q43_gt = q43_gt_aligned[:n]
+        eval_motion_keys = gt.motion_keys[:n]
     else:
-        q29_aligned = q29
-        q43_gt_aligned = gt.q43_source[-align_lag_frames:]
-    n = min(len(q29_aligned), len(q43_gt_aligned))
-    q29 = q29_aligned[:n]
-    q43_gt = q43_gt_aligned[:n]
+        n = min(len(q29), gt.num_frames)
+        q29 = q29[:n]
+        q43_gt = gt.q43_source[:n]
+        eval_motion_keys = gt.motion_keys[:n]
 
     pred_pos_all: list[np.ndarray] = []
     gt_pos_all: list[np.ndarray] = []
@@ -753,7 +839,7 @@ def main() -> None:
 
     all_metrics_dict["terminated"] = terminated.tolist()
     all_metrics_dict["progress"] = progress.tolist()
-    all_metrics_dict["motion_keys"] = gt.motion_keys[:n]
+    all_metrics_dict["motion_keys"] = eval_motion_keys
     all_metrics_dict["sampling_prob"] = [1.0 / n] * n if n > 0 else []
 
     failed_idx = np.nonzero(terminated)[0]
@@ -761,7 +847,7 @@ def main() -> None:
     for k, v in all_metrics_dict.items():
         if isinstance(v, list) and len(v) == n:
             failed_metrics_dict[k] = [v[i] for i in failed_idx.tolist()]
-    failed_metrics_dict["motion_keys"] = [gt.motion_keys[i] for i in failed_idx.tolist()]
+    failed_metrics_dict["motion_keys"] = [eval_motion_keys[i] for i in failed_idx.tolist()]
     failed_metrics_dict["sampling_prob"] = [1.0 / n] * len(failed_idx) if n > 0 else []
 
     metrics_all = {}
@@ -789,6 +875,8 @@ def main() -> None:
             "auto_q29_mae_rad": float(align_q29_mae) if align_q29_mae is not None else None,
             "streamed_only": bool(args.streamed_only),
             "streamed_row_start_in_logs": streamed_row_start,
+            "source_frame_valid_rows": source_frame_valid,
+            "source_frame_kept_rows": source_frame_kept,
         },
         "gt_source": args.gt_source,
         "gt_motion_dir": str(args.gt_motion_dir) if args.gt_motion_dir is not None else None,
@@ -805,7 +893,7 @@ def main() -> None:
         "failed_metrics_dict": failed_metrics_dict,
         "failed_idxes": failed_idx.tolist(),
         "failed_keys": failed_metrics_dict.get("motion_keys", []),
-        "success_keys": [gt.motion_keys[i] for i in np.nonzero(success_mask)[0].tolist()],
+        "success_keys": [eval_motion_keys[i] for i in np.nonzero(success_mask)[0].tolist()],
     }
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
