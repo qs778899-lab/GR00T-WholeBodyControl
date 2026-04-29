@@ -65,7 +65,8 @@ cd gear_sonic_deploy
   --obs-config policy/release/observation_config.yaml \
   --input-type manager \
   --output-type all \
-  --zmq-host localhost
+  --zmq-host localhost \
+  --zmq-port 5596
 ```
 
 Note:
@@ -100,7 +101,7 @@ python tools/sonic_eval/visualize_realtime_error.py \
   --gt-source action.wbc \
   --eef-gt-source from_gt_q43 \
   --gt-motion-dir /tmp/sonic_motion_action_only/episode_000000_action \
-  --zmq-host 127.0.0.1 --zmq-port 5557 --zmq-topic g1_debug \
+  --zmq-host 127.0.0.1 --zmq-port 5608 --zmq-topic g1_debug \
   --print-every 10 \
   --out-json /tmp/sonic_error_metrics_zmq.json
 ```

@@ -86,6 +86,7 @@ public:
         std::vector<std::vector<double>> joint_vel;  ///< [frame][joint] velocities (rad/s).
         
         // -- Body quaternions (required for all versions) --
+        std::vector<std::vector<std::array<double, 3>>> body_pos;   ///< [frame][body][x,y,z] positions.
         std::vector<std::vector<std::array<double, 4>>> body_quat;  ///< [frame][body][w,x,y,z].
         
         // -- SMPL data (required in v2 & v3, optional in v1) --
@@ -100,6 +101,7 @@ public:
         // Derived dimensions (must match the vector sizes above)
         int num_frames = 0;       ///< Number of frames in this chunk.
         int num_joints = 0;       ///< Joints per frame (joint_pos / joint_vel width).
+        int num_pos_bodies = 0;   ///< Number of rigid bodies per frame (body_pos width).
         int num_quat_bodies = 0;  ///< Number of rigid bodies per frame (body_quat width).
         int num_smpl_joints = 0;  ///< SMPL joints per frame.
         int num_smpl_poses = 0;   ///< SMPL pose parameters per frame.
@@ -214,8 +216,8 @@ private:
     // Validate incoming data structure
     bool ValidateIncomingData(const IncomingData& data) const {
         // Check required fields
-        if (data.body_quat.empty() || data.frame_indices.empty()) {
-            std::cerr << "[StreamedMotionMerger] Missing required fields (body_quat or frame_indices)" << std::endl;
+        if (data.body_quat.empty() || data.body_pos.empty() || data.frame_indices.empty()) {
+            std::cerr << "[StreamedMotionMerger] Missing required fields (body_pos/body_quat/frame_indices)" << std::endl;
             return false;
         }
         
@@ -350,7 +352,7 @@ private:
         new_motion->name = "streamed";
         
         int joints_to_reserve = data.num_joints;
-        int bodies_to_reserve = 1;
+        int bodies_to_reserve = data.num_pos_bodies;
         int body_quaternions_to_reserve = data.num_quat_bodies;
         int smpl_joints_to_reserve = data.num_smpl_joints;
         int smpl_poses_to_reserve = data.num_smpl_poses;
@@ -423,6 +425,18 @@ private:
             }
         }
         
+        // Copy body positions
+        int old_pos_bodies = old_motion->GetNumBodies();
+        int pos_bodies_to_copy = std::min(data.num_pos_bodies, old_pos_bodies);
+        for (int i = 0; i < copy_count; ++i) {
+            for (int b = 0; b < pos_bodies_to_copy; ++b) {
+                for (int xyz = 0; xyz < 3; ++xyz) {
+                    new_motion->BodyPositions(copy_dst_idx + i)[b][xyz] =
+                        old_motion->BodyPositions(copy_src_idx + i)[b][xyz];
+                }
+            }
+        }
+
         // Copy body quaternions
         int old_quat_bodies = old_motion->GetNumBodyQuaternions();
         int quat_bodies_to_copy = std::min(data.num_quat_bodies, old_quat_bodies);
@@ -477,6 +491,16 @@ private:
             }
         }
         
+        // Copy body positions (always present)
+        for (int frame = 0; frame < data.num_frames; ++frame) {
+            for (int body = 0; body < data.num_pos_bodies; ++body) {
+                for (int xyz = 0; xyz < 3; ++xyz) {
+                    motion->BodyPositions(dst_frame_offset + frame)[body][xyz] =
+                        data.body_pos[frame][body][xyz];
+                }
+            }
+        }
+
         // Copy body quaternions (always present)
         for (int frame = 0; frame < data.num_frames; ++frame) {
             for (int body = 0; body < data.num_quat_bodies; ++body) {
@@ -514,4 +538,3 @@ private:
 };
 
 #endif // STREAMED_MOTION_MERGER_HPP
-

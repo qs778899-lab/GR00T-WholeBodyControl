@@ -67,15 +67,21 @@ class PackedPublisher:
         self,
         joint_pos: np.ndarray,
         joint_vel: np.ndarray,
+        body_pos_w: np.ndarray,
         body_quat_w: np.ndarray,
         frame_indices: np.ndarray,
         catch_up: bool,
     ) -> None:
         joint_pos = np.asarray(joint_pos, dtype=np.float32)
         joint_vel = np.asarray(joint_vel, dtype=np.float32)
+        body_pos_w = np.asarray(body_pos_w, dtype=np.float32)
         body_quat_w = np.asarray(body_quat_w, dtype=np.float32)
         frame_indices = np.asarray(frame_indices, dtype=np.int64)
         n, num_joints = joint_pos.shape
+        if body_pos_w.ndim == 3 and body_pos_w.shape[1] == 1:
+            body_pos_w = body_pos_w[:, 0, :]
+        if body_pos_w.shape != (n, 3):
+            raise ValueError(f"body_pos_w must be [N,3], got {body_pos_w.shape}")
         if body_quat_w.ndim == 3 and body_quat_w.shape[1] == 1:
             body_quat_w = body_quat_w[:, 0, :]
         if body_quat_w.shape != (n, 4):
@@ -87,6 +93,7 @@ class PackedPublisher:
             "fields": [
                 {"name": "joint_pos", "dtype": "f32", "shape": [n, num_joints]},
                 {"name": "joint_vel", "dtype": "f32", "shape": [n, num_joints]},
+                {"name": "body_pos_w", "dtype": "f32", "shape": [n, 3]},
                 {"name": "body_quat_w", "dtype": "f32", "shape": [n, 4]},
                 {"name": "frame_index", "dtype": "i64", "shape": [n]},
                 {"name": "catch_up", "dtype": "u8", "shape": [1]},
@@ -98,6 +105,7 @@ class PackedPublisher:
             [
                 joint_pos.tobytes(),
                 joint_vel.tobytes(),
+                body_pos_w.tobytes(),
                 body_quat_w.tobytes(),
                 frame_indices.tobytes(),
                 struct.pack("B", 1 if catch_up else 0),
@@ -122,7 +130,7 @@ def parse_args() -> argparse.Namespace:
         help="start IsaacSim SimulationApp before official TrackingCommand preprocessing",
     )
     parser.add_argument("--host", type=str, default="*")
-    parser.add_argument("--port", type=int, default=5556)
+    parser.add_argument("--port", type=int, default=5596)
     parser.add_argument("--chunk-size", type=int, default=20)
     parser.add_argument(
         "--initial-burst-frames",
@@ -234,6 +242,12 @@ def main() -> None:
     )
     dof_pos = seq.dof_pos.detach().cpu().numpy().astype(np.float32)
     dof_vel = seq.dof_vel.detach().cpu().numpy().astype(np.float32)
+    body_pos_w_full = seq.body_pos_w.detach().cpu().numpy().astype(np.float32)
+    if body_pos_w_full.ndim != 3 or body_pos_w_full.shape[1] < 1 or body_pos_w_full.shape[2] != 3:
+        raise ValueError(f"Unexpected body_pos_w shape: {body_pos_w_full.shape}")
+    # Use body_pos_w root (body 0) as the streamed base translation source.
+    # This is more robust than seq.root_pos_w across different preprocessing paths.
+    root_pos_w = body_pos_w_full[:, 0, :]
     root_quat = seq.root_quat_w.detach().cpu().numpy().astype(np.float32)
     end = seq.num_frames if args.end_frame is None else min(args.end_frame, seq.num_frames)
     start = max(0, args.start_frame)
@@ -241,6 +255,7 @@ def main() -> None:
         raise ValueError(f"empty frame range: start={start}, end={end}")
     dof_pos = dof_pos[start:end]
     dof_vel = dof_vel[start:end]
+    root_pos_w = root_pos_w[start:end]
     root_quat = root_quat[start:end]
     dof_pos, dof_vel, root_quat = _prepend_stand_transition(
         dof_pos=dof_pos,
@@ -250,6 +265,10 @@ def main() -> None:
         stand_frames=max(0, args.prepend_stand_frames),
         blend_frames=max(0, args.blend_from_stand_frames),
     )
+    num_prefix = len(dof_pos) - len(root_pos_w)
+    if num_prefix > 0:
+        prefix_root_pos = np.repeat(root_pos_w[:1], num_prefix, axis=0).astype(np.float32)
+        root_pos_w = np.concatenate([prefix_root_pos, root_pos_w], axis=0).astype(np.float32)
     sent_frames = len(dof_pos)
     end = sent_frames
     start = 0
@@ -282,6 +301,7 @@ def main() -> None:
             pub.send_pose(
                 joint_pos=dof_pos[i:j],
                 joint_vel=dof_vel[i:j],
+                body_pos_w=root_pos_w[i:j],
                 body_quat_w=root_quat[i:j],
                 frame_indices=idx,
                 catch_up=args.catch_up,
@@ -298,6 +318,7 @@ def main() -> None:
             pub.send_pose(
                 joint_pos=dof_pos[i:j],
                 joint_vel=dof_vel[i:j],
+                body_pos_w=root_pos_w[i:j],
                 body_quat_w=root_quat[i:j],
                 frame_indices=idx,
                 catch_up=args.catch_up,

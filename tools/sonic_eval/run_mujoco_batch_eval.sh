@@ -140,20 +140,12 @@ detect_metrics_env() {
   if [[ -n "$METRICS_CONDA_ENV" ]]; then
     return 0
   fi
-  if python - <<'PY' >/dev/null 2>&1
-import importlib.util, sys
-sys.exit(0 if importlib.util.find_spec("smpl_sim") else 1)
-PY
-  then
+  if python -c 'import importlib.util, sys; sys.exit(0 if importlib.util.find_spec("smpl_sim") else 1)' >/dev/null 2>&1; then
     METRICS_CONDA_ENV="sonic"
     return 0
   fi
   for cand in sonic_eval sonic_backup; do
-    if conda run -n "$cand" python - <<'PY' >/dev/null 2>&1
-import importlib.util, sys
-sys.exit(0 if importlib.util.find_spec("smpl_sim") else 1)
-PY
-    then
+    if conda run -n "$cand" python -c 'import importlib.util, sys; sys.exit(0 if importlib.util.find_spec("smpl_sim") else 1)' >/dev/null 2>&1; then
       METRICS_CONDA_ENV="$cand"
       return 0
     fi
@@ -165,6 +157,17 @@ if [[ -z "$METRICS_CONDA_ENV" ]]; then
   echo "[ERROR] no conda env with smpl_sim found; use --metrics-conda-env or install smpl_sim"
   exit 1
 fi
+
+validate_metrics_env() {
+  if ! conda run -n "$METRICS_CONDA_ENV" python -c 'import numpy, pinocchio, smpl_sim' >/dev/null 2>&1; then
+    echo "[ERROR] metrics env validation failed: ${METRICS_CONDA_ENV}"
+    echo "[HINT] this env must import numpy, pinocchio, and smpl_sim together."
+    echo "[HINT] on this machine, sonic_backup currently has a NumPy/pinocchio ABI conflict; try --metrics-conda-env sonic_eval."
+    exit 1
+  fi
+}
+
+validate_metrics_env
 
 TMP_SUMMARY_JSONL="$(mktemp /tmp/sonic_batch_summary.XXXXXX.jsonl)"
 TMP_MOTION_LIST="$(mktemp /tmp/sonic_batch_motion_list.XXXXXX.csv)"

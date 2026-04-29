@@ -7,10 +7,12 @@ bash install_scripts/install_mujoco_sim.sh
 
 对官方sample data的pkl文件数据进行加载预处理后输入给robot motion encoder, 在mujoco中对universal control policy进行推理的整个链路，整个链路模仿isaacsim eval的。
 
+这个可视化既要能看出policy对pkl的动作的root position的tracking精度，也要可以看出track动作形态也就是不同关节角的效果。现在的问题是，为什么可视化出来的reference G1的位置不是按照refercence motion在移动，而
+  是一
+    直在原地？彻底解决这个问题
 
 ## TODO功能
 
-最好不要可视化可以计算，进行批量化处理
 human motion和robot control都作为输入，分析tracking精度
 
 
@@ -71,6 +73,8 @@ human motion和robot control都作为输入，分析tracking精度
     --command-interval 0.1 \
     --command-heartbeat-interval 0.5
 
+
+
    换 pkl 就改这两个参数：
     --motion-file sample_data/robot_filtered/210531/walk_forward_amateur_001__A001_M.pkl
     --motion-name walk_forward_amateur_001__A001_M
@@ -97,85 +101,50 @@ human motion和robot control都作为输入，分析tracking精度
 
 
 
-## mujoco 运行指令（批量文件处理模式）
-fake批量模式
+## mujoco 运行指令（多实例/多进程隔离并行，一个终端一键启动）
 
-### 1) 终端A: 启动 MuJoCo sim
+说明：
+- 该模式会自动启动 N 个 MuJoCo(A) + N 个 deploy(B)，并执行并行批量 C/D。
+- 只需一个终端，一条命令。
+- `N` 由 `--workers` 指定（例如 2 / 4 / 8，取决于 CPU/GPU/内存资源）。
 
-  cd /home/lab/Desktop/GR00T-WholeBodyControl
-  source .venv_sim/bin/activate
-  python gear_sonic/scripts/run_sim_loop.py --no-enable-onscreen --interface sim --simulator mujoco --env-name default --no-enable-offscreen
-
-### 2) 终端B: 启动 policy 推理（deploy）
-
-   source /home/lab/miniconda3/etc/profile.d/conda.sh
-   conda activate sonic
-   cd /home/lab/Desktop/GR00T-WholeBodyControl/gear_sonic_deploy
-
-   just run g1_deploy_onnx_ref lo policy/release/model_decoder.onnx /tmp/sonic_motion_action_only \
-    --obs-config policy/release/observation_config.yaml \
-    --encoder-file policy/release/model_encoder.onnx \
-    --planner-file planner/target_vel/V2/planner_sonic.onnx \
-    --input-type zmq_manager \
-    --output-type all \
-    --zmq-host localhost \
-    --zmq-port 5556 \
-    --zmq-out-port 5557 \
-    --enable-csv-logs \
-    --logs-dir /tmp/sonic_logs/parallel_deploy/worker_0 \
-    --target-motion-logfile /tmp/sonic_logs/parallel_deploy/worker_0/target_motion.csv \
-    --policy-input-logfile /tmp/sonic_logs/parallel_deploy/worker_0/policy_input.csv \
-    --enable-motion-recording \
-    --disable-crc-check
-
-  just run g1_deploy_onnx_ref lo policy/release/model_decoder.onnx /tmp/sonic_motion_action_only \
-    --obs-config policy/release/observation_config.yaml \
-    --encoder-file policy/release/model_encoder.onnx \
-    --planner-file planner/target_vel/V2/planner_sonic.onnx \
-    --input-type zmq_manager \
-    --output-type all \
-    --zmq-host localhost \
-    --zmq-port 5566 \
-    --zmq-out-port 5567 \
-    --enable-csv-logs \
-    --logs-dir /tmp/sonic_logs/parallel_deploy/worker_1 \
-    --target-motion-logfile /tmp/sonic_logs/parallel_deploy/worker_1/target_motion.csv \
-    --policy-input-logfile /tmp/sonic_logs/parallel_deploy/worker_1/policy_input.csv \
-    --enable-motion-recording \
-    --disable-crc-check
-
-### 3) 终端C：并行批量
+### 一键启动示例（N=4）
 
 ```bash
 cd /home/lab/Desktop/GR00T-WholeBodyControl
-source /home/lab/miniconda3/etc/profile.d/conda.sh
-conda activate sonic_backup
-tools/sonic_eval/run_mujoco_batch_eval_parallel.sh \
+
+tools/sonic_eval/run_mujoco_multi_instance_parallel.sh \
     --motion-dir /home/lab/Desktop/GR00T-WholeBodyControl/sample_data/robot_filtered/210531 \
     --workers 2 \
     --host 127.0.0.1 \
     --port-base 5556 \
     --port-step 10 \
+    --zmq-out-base 5557 \
+    --zmq-out-step 10 \
+    --domain-base 100 \
     --logs-root-base /tmp/sonic_logs/batch_parallel \
     --deploy-logs-dir-base /tmp/sonic_logs/parallel_deploy \
     --results-root /tmp/sonic_batch_parallel \
+    --sim-python-mode venv \
+    --deploy-conda-env sonic \
+    --batch-conda-env sonic \
     --metrics-conda-env sonic_eval \
     --use-isaacsim-app \
+    --progress-interval-sec 10 \
     --align-mode source_frame_index
 ```
 
-说明：
+输出：
+- 结果汇总：`/tmp/sonic_batch_parallel/summary.json`
+- 结果汇总：`/tmp/sonic_batch_parallel/summary.csv`
+- 总控与子进程日志：`/tmp/sonic_multi_instance_run/`
 
-- 终端A 和终端B 仍然需要提前启动；这个脚本不会代替你启动 A/B。
-- 并行模式下，每个 worker 需要一套独立的 B 端 deploy 实例，至少要隔离 `--zmq-port`、`--zmq-out-port`、`--logs-dir`。
-- `--motion-dir` 会自动递归扫描目录下的全部 `*.pkl`，不需要再手写 `motion_list.csv`。
-- C 阶段（stream）仍在当前 `sonic` 环境执行；D 阶段（metrics）会切到 `--metrics-conda-env` 指定的环境执行。
-- 推荐显式传 `--metrics-conda-env sonic_eval`，因为官方对齐指标依赖 `smpl_sim`。
-
-
-
-
-
+注意：
+- 该脚本已使用每 worker 独立 `DDS domain` + 独立 `zmq-port/zmq-out-port/logs-dir`。
+- deploy 端新增参数 `--dds-domain-id`，如更新后首次运行建议先在 `gear_sonic_deploy` 执行一次 `just build`。
+- 若要使用 `motion_list.csv`，可改为 `--motion-list <csv_path>`。
+- 当前机器环境建议：A/B/C 使用 `conda sonic`，D 使用 `conda sonic_eval`。
+- 若 A 端所在的 `conda sonic` 缺少 `unitree_sdk2py`，脚本会自动回退到 `.venv_sim` 启动 MuJoCo。
 
 
 
@@ -185,7 +154,12 @@ tools/sonic_eval/run_mujoco_batch_eval_parallel.sh \
 
 线程thread：CPU 调度的最小执行单元，共享同一进程的内存。
 进程process：程序运行的独立容器，有自己的地址空间、资源句柄，进程之间默认内存隔离。
-实例：某个系统/组件的一次具体运行副本，不是操作系统术语；一个实例通常对应一个进程，也可能是进程内的一个对象
+实例instance：某个系统/组件的一次具体运行副本，不是操作系统术语；一个实例通常对应一个进程，也可能是进程内的一个对象
+
+- 一个 run_sim_loop.py 启动起来，通常是一个 MuJoCo 仿真实例，通常对应一个进程。
+- 这个进程内部可以有多个线程（渲染线程、IO线程等），但它们共享同一套仿真状态。
+- 并行 sampling / rollout（多 mjData，共享或同构 mjModel）什么是rollout?
+    多线程各自持有 mjData，共享只读mjModel。什么是mjData和mjModel？
 
 
 ### _pa的最优相似变换原理
@@ -505,6 +479,111 @@ python gear_sonic/eval_agent_trl.py +checkpoint=/home/lab/Desktop/GR00T-WholeBod
 
 
 
+-------------------------------------------------------------------------------------
+
+## mujoco 运行指令（批量文件处理模式）
+fake批量模式
+
+### 1) 终端A: 启动 MuJoCo sim
+
+  cd /home/lab/Desktop/GR00T-WholeBodyControl
+  source .venv_sim/bin/activate
+  python gear_sonic/scripts/run_sim_loop.py --no-enable-onscreen --interface sim --simulator mujoco --env-name default --no-enable-offscreen
+
+### 2) 终端B: 启动 policy 推理（deploy）
+
+   source /home/lab/miniconda3/etc/profile.d/conda.sh
+   conda activate sonic
+   cd /home/lab/Desktop/GR00T-WholeBodyControl/gear_sonic_deploy
+
+   just run g1_deploy_onnx_ref lo policy/release/model_decoder.onnx /tmp/sonic_motion_action_only \
+    --obs-config policy/release/observation_config.yaml \
+    --encoder-file policy/release/model_encoder.onnx \
+    --planner-file planner/target_vel/V2/planner_sonic.onnx \
+    --input-type zmq_manager \
+    --output-type all \
+    --zmq-host localhost \
+    --zmq-port 5556 \
+    --zmq-out-port 5557 \
+    --enable-csv-logs \
+    --logs-dir /tmp/sonic_logs/parallel_deploy/worker_0 \
+    --target-motion-logfile /tmp/sonic_logs/parallel_deploy/worker_0/target_motion.csv \
+    --policy-input-logfile /tmp/sonic_logs/parallel_deploy/worker_0/policy_input.csv \
+    --enable-motion-recording \
+    --disable-crc-check
+
+  just run g1_deploy_onnx_ref lo policy/release/model_decoder.onnx /tmp/sonic_motion_action_only \
+    --obs-config policy/release/observation_config.yaml \
+    --encoder-file policy/release/model_encoder.onnx \
+    --planner-file planner/target_vel/V2/planner_sonic.onnx \
+    --input-type zmq_manager \
+    --output-type all \
+    --zmq-host localhost \
+    --zmq-port 5566 \
+    --zmq-out-port 5567 \
+    --enable-csv-logs \
+    --logs-dir /tmp/sonic_logs/parallel_deploy/worker_1 \
+    --target-motion-logfile /tmp/sonic_logs/parallel_deploy/worker_1/target_motion.csv \
+    --policy-input-logfile /tmp/sonic_logs/parallel_deploy/worker_1/policy_input.csv \
+    --enable-motion-recording \
+    --disable-crc-check
+
+### 3) 终端C：并行批量
+
+```bash
+cd /home/lab/Desktop/GR00T-WholeBodyControl
+source /home/lab/miniconda3/etc/profile.d/conda.sh
+conda activate sonic_backup
+ tools/sonic_eval/run_mujoco_batch_eval_parallel.sh \
+    --motion-dir /home/lab/Desktop/GR00T-WholeBodyControl/sample_data/robot_filtered/210531 \
+    --workers 2 \
+    --host 127.0.0.1 \
+    --port-base 5556 \
+    --port-step 10 \
+    --logs-root-base /tmp/sonic_logs/batch_parallel \
+    --deploy-logs-dir-base /tmp/sonic_logs/parallel_deploy \
+    --results-root /tmp/sonic_batch_parallel \
+    --metrics-conda-env sonic_eval \
+    --use-isaacsim-app \
+    --progress-interval-sec 10 \
+    --align-mode source_frame_index
+```
+
+说明：
+
+- 终端A 和终端B 仍然需要提前启动；这个脚本不会代替你启动 A/B。
+- 并行模式下，每个 worker 需要一套独立的 B 端 deploy 实例，至少要隔离 `--zmq-port`、`--zmq-out-port`、`--logs-dir`。
+- `--motion-dir` 会自动递归扫描目录下的全部 `*.pkl`，不需要再手写 `motion_list.csv`。
+- C 阶段（stream）仍在当前 `sonic` 环境执行；D 阶段（metrics）会切到 `--metrics-conda-env` 指定的环境执行。
+- 推荐显式传 `--metrics-conda-env sonic_eval`，因为官方对齐指标依赖 `smpl_sim`。
+- `--progress-interval-sec` 会定时打印完成进度（例如 `3/8 done`），默认 10 秒一次，传 `0` 可关闭。
+
+严格真并行自检（可选）：
+
+```bash
+tools/sonic_eval/run_mujoco_batch_eval_parallel.sh \
+  --motion-dir /home/lab/Desktop/GR00T-WholeBodyControl/sample_data/robot_filtered/210531 \
+  --workers 2 \
+  --host 127.0.0.1 \
+  --port-base 5556 \
+  --port-step 10 \
+  --logs-root-base /tmp/sonic_logs/batch_parallel \
+  --deploy-logs-dir-base /tmp/sonic_logs/parallel_deploy \
+  --results-root /tmp/sonic_batch_parallel \
+  --metrics-conda-env sonic_eval \
+  --use-isaacsim-app \
+  --strict-worker-ready-check \
+  --expected-a-instances 2 \
+  --progress-interval-sec 10 \
+  --align-mode source_frame_index
+```
+
+该模式会在启动前检查：
+- `run_sim_loop.py` 实例数是否达到期望值（默认与 `--workers` 一致）
+- 每个 `deploy-logs-dir-base/worker_i` 是否存在、且 CSV 日志是否在持续更新
+
+
+
 
 
 
@@ -793,9 +872,3 @@ python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
       - 再通过同一个 URDF 做 FK，算同样这 14 个点的位置
       - 代码在 tools/sonic_eval/compute_mujoco_tracking_metrics.py:281 和 tools/
         sonic_eval/compute_mujoco_tracking_metrics.py:432
-
-
-
-
-
-

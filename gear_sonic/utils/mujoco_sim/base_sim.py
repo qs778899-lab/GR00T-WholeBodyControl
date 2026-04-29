@@ -10,6 +10,7 @@ import pathlib
 from pathlib import Path
 import pickle
 from copy import deepcopy
+import json
 import tempfile
 from threading import Lock, Thread
 import time
@@ -30,10 +31,91 @@ from gear_sonic.utils.data_collection.zmq_state_subscriber import ZMQStateSubscr
 
 GEAR_SONIC_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 REFERENCE_NAME_PREFIX = "ref_"
+PACKED_ZMQ_HEADER_SIZE = 1280
+
+
+class PackedZMQSubscriber:
+    """Non-blocking subscriber for packed ZMQ motion streams."""
+
+    _DTYPE_MAP = {
+        "f32": np.float32,
+        "f64": np.float64,
+        "i32": np.int32,
+        "i64": np.int64,
+        "u8": np.uint8,
+        "bool": np.bool_,
+    }
+
+    def __init__(self, host: str, port: int, topic: str):
+        import zmq
+
+        self._ctx = zmq.Context()
+        self._socket = self._ctx.socket(zmq.SUB)
+        self._socket.setsockopt_string(zmq.SUBSCRIBE, topic)
+        self._socket.setsockopt(zmq.CONFLATE, 1)
+        self._socket.setsockopt(zmq.RCVTIMEO, 0)
+        self._socket.connect(f"tcp://{host}:{port}")
+        self._topic = topic
+        self._msg = None
+        print(f"[PackedZMQSubscriber] Connected to tcp://{host}:{port} (topic: {topic})")
+
+    def _unpack(self, packed_data: bytes) -> dict:
+        topic_bytes = self._topic.encode("utf-8")
+        if not packed_data.startswith(topic_bytes):
+            raise ValueError(f"Message does not start with expected topic '{self._topic}'")
+
+        offset = len(topic_bytes)
+        if len(packed_data) < offset + PACKED_ZMQ_HEADER_SIZE:
+            raise ValueError(
+                f"Packed data too small: {len(packed_data)} < {offset + PACKED_ZMQ_HEADER_SIZE}"
+            )
+
+        header_bytes = packed_data[offset : offset + PACKED_ZMQ_HEADER_SIZE]
+        null_idx = header_bytes.find(b"\x00")
+        if null_idx > 0:
+            header_bytes = header_bytes[:null_idx]
+
+        header = json.loads(header_bytes.decode("utf-8"))
+        result = {"version": header.get("v", 0), "endian": header.get("endian", "le")}
+        current_offset = offset + PACKED_ZMQ_HEADER_SIZE
+
+        for field in header.get("fields", []):
+            dtype = self._DTYPE_MAP.get(field["dtype"])
+            if dtype is None:
+                raise ValueError(f"Unsupported dtype in packed message: {field['dtype']}")
+            shape = tuple(field["shape"])
+            n_bytes = int(np.prod(shape)) * np.dtype(dtype).itemsize
+            result[field["name"]] = (
+                np.frombuffer(packed_data[current_offset : current_offset + n_bytes], dtype=dtype)
+                .reshape(shape)
+                .copy()
+            )
+            current_offset += n_bytes
+        return result
+
+    def _poll(self):
+        import zmq
+
+        try:
+            raw = self._socket.recv(zmq.NOBLOCK)
+        except zmq.Again:
+            return
+        self._msg = self._unpack(raw)
+
+    def get_msg(self, clear: bool = True):
+        self._poll()
+        msg = self._msg
+        if clear:
+            self._msg = None
+        return msg
+
+    def close(self):
+        self._socket.close()
+        self._ctx.term()
 
 
 class ReferenceMotionVisualizer:
-    """Drive a translucent reference robot from deploy's g1_debug target pose."""
+    """Drive a translucent reference robot from the pose stream or deploy debug pose."""
 
     def __init__(
         self,
@@ -45,6 +127,8 @@ class ReferenceMotionVisualizer:
         port: int,
         topic: str,
         translation_mode: str,
+        pose_port: int | None = None,
+        pose_topic: str = "pose",
     ):
         self.mj_model = mj_model
         self.mj_data = mj_data
@@ -82,10 +166,18 @@ class ReferenceMotionVisualizer:
         self._shown_once = False
         self.set_visible(False)
 
-        self.subscriber = ZMQStateSubscriber(host=host, port=port, topic=topic)
+        self.debug_subscriber = ZMQStateSubscriber(host=host, port=port, topic=topic)
+        self.pose_subscriber = None
+        if pose_port is not None:
+            try:
+                self.pose_subscriber = PackedZMQSubscriber(host=host, port=pose_port, topic=pose_topic)
+            except Exception as exc:
+                print(f"[ReferenceMotionVisualizer] pose subscriber disabled: {exc}")
 
     def close(self):
-        self.subscriber.close()
+        self.debug_subscriber.close()
+        if self.pose_subscriber is not None:
+            self.pose_subscriber.close()
 
     def reset_anchor(self):
         self._target_anchor_base_pos = None
@@ -105,25 +197,65 @@ class ReferenceMotionVisualizer:
         )
 
     def poll(self):
-        msg = self.subscriber.get_msg()
-        if msg is None:
+        pose_msg = self.pose_subscriber.get_msg() if self.pose_subscriber is not None else None
+        if pose_msg is not None and self._consume_pose_stream_msg(pose_msg):
             return
+
+        debug_msg = self.debug_subscriber.get_msg()
+        if debug_msg is None:
+            return
+        if not self._consume_debug_msg(debug_msg):
+            return
+
+    def _consume_debug_msg(self, msg: dict) -> bool:
         required = ("base_trans_target", "base_quat_target", "body_q_target")
         if not all(key in msg for key in required):
-            return
+            return False
 
         base_pos = np.asarray(msg["base_trans_target"], dtype=np.float64)
         base_quat = np.asarray(msg["base_quat_target"], dtype=np.float64)
         body_q = np.asarray(msg["body_q_target"], dtype=np.float64)
         if base_pos.shape != (3,) or base_quat.shape != (4,) or body_q.shape != (29,):
-            return
+            return False
+        self._set_latest_pose(base_pos, base_quat, body_q)
+        return True
 
+    def _consume_pose_stream_msg(self, msg: dict) -> bool:
+        required = ("body_pos_w", "body_quat_w", "joint_pos")
+        if not all(key in msg for key in required):
+            return False
+
+        body_pos = np.asarray(msg["body_pos_w"], dtype=np.float64)
+        body_quat = np.asarray(msg["body_quat_w"], dtype=np.float64)
+        body_q = np.asarray(msg["joint_pos"], dtype=np.float64)
+        if body_pos.ndim == 2:
+            base_pos = body_pos[0]
+        elif body_pos.ndim == 1 and body_pos.shape == (3,):
+            base_pos = body_pos
+        else:
+            return False
+
+        if body_quat.ndim == 2:
+            base_quat = body_quat[0]
+        elif body_quat.ndim == 1 and body_quat.shape == (4,):
+            base_quat = body_quat
+        else:
+            return False
+
+        if body_q.ndim == 2:
+            body_q = body_q[0]
+        if base_pos.shape != (3,) or base_quat.shape != (4,) or body_q.shape != (29,):
+            return False
+        self._set_latest_pose(base_pos, base_quat, body_q)
+        return True
+
+    def _set_latest_pose(self, base_pos: np.ndarray, base_quat: np.ndarray, body_q: np.ndarray):
         self._latest_pose = (base_pos, base_quat, body_q)
         self._maybe_refresh_translation_anchor(base_pos)
         if not self._shown_once:
             self._shown_once = True
             self.set_visible(True)
-            print("[ReferenceMotionVisualizer] target pose stream detected on deploy ZMQ output")
+            print("[ReferenceMotionVisualizer] reference pose stream detected")
 
     def apply(self):
         if self._latest_pose is None or not self.enabled:
@@ -489,8 +621,10 @@ class DefaultEnv:
                 body_joint_names=self.body_joint_names,
                 alpha=self.config.get("REFERENCE_MOTION_ALPHA", 0.35),
                 host=self.config.get("REFERENCE_MOTION_ZMQ_HOST", "127.0.0.1"),
-                port=int(self.config.get("REFERENCE_MOTION_ZMQ_PORT", 5557)),
+                port=int(self.config.get("REFERENCE_MOTION_ZMQ_PORT", 5608)),
                 topic=self.config.get("REFERENCE_MOTION_ZMQ_TOPIC", "g1_debug"),
+                pose_port=int(self.config.get("REFERENCE_MOTION_POSE_ZMQ_PORT", 5556)),
+                pose_topic=self.config.get("REFERENCE_MOTION_POSE_ZMQ_TOPIC", "pose"),
                 translation_mode=self.config.get(
                     "REFERENCE_MOTION_TRANSLATION_MODE", "delta_aligned"
                 ),

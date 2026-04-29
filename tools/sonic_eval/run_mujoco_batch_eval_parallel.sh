@@ -38,6 +38,9 @@ USE_ISAACSIM_APP="true"
 ALIGN_MODE="source_frame_index"
 METRICS_CONDA_ENV=""
 ALLOW_FALLBACK_METRICS="false"
+STRICT_WORKER_READY_CHECK="false"
+EXPECTED_A_INSTANCES=""
+PROGRESS_INTERVAL_SEC="10"
 
 usage() {
   cat <<EOF
@@ -72,6 +75,9 @@ Optional:
   --align-mode MODE                    source_frame_index|index|auto_q29
   --metrics-conda-env NAME             Pass through to worker metrics stage
   --allow-fallback-metrics             Pass through to worker metrics stage
+  --strict-worker-ready-check          Validate per-worker deploy logs freshness and A-instance count
+  --expected-a-instances N             Expected number of run_sim_loop.py processes (default: --workers when strict check is enabled)
+  --progress-interval-sec N            Progress print interval in seconds (default: ${PROGRESS_INTERVAL_SEC}; 0 disables)
 EOF
 }
 
@@ -100,6 +106,9 @@ while [[ $# -gt 0 ]]; do
     --align-mode) ALIGN_MODE="$2"; shift 2 ;;
     --metrics-conda-env) METRICS_CONDA_ENV="$2"; shift 2 ;;
     --allow-fallback-metrics) ALLOW_FALLBACK_METRICS="true"; shift ;;
+    --strict-worker-ready-check) STRICT_WORKER_READY_CHECK="true"; shift ;;
+    --expected-a-instances) EXPECTED_A_INSTANCES="$2"; shift 2 ;;
+    --progress-interval-sec) PROGRESS_INTERVAL_SEC="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "[ERROR] Unknown arg: $1"; usage; exit 1 ;;
   esac
@@ -124,8 +133,24 @@ fi
 
 mkdir -p "$RESULTS_ROOT" "$LOGS_ROOT_BASE"
 
+rm -f "${RESULTS_ROOT}"/summary.json "${RESULTS_ROOT}"/summary.csv
+rm -f "${RESULTS_ROOT}"/worker_*.json "${RESULTS_ROOT}"/worker_*.csv "${RESULTS_ROOT}"/worker_*.log
+
 TMPDIR="$(mktemp -d /tmp/sonic_batch_parallel.XXXXXX)"
-trap 'rm -rf "$TMPDIR"' EXIT
+PIDS=()
+progress_pid=""
+cleanup() {
+  if [[ -n "$progress_pid" ]]; then
+    kill "$progress_pid" >/dev/null 2>&1 || true
+  fi
+  for pid in "${PIDS[@]}"; do
+    if kill -0 "$pid" >/dev/null 2>&1; then
+      kill "$pid" >/dev/null 2>&1 || true
+    fi
+  done
+  rm -rf "$TMPDIR"
+}
+trap cleanup EXIT
 
 if [[ -n "$DEPLOY_LOGS_DIR_BASE" ]]; then
   for ((i=0; i<WORKERS; i++)); do
@@ -158,11 +183,77 @@ echo "[INFO] total motions: $total_lines"
 echo "[INFO] workers: $WORKERS"
 echo "[INFO] results_root: $RESULTS_ROOT"
 
+if [[ "$STRICT_WORKER_READY_CHECK" == "true" ]]; then
+  expected_a="$EXPECTED_A_INSTANCES"
+  if [[ -z "$expected_a" ]]; then
+    expected_a="$WORKERS"
+  fi
+  if command -v rg >/dev/null 2>&1; then
+    sim_count="$(ps -ef | rg -c 'gear_sonic/scripts/run_sim_loop.py' || true)"
+  else
+    sim_count="$(ps -ef | grep -c 'gear_sonic/scripts/run_sim_loop.py' || true)"
+  fi
+  sim_count="${sim_count:-0}"
+  if [[ "$sim_count" -lt "$expected_a" ]]; then
+    echo "[ERROR] strict check failed: run_sim_loop.py instances=${sim_count}, expected at least ${expected_a}"
+    echo "[HINT] true parallel sim requires one MuJoCo A instance per worker"
+    exit 1
+  fi
+  if [[ -n "$DEPLOY_LOGS_DIR_BASE" ]]; then
+    now_ts="$(date +%s)"
+    for ((i=0; i<WORKERS; i++)); do
+      d="${DEPLOY_LOGS_DIR_BASE}/worker_${i}"
+      if [[ ! -d "$d" ]]; then
+        echo "[ERROR] strict check failed: missing deploy logs dir for worker ${i}: $d"
+        exit 1
+      fi
+
+      marker_file="${d}/.launch_marker"
+      marker_ts=""
+      if [[ -f "$marker_file" ]]; then
+        marker_ts="$(stat -c %Y "$marker_file" 2>/dev/null || true)"
+      fi
+
+      latest_ready_ts=""
+      metadata_ts="$(stat -c %Y "${d}/metadata.json" 2>/dev/null || true)"
+      latest_csv_ts="$(find "$d" -maxdepth 1 -type f -name "*.csv" -printf '%T@\n' 2>/dev/null | sort -nr | head -n1 | cut -d. -f1)"
+
+      if [[ -n "$metadata_ts" ]]; then
+        latest_ready_ts="$metadata_ts"
+      fi
+      if [[ -n "$latest_csv_ts" && ( -z "$latest_ready_ts" || "$latest_csv_ts" -gt "$latest_ready_ts" ) ]]; then
+        latest_ready_ts="$latest_csv_ts"
+      fi
+
+      if [[ -z "$latest_ready_ts" ]]; then
+        echo "[ERROR] strict check failed: no deploy readiness artifacts found for worker ${i} in $d"
+        echo "[HINT] ensure deploy worker ${i} is alive and writes metadata.json / csv logs"
+        exit 1
+      fi
+
+      if [[ -n "$marker_ts" ]]; then
+        if [[ "$latest_ready_ts" -lt "$marker_ts" ]]; then
+          echo "[ERROR] strict check failed: worker ${i} deploy logs are from an older run: $d"
+          echo "[HINT] current deploy worker ${i} has not produced fresh metadata/csv after this run started"
+          exit 1
+        fi
+      else
+        age=$((now_ts - latest_ready_ts))
+        if [[ "$age" -gt 120 ]]; then
+          echo "[ERROR] strict check failed: worker ${i} deploy logs look stale (age=${age}s): $d"
+          echo "[HINT] confirm deploy worker ${i} is alive and bound to its dedicated ports"
+          exit 1
+        fi
+      fi
+    done
+  fi
+  echo "[INFO] strict worker-ready check passed"
+fi
+
 for ((i=0; i<WORKERS; i++)); do
   awk -F, -v mod="$WORKERS" -v idx="$i" '((NR-1) % mod) == idx {print $0}' "$CLEAN_LIST" > "$TMPDIR/worker_${i}.csv"
 done
 
-PIDS=()
 for ((i=0; i<WORKERS; i++)); do
   worker_list="$TMPDIR/worker_${i}.csv"
   count_i="$(wc -l < "$worker_list" | tr -d ' ')"
@@ -218,6 +309,33 @@ done
 if [[ "${#PIDS[@]}" -eq 0 ]]; then
   echo "[ERROR] no workers launched"
   exit 1
+fi
+
+if [[ "$PROGRESS_INTERVAL_SEC" -gt 0 ]]; then
+  (
+    while true; do
+      if command -v rg >/dev/null 2>&1; then
+        done_count="$(rg -c '^\[OK\] done motion:' "${RESULTS_ROOT}"/worker_*.log 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')"
+      else
+        done_count="$(
+          grep -h -c '^\[OK\] done motion:' "${RESULTS_ROOT}"/worker_*.log 2>/dev/null \
+          | awk '{s+=$1} END {print s+0}'
+        )"
+      fi
+      running=0
+      for pid in "${PIDS[@]}"; do
+        if kill -0 "$pid" >/dev/null 2>&1; then
+          running=$((running + 1))
+        fi
+      done
+      echo "[INFO] progress: ${done_count}/${total_lines} done, running_workers=${running}/${#PIDS[@]}"
+      if [[ "$running" -eq 0 ]]; then
+        break
+      fi
+      sleep "$PROGRESS_INTERVAL_SEC"
+    done
+  ) &
+  progress_pid="$!"
 fi
 
 fail=0

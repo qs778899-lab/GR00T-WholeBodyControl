@@ -51,4 +51,5 @@ printf 'Y\n' | bash ./deploy.sh sim \
   --obs-config policy/release/observation_config.yaml \
   --input-type manager \
   --output-type all \
-  --zmq-host localhost
+  --zmq-host localhost \
+  --zmq-port 5596
