@@ -197,15 +197,16 @@ class ReferenceMotionVisualizer:
         )
 
     def poll(self):
-        pose_msg = self.pose_subscriber.get_msg() if self.pose_subscriber is not None else None
-        if pose_msg is not None and self._consume_pose_stream_msg(pose_msg):
+        # Debug stream (g1_debug) carries deploy's current-frame state with heading correction
+        # applied — use it as the primary source for accurate root position tracking.
+        debug_msg = self.debug_subscriber.get_msg()
+        if debug_msg is not None and self._consume_debug_msg(debug_msg):
             return
 
-        debug_msg = self.debug_subscriber.get_msg()
-        if debug_msg is None:
-            return
-        if not self._consume_debug_msg(debug_msg):
-            return
+        # Fall back to the raw pose stream only when the debug stream has no new data.
+        pose_msg = self.pose_subscriber.get_msg() if self.pose_subscriber is not None else None
+        if pose_msg is not None:
+            self._consume_pose_stream_msg(pose_msg)
 
     def _consume_debug_msg(self, msg: dict) -> bool:
         required = ("base_trans_target", "base_quat_target", "body_q_target")
