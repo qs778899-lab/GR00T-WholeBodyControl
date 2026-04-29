@@ -229,22 +229,23 @@ class ReferenceMotionVisualizer:
         body_pos = np.asarray(msg["body_pos_w"], dtype=np.float64)
         body_quat = np.asarray(msg["body_quat_w"], dtype=np.float64)
         body_q = np.asarray(msg["joint_pos"], dtype=np.float64)
+        # Take the last frame of the chunk (most recent data) rather than the first.
         if body_pos.ndim == 2:
-            base_pos = body_pos[0]
+            base_pos = body_pos[-1]
         elif body_pos.ndim == 1 and body_pos.shape == (3,):
             base_pos = body_pos
         else:
             return False
 
         if body_quat.ndim == 2:
-            base_quat = body_quat[0]
+            base_quat = body_quat[-1]
         elif body_quat.ndim == 1 and body_quat.shape == (4,):
             base_quat = body_quat
         else:
             return False
 
         if body_q.ndim == 2:
-            body_q = body_q[0]
+            body_q = body_q[-1]
         if base_pos.shape != (3,) or base_quat.shape != (4,) or body_q.shape != (29,):
             return False
         self._set_latest_pose(base_pos, base_quat, body_q)
