@@ -24,6 +24,12 @@ These scripts are standalone helpers for your requested workflow without modifyi
     - subsets: `legs`, `vr_3points`, `other_upper_bodies`, `foot`
 - `run_mujoco_chain.sh`
   - Convenience script: convert parquet + start sim + start deploy.
+- `run_mujoco_batch_eval.sh`
+  - Batch helper for existing sim2sim chain (keeps A/B unchanged, loops C+D per motion).
+  - Reads motion list CSV (`motion_file,motion_name`) and writes summary JSON/CSV.
+- `run_mujoco_batch_eval_parallel.sh`
+  - Parallel dispatcher that launches multiple `run_mujoco_batch_eval.sh` workers.
+  - Requires isolated A/B runtime per worker (separate ZMQ ports and logs).
 
 ## 1) Convert parquet -> deploy motion folder
 
@@ -125,6 +131,42 @@ python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
   --gt-motion-dir /tmp/sonic_motion_action_only/episode_000000_action \
   --out-json /tmp/sonic_mujoco_tracking_metrics.json
 ```
+
+## 6) Batch C+D for motionlib list (no codepath changes)
+
+Keep your existing Terminal A/B running, then execute batch C+D in another terminal:
+
+```bash
+cat >/tmp/motion_list.csv <<EOF
+sample_data/robot_filtered/210531/walk_forward_amateur_001__A001.pkl,walk_forward_amateur_001__A001
+sample_data/robot_filtered/210531/walk_forward_amateur_001__A001_M.pkl,walk_forward_amateur_001__A001_M
+EOF
+
+source /home/lab/miniconda3/etc/profile.d/conda.sh
+conda activate sonic
+
+tools/sonic_eval/run_mujoco_batch_eval.sh \
+  --motion-list /tmp/motion_list.csv \
+  --logs-root /tmp/sonic_logs/batch_zmq \
+  --results-json /tmp/sonic_batch_metrics_summary.json \
+  --results-csv /tmp/sonic_batch_metrics_summary.csv
+```
+
+### Parallel batch (N workers, isolated ports)
+
+```bash
+tools/sonic_eval/run_mujoco_batch_eval_parallel.sh \
+  --motion-list /tmp/motion_list.csv \
+  --workers 2 \
+  --port-base 5556 \
+  --port-step 10 \
+  --results-root /tmp/sonic_batch_parallel
+```
+
+Notes:
+- Worker 0 uses port `5556`, worker 1 uses `5566` (with `--port-step 10`).
+- You must provide matching isolated A/B instances for each worker port.
+- This adds parallel throughput without changing original single-worker behavior.
 
 ## Environment caveats observed on this machine
 

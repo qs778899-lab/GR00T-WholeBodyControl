@@ -182,6 +182,8 @@ class DefaultEnv:
                 )
 
         # Enable the elastic band
+        self.elastic_band = None
+        self.band_attached_link = None
         if self.config["ENABLE_ELASTIC_BAND"] and self.use_floating_root_link:
             self.elastic_band = ElasticBand()
             if "g1" in self.config["ROBOT_TYPE"]:
