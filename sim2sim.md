@@ -7,9 +7,7 @@ bash install_scripts/install_mujoco_sim.sh
 
 对官方sample data的pkl文件数据进行加载预处理后输入给robot motion encoder, 在mujoco中对universal control policy进行推理的整个链路，整个链路模仿isaacsim eval的。
 
-这个可视化既要能看出policy对pkl的动作的root position的tracking精度，也要可以看出track动作形态也就是不同关节角的效果。现在的问题是，为什么可视化出来的reference G1的位置不是按照refercence motion在移动，而
-  是一
-    直在原地？彻底解决这个问题
+这个可视化既要能看出policy对pkl的动作的root position的tracking精度，也要可以看出track动作形态也就是不同关节角的效果。现在的问题是，为什么可视化出来的reference G1的位置不是按照refercence motion(pkl读取的)在移动，而是一直在原地？彻底解决这个问题
 
 ## TODO功能
 
@@ -133,20 +131,6 @@ tools/sonic_eval/run_mujoco_multi_instance_parallel.sh \
     --progress-interval-sec 10 \
     --align-mode source_frame_index
 ```
-
-输出：
-- 结果汇总：`/tmp/sonic_batch_parallel/summary.json`
-- 结果汇总：`/tmp/sonic_batch_parallel/summary.csv`
-- 总控与子进程日志：`/tmp/sonic_multi_instance_run/`
-
-注意：
-- 该脚本已使用每 worker 独立 `DDS domain` + 独立 `zmq-port/zmq-out-port/logs-dir`。
-- deploy 端新增参数 `--dds-domain-id`，如更新后首次运行建议先在 `gear_sonic_deploy` 执行一次 `just build`。
-- 若要使用 `motion_list.csv`，可改为 `--motion-list <csv_path>`。
-- 当前机器环境建议：A/B/C 使用 `conda sonic`，D 使用 `conda sonic_eval`。
-- 若 A 端所在的 `conda sonic` 缺少 `unitree_sdk2py`，脚本会自动回退到 `.venv_sim` 启动 MuJoCo。
-
-
 
 ## 原理补充
 
