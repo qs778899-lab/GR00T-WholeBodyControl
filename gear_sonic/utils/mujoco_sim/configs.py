@@ -89,6 +89,12 @@ def override_wbc_config(
         "waist_pitch_limit": config.waist_pitch_limit,
         "hand_torque_limit": config.hand_torque_limit,
         "enable_natural_walk": config.enable_natural_walk,
+        "ENABLE_REFERENCE_MOTION_VISUALIZATION": config.enable_reference_motion_visualization,
+        "REFERENCE_MOTION_ZMQ_HOST": config.reference_motion_zmq_host,
+        "REFERENCE_MOTION_ZMQ_PORT": config.reference_motion_zmq_port,
+        "REFERENCE_MOTION_ZMQ_TOPIC": config.reference_motion_zmq_topic,
+        "REFERENCE_MOTION_ALPHA": config.reference_motion_alpha,
+        "REFERENCE_MOTION_TRANSLATION_MODE": config.reference_motion_translation_mode,
     }
 
     if missed_keys_only:
@@ -281,6 +287,24 @@ class BaseConfig(ArgsConfigTemplate):
 
     inference_publish_single_action: bool = False
     """Whether to publish only a single action."""
+
+    enable_reference_motion_visualization: bool = True
+    """Render deploy's current reference motion as a translucent robot in MuJoCo."""
+
+    reference_motion_zmq_host: str = "127.0.0.1"
+    """Host for the deploy ZMQ debug publisher."""
+
+    reference_motion_zmq_port: int = 5557
+    """Port for the deploy ZMQ debug publisher."""
+
+    reference_motion_zmq_topic: str = "g1_debug"
+    """Topic for the deploy ZMQ debug publisher."""
+
+    reference_motion_alpha: float = 0.35
+    """Alpha value used for the reference robot mesh."""
+
+    reference_motion_translation_mode: Literal["delta_aligned", "raw_global"] = "delta_aligned"
+    """How reference root translation is visualized in MuJoCo."""
 
     commit_id: str = ""
     """Commit ID for the current codebase"""

@@ -9,6 +9,7 @@ import os
 import pathlib
 from pathlib import Path
 import pickle
+from copy import deepcopy
 import tempfile
 from threading import Lock, Thread
 import time
@@ -22,11 +23,149 @@ from scipy.spatial.transform import Rotation
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize
 
 from gear_sonic.utils.mujoco_sim.metric_utils import check_contact, check_height
-from gear_sonic.utils.mujoco_sim.sim_utils import get_subtree_body_names
+from gear_sonic.utils.mujoco_sim.sim_utils import get_subtree_body_names, get_subtree_geom_ids
 from gear_sonic.utils.mujoco_sim.unitree_sdk2py_bridge import ElasticBand, UnitreeSdk2Bridge
 from gear_sonic.utils.mujoco_sim.robot import Robot
+from gear_sonic.utils.data_collection.zmq_state_subscriber import ZMQStateSubscriber
 
 GEAR_SONIC_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+REFERENCE_NAME_PREFIX = "ref_"
+
+
+class ReferenceMotionVisualizer:
+    """Drive a translucent reference robot from deploy's g1_debug target pose."""
+
+    def __init__(
+        self,
+        mj_model: mujoco.MjModel,
+        mj_data: mujoco.MjData,
+        body_joint_names: list[str],
+        alpha: float,
+        host: str,
+        port: int,
+        topic: str,
+        translation_mode: str,
+    ):
+        self.mj_model = mj_model
+        self.mj_data = mj_data
+        self.alpha = float(np.clip(alpha, 0.0, 1.0))
+        self.visible = False
+        self.enabled = True
+        self._latest_pose = None
+        self.translation_mode = translation_mode
+        self._target_anchor_base_pos = None
+        self._actual_anchor_base_pos = None
+        self._prev_target_base_pos = None
+
+        root_joint_name = f"{REFERENCE_NAME_PREFIX}floating_base_joint"
+        root_body_name = f"{REFERENCE_NAME_PREFIX}pelvis"
+        root_joint_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_JOINT, root_joint_name)
+        root_body_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, root_body_name)
+        if root_joint_id == -1 or root_body_id == -1:
+            raise ValueError("reference robot was not found in the loaded MuJoCo model")
+
+        self.root_qpos_adr = mj_model.jnt_qposadr[root_joint_id]
+        self.root_qvel_adr = mj_model.jnt_dofadr[root_joint_id]
+        self.body_qpos_adrs = []
+        self.body_qvel_adrs = []
+        for joint_name in body_joint_names:
+            ref_joint_name = f"{REFERENCE_NAME_PREFIX}{joint_name}"
+            joint_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_JOINT, ref_joint_name)
+            if joint_id == -1:
+                raise ValueError(f"reference joint missing from MuJoCo model: {ref_joint_name}")
+            self.body_qpos_adrs.append(mj_model.jnt_qposadr[joint_id])
+            self.body_qvel_adrs.append(mj_model.jnt_dofadr[joint_id])
+
+        self.body_qpos_adrs = np.array(self.body_qpos_adrs, dtype=np.int32)
+        self.body_qvel_adrs = np.array(self.body_qvel_adrs, dtype=np.int32)
+        self.ref_geom_ids = np.array(get_subtree_geom_ids(mj_model, root_body_id), dtype=np.int32)
+        self._shown_once = False
+        self.set_visible(False)
+
+        self.subscriber = ZMQStateSubscriber(host=host, port=port, topic=topic)
+
+    def close(self):
+        self.subscriber.close()
+
+    def reset_anchor(self):
+        self._target_anchor_base_pos = None
+        self._actual_anchor_base_pos = None
+        self._prev_target_base_pos = None
+
+    def set_visible(self, visible: bool):
+        self.visible = visible
+        alpha = self.alpha if visible and self.enabled else 0.0
+        self.mj_model.geom_rgba[self.ref_geom_ids, 3] = alpha
+
+    def toggle(self):
+        self.set_visible(not self.visible)
+        print(
+            f"[ReferenceMotionVisualizer] reference motion visualization "
+            f"{'enabled' if self.visible else 'hidden'}"
+        )
+
+    def poll(self):
+        msg = self.subscriber.get_msg()
+        if msg is None:
+            return
+        required = ("base_trans_target", "base_quat_target", "body_q_target")
+        if not all(key in msg for key in required):
+            return
+
+        base_pos = np.asarray(msg["base_trans_target"], dtype=np.float64)
+        base_quat = np.asarray(msg["base_quat_target"], dtype=np.float64)
+        body_q = np.asarray(msg["body_q_target"], dtype=np.float64)
+        if base_pos.shape != (3,) or base_quat.shape != (4,) or body_q.shape != (29,):
+            return
+
+        self._latest_pose = (base_pos, base_quat, body_q)
+        self._maybe_refresh_translation_anchor(base_pos)
+        if not self._shown_once:
+            self._shown_once = True
+            self.set_visible(True)
+            print("[ReferenceMotionVisualizer] target pose stream detected on deploy ZMQ output")
+
+    def apply(self):
+        if self._latest_pose is None or not self.enabled:
+            return False
+
+        base_pos, base_quat, body_q = self._latest_pose
+        if self.translation_mode == "delta_aligned":
+            if self._target_anchor_base_pos is None or self._actual_anchor_base_pos is None:
+                self._target_anchor_base_pos = base_pos.copy()
+                self._actual_anchor_base_pos = self._get_actual_robot_root_pos()
+            base_pos = self._actual_anchor_base_pos + (base_pos - self._target_anchor_base_pos)
+        self.mj_data.qpos[self.root_qpos_adr : self.root_qpos_adr + 3] = base_pos
+        self.mj_data.qpos[self.root_qpos_adr + 3 : self.root_qpos_adr + 7] = base_quat
+        self.mj_data.qvel[self.root_qvel_adr : self.root_qvel_adr + 6] = 0.0
+        self.mj_data.qpos[self.body_qpos_adrs] = body_q
+        self.mj_data.qvel[self.body_qvel_adrs] = 0.0
+        return True
+
+    def _get_actual_robot_root_pos(self) -> np.ndarray:
+        return self.mj_data.qpos[:3].copy()
+
+    def _maybe_refresh_translation_anchor(self, target_base_pos: np.ndarray):
+        if self.translation_mode != "delta_aligned":
+            self._prev_target_base_pos = target_base_pos.copy()
+            return
+        if self._target_anchor_base_pos is None or self._actual_anchor_base_pos is None:
+            self._target_anchor_base_pos = target_base_pos.copy()
+            self._actual_anchor_base_pos = self._get_actual_robot_root_pos()
+            self._prev_target_base_pos = target_base_pos.copy()
+            return
+
+        # If the streamed target snaps back near its initial root after having moved
+        # away, treat that as a new clip start and re-anchor to the current actual pose.
+        prev_target = self._prev_target_base_pos
+        if prev_target is not None:
+            moved_away = np.linalg.norm(prev_target - self._target_anchor_base_pos) > 0.15
+            returned_to_start = np.linalg.norm(target_base_pos - self._target_anchor_base_pos) < 0.03
+            if moved_away and returned_to_start:
+                self._target_anchor_base_pos = target_base_pos.copy()
+                self._actual_anchor_base_pos = self._get_actual_robot_root_pos()
+                print("[ReferenceMotionVisualizer] re-anchored reference root translation")
+        self._prev_target_base_pos = target_base_pos.copy()
 
 
 class DefaultEnv:
@@ -60,6 +199,8 @@ class DefaultEnv:
         self.reward_lock = Lock()
         self.unitree_bridge = None
         self.onscreen = onscreen
+        self.reference_visualizer = None
+        self.generated_scene_path = None
 
         self.init_scene()
         self.last_reward = 0
@@ -146,7 +287,8 @@ class DefaultEnv:
 
     def init_scene(self):
         """Initialize the default robot scene"""
-        xml_path = str(pathlib.Path(GEAR_SONIC_ROOT) / self.config["ROBOT_SCENE"])
+        xml_path = pathlib.Path(GEAR_SONIC_ROOT) / self.config["ROBOT_SCENE"]
+        xml_path = self._maybe_create_reference_visualization_scene(xml_path)
         self.mj_model = mujoco.MjModel.from_xml_path(xml_path)
         self.mj_data = mujoco.MjData(self.mj_model)
         self.mj_model.opt.timestep = self.sim_dt
@@ -227,8 +369,13 @@ class DefaultEnv:
         self.body_joint_index = []
         self.left_hand_index = []
         self.right_hand_index = []
+        self.body_joint_names = []
+        self.left_hand_joint_names = []
+        self.right_hand_joint_names = []
         for i in range(self.mj_model.njnt):
             name = self.mj_model.joint(i).name
+            if name.startswith(REFERENCE_NAME_PREFIX):
+                continue
             if any(
                 [
                     part_name in name
@@ -236,10 +383,13 @@ class DefaultEnv:
                 ]
             ):
                 self.body_joint_index.append(i)
+                self.body_joint_names.append(name)
             elif "left_hand" in name:
                 self.left_hand_index.append(i)
+                self.left_hand_joint_names.append(name)
             elif "right_hand" in name:
                 self.right_hand_index.append(i)
+                self.right_hand_joint_names.append(name)
 
         assert len(self.body_joint_index) == self.robot.NUM_JOINTS
         assert len(self.left_hand_index) == self.robot.NUM_HAND_JOINTS
@@ -248,6 +398,106 @@ class DefaultEnv:
         self.body_joint_index = np.array(self.body_joint_index)
         self.left_hand_index = np.array(self.left_hand_index)
         self.right_hand_index = np.array(self.right_hand_index)
+
+        self._init_reference_visualizer()
+
+    def _maybe_create_reference_visualization_scene(self, xml_path: pathlib.Path) -> str:
+        if not self.config.get("ENABLE_REFERENCE_MOTION_VISUALIZATION", False):
+            return str(xml_path)
+
+        scene_tree = ET.parse(xml_path)
+        scene_root = scene_tree.getroot()
+        scene_dir = xml_path.parent
+
+        include_elements = scene_root.findall("include")
+        if not include_elements:
+            print(
+                "[ReferenceMotionVisualizer] no <include> found in scene XML; "
+                "reference visualization disabled"
+            )
+            return str(xml_path)
+
+        include_path = None
+        for include_element in include_elements:
+            include_file = include_element.get("file")
+            if include_file is None:
+                continue
+            resolved = (scene_dir / include_file).resolve()
+            include_element.set("file", str(resolved))
+            if include_path is None:
+                include_path = resolved
+
+        if include_path is None:
+            print(
+                "[ReferenceMotionVisualizer] failed to resolve robot include; "
+                "reference visualization disabled"
+            )
+            return str(xml_path)
+
+        robot_tree = ET.parse(include_path)
+        robot_body = robot_tree.getroot().find("./worldbody/body")
+        scene_worldbody = scene_root.find("./worldbody")
+        if robot_body is None or scene_worldbody is None:
+            print(
+                "[ReferenceMotionVisualizer] robot/worldbody missing from XML; "
+                "reference visualization disabled"
+            )
+            return str(xml_path)
+
+        ref_body = deepcopy(robot_body)
+        self._prefix_reference_subtree(ref_body)
+        scene_worldbody.append(ref_body)
+
+        fd, temp_path = tempfile.mkstemp(
+            prefix="mujoco_reference_scene_",
+            suffix=".xml",
+            dir=scene_dir,
+        )
+        os.close(fd)
+        scene_tree.write(temp_path, encoding="utf-8", xml_declaration=False)
+        self.generated_scene_path = temp_path
+        return temp_path
+
+    def _prefix_reference_subtree(self, root: ET.Element):
+        alpha = float(np.clip(self.config.get("REFERENCE_MOTION_ALPHA", 0.35), 0.0, 1.0))
+        for element in root.iter():
+            if "name" in element.attrib:
+                element.set("name", f"{REFERENCE_NAME_PREFIX}{element.get('name')}")
+            if element.tag != "geom":
+                continue
+            element.set("contype", "0")
+            element.set("conaffinity", "0")
+            rgba_str = element.get("rgba")
+            if rgba_str is None:
+                rgb = np.array([0.88, 0.88, 0.88], dtype=np.float64)
+            else:
+                rgba = np.fromstring(rgba_str, sep=" ", dtype=np.float64)
+                rgb = rgba[:3] if rgba.size >= 3 else np.array([0.7, 0.7, 0.7], dtype=np.float64)
+            lightened_rgb = np.clip(0.45 + 0.55 * rgb, 0.0, 1.0)
+            element.set(
+                "rgba",
+                f"{lightened_rgb[0]:.6f} {lightened_rgb[1]:.6f} {lightened_rgb[2]:.6f} {alpha:.6f}",
+            )
+
+    def _init_reference_visualizer(self):
+        if not self.config.get("ENABLE_REFERENCE_MOTION_VISUALIZATION", False):
+            return
+        try:
+            self.reference_visualizer = ReferenceMotionVisualizer(
+                mj_model=self.mj_model,
+                mj_data=self.mj_data,
+                body_joint_names=self.body_joint_names,
+                alpha=self.config.get("REFERENCE_MOTION_ALPHA", 0.35),
+                host=self.config.get("REFERENCE_MOTION_ZMQ_HOST", "127.0.0.1"),
+                port=int(self.config.get("REFERENCE_MOTION_ZMQ_PORT", 5557)),
+                topic=self.config.get("REFERENCE_MOTION_ZMQ_TOPIC", "g1_debug"),
+                translation_mode=self.config.get(
+                    "REFERENCE_MOTION_TRANSLATION_MODE", "delta_aligned"
+                ),
+            )
+        except Exception as exc:
+            self.reference_visualizer = None
+            print(f"[ReferenceMotionVisualizer] disabled: {exc}")
 
     def init_renderers(self):
         self.renderers = {}
@@ -430,6 +680,9 @@ class DefaultEnv:
         else:
             self.mj_data.ctrl = self.torques
         mujoco.mj_step(self.mj_model, self.mj_data)
+        reference_pose_applied = self.update_reference_motion_visualization()
+        if reference_pose_applied:
+            mujoco.mj_forward(self.mj_model, self.mj_data)
 
         self.check_fall()
 
@@ -502,10 +755,18 @@ class DefaultEnv:
 
         if key == "backspace":
             self.reset()
+        if key == "r" and self.reference_visualizer is not None:
+            self.reference_visualizer.toggle()
         if key == "v":
             self.update_viewer_camera()
         if key in ["up", "down", "left", "right"]:
             self.apply_perturbation(key)
+
+    def update_reference_motion_visualization(self):
+        if self.reference_visualizer is None:
+            return False
+        self.reference_visualizer.poll()
+        return self.reference_visualizer.apply()
 
     def check_fall(self):
         self.fall = False
@@ -527,6 +788,16 @@ class DefaultEnv:
 
     def reset(self):
         mujoco.mj_resetData(self.mj_model, self.mj_data)
+        if self.reference_visualizer is not None:
+            self.reference_visualizer.reset_anchor()
+
+    def close(self):
+        if self.reference_visualizer is not None:
+            self.reference_visualizer.close()
+            self.reference_visualizer = None
+        if self.generated_scene_path and os.path.exists(self.generated_scene_path):
+            os.remove(self.generated_scene_path)
+            self.generated_scene_path = None
 
 
 class BaseSimulator:
@@ -645,6 +916,7 @@ class BaseSimulator:
         try:
             if self.sim_env.image_publish_process is not None:
                 self.sim_env.image_publish_process.stop()
+            self.sim_env.close()
             if self.sim_env.viewer is not None:
                 self.sim_env.viewer.close()
         except Exception as e:
