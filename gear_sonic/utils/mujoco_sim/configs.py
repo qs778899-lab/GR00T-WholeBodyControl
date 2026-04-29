@@ -65,6 +65,7 @@ def override_wbc_config(
 ) -> dict:
     """Override WBC YAML values with dataclass values."""
     key_to_value = {
+        "DOMAIN_ID": config.domain_id,
         "INTERFACE": config.interface,
         "ENV_TYPE": config.env_type,
         "VERSION": config.wbc_version,
@@ -93,6 +94,8 @@ def override_wbc_config(
         "REFERENCE_MOTION_ZMQ_HOST": config.reference_motion_zmq_host,
         "REFERENCE_MOTION_ZMQ_PORT": config.reference_motion_zmq_port,
         "REFERENCE_MOTION_ZMQ_TOPIC": config.reference_motion_zmq_topic,
+        "REFERENCE_MOTION_POSE_ZMQ_PORT": config.reference_motion_pose_zmq_port,
+        "REFERENCE_MOTION_POSE_ZMQ_TOPIC": config.reference_motion_pose_zmq_topic,
         "REFERENCE_MOTION_ALPHA": config.reference_motion_alpha,
         "REFERENCE_MOTION_TRANSLATION_MODE": config.reference_motion_translation_mode,
     }
@@ -132,6 +135,9 @@ class BaseConfig(ArgsConfigTemplate):
     # System Configuration
     interface: str = "sim"
     """Interface to use for the control loop. [sim, real, lo, enxe8ea6a9c4e09]"""
+
+    domain_id: int = 0
+    """DDS domain id. Use different values to isolate multi-instance processes."""
 
     simulator: str = "mujoco"
     """Simulator to use."""
@@ -294,16 +300,22 @@ class BaseConfig(ArgsConfigTemplate):
     reference_motion_zmq_host: str = "127.0.0.1"
     """Host for the deploy ZMQ debug publisher."""
 
-    reference_motion_zmq_port: int = 5557
+    reference_motion_zmq_port: int = 5608
     """Port for the deploy ZMQ debug publisher."""
 
     reference_motion_zmq_topic: str = "g1_debug"
     """Topic for the deploy ZMQ debug publisher."""
 
+    reference_motion_pose_zmq_port: int = 5556
+    """Port for the packed pose stream used by reference motion visualization."""
+
+    reference_motion_pose_zmq_topic: str = "pose"
+    """Topic for the packed pose stream used by reference motion visualization."""
+
     reference_motion_alpha: float = 0.35
     """Alpha value used for the reference robot mesh."""
 
-    reference_motion_translation_mode: Literal["delta_aligned", "raw_global"] = "delta_aligned"
+    reference_motion_translation_mode: Literal["delta_aligned", "raw_global"] = "raw_global"
     """How reference root translation is visualized in MuJoCo."""
 
     commit_id: str = ""

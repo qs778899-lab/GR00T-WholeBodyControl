@@ -40,7 +40,7 @@
  *   --encoder-model       | Encoder ONNX model (for token_state)
  *   --planner-model       | Locomotion planner ONNX model
  *   --input-type          | keyboard / gamepad / zmq / ros2 / interface_manager / gamepad_manager / zmq_manager
- *   --output-type         | zmq / ros2 / all
+ *   --output-type         | none / zmq / ros2 / all
  *   --disable-crc-check   | Skip CRC validation (for MuJoCo sim)
  *   --planner-fp16        | Use FP16 for planner TensorRT engine
  *   --policy-fp16         | Use FP16 for policy TensorRT engine
@@ -2152,11 +2152,12 @@ class G1Deploy {
       std::string zmq_topic = "pose",
       bool zmq_conflate = false,
       bool zmq_verbose = false,
-      int zmq_out_port = 5557,
+      int zmq_out_port = 5608,
       std::string zmq_out_topic = "g1_debug",
       bool enable_motion_recording = false,
       std::array<double, 3> initial_compliance = {0.05, 0.05, 0.0},
-      double initial_max_close_ratio = 1.0)
+      double initial_max_close_ratio = 1.0,
+      int dds_domain_id = 0)
       : time_(0.0),
         publish_dt_(0.002),
         control_dt_(0.02),
@@ -2179,7 +2180,7 @@ class G1Deploy {
         planner_path(planner_file_path) {
       
       // Initialize ChannelFactory
-      ChannelFactory::Instance()->Init(0, networkInterface);
+      ChannelFactory::Instance()->Init(dds_domain_id, networkInterface);
 
       // Initialize Dex3 hands (ChannelFactory already initialized above)
       dex3_hands_.initialize("");
@@ -4117,7 +4118,7 @@ int main(int argc, char const* argv[]) {
     std::cout << "|ros2";
 #endif
     std::cout << ">: input interface type (default: keyboard)" << std::endl;
-    std::cout << "  --output-type <zmq|all";
+    std::cout << "  --output-type <none|zmq|all";
 #if HAS_ROS2
     std::cout << "|ros2";
 #endif
@@ -4131,12 +4132,13 @@ int main(int argc, char const* argv[]) {
     std::cout << "  --planner-precision <16|32>: specify precision to run the planner model at (default: 16)" << std::endl;
     std::cout << "  --policy-precision <16|32>: specify precision to run the policy model at (default: 32)" << std::endl;
     std::cout << "  --zmq-host <host>: ZMQ server host (default: localhost)" << std::endl;
-    std::cout << "  --zmq-port <port>: ZMQ server port (default: 5556)" << std::endl;
+    std::cout << "  --zmq-port <port>: ZMQ server port (default: 5596)" << std::endl;
     std::cout << "  --zmq-topic <topic>: ZMQ topic/prefix (default: pose)" << std::endl;
     std::cout << "  --zmq-conflate: enable ZMQ CONFLATE (default: disabled)" << std::endl;
     std::cout << "  --zmq-verbose: enable ZMQ subscriber verbose logs" << std::endl;
-    std::cout << "  --zmq-out-port <port>: ZMQ port for output (default: 5557)" << std::endl;
+    std::cout << "  --zmq-out-port <port>: ZMQ port for output (default: 5608)" << std::endl;
     std::cout << "  --zmq-out-topic <topic>: ZMQ topic/prefix for output (default: g1_debug)" << std::endl;
+    std::cout << "  --dds-domain-id <id>: DDS domain id (default: 0)" << std::endl;
     std::cout << "  --logs-dir <path>: optional logs output base directory (default: logs/<timestamp>/)" << std::endl;
     std::cout << "  --enable-csv-logs: enable writing CSV logs (default: OFF)" << std::endl;
     std::cout << "  --enable-motion-recording: enable motion recording for ZMQ/planner (default: OFF)" << std::endl;
@@ -4150,9 +4152,9 @@ int main(int argc, char const* argv[]) {
     std::cout << "  " << argv[0] << " enp5s0 policy/single_frame/model.onnx reference/bones_072925_test/ --planner-file policy/planner.onnx --obs-config policy/single_frame/observation_config.yaml --disable-crc-check" << std::endl;
     std::cout << "  " << argv[0] << " enp5s0 policy/token/model.onnx reference/bones_072925_test/ --obs-config policy/token/observation_config.yaml --encoder-file policy/token/encoder.onnx" << std::endl;
     std::cout << "  " << argv[0] << " enp5s0 policy/single_frame/model.onnx reference/bones_072925_test/ --input-type gamepad --planner-file policy/planner.onnx" << std::endl;
-    std::cout << "  " << argv[0] << " enp5s0 policy/single_frame/model.onnx reference/bones_072925_test/ --input-type gamepad_manager --planner-file policy/planner.onnx --zmq-host localhost --zmq-port 5556" << std::endl;
-    std::cout << "  " << argv[0] << " enp5s0 policy/single_frame/model.onnx reference/bones_072925_test/ --input-type zmq --zmq-host 192.168.1.2 --zmq-port 5556 --zmq-topic pose --zmq-conflate" << std::endl;
-    std::cout << "  " << argv[0] << " enp5s0 policy/single_frame/model.onnx reference/bones_072925_test/ --input-type zmq_manager --planner-file policy/planner.onnx --zmq-host localhost --zmq-port 5556" << std::endl;
+    std::cout << "  " << argv[0] << " enp5s0 policy/single_frame/model.onnx reference/bones_072925_test/ --input-type gamepad_manager --planner-file policy/planner.onnx --zmq-host localhost --zmq-port 5596" << std::endl;
+    std::cout << "  " << argv[0] << " enp5s0 policy/single_frame/model.onnx reference/bones_072925_test/ --input-type zmq --zmq-host 192.168.1.2 --zmq-port 5596 --zmq-topic pose --zmq-conflate" << std::endl;
+    std::cout << "  " << argv[0] << " enp5s0 policy/single_frame/model.onnx reference/bones_072925_test/ --input-type zmq_manager --planner-file policy/planner.onnx --zmq-host localhost --zmq-port 5596" << std::endl;
 #if HAS_ROS2
     std::cout << "  " << argv[0] << " enp5s0 policy/single_frame/model.onnx reference/bones_072925_test/ --input-type ros2 --planner-file policy/planner.onnx" << std::endl;
 #endif
@@ -4185,8 +4187,9 @@ int main(int argc, char const* argv[]) {
   bool zmq_conflate = false;  // default off; enable with --zmq-conflate
   bool zmq_verbose = false;
   bool enableMotionRecording = false;  // default off; enable with --enable-motion-recording
-  int zmq_out_port = 5557;
+  int zmq_out_port = 5608;
   std::string zmq_out_topic = "g1_debug";
+  int dds_domain_id = 0;
   std::array<double, 3> initial_compliance = {0.5, 0.5, 0.0}; // initial compliance is 0.5 for both hands (keyboard controllable)
   double initial_max_close_ratio = 1.0; // default allows full closure, use --max-close-ratio to limit
   for (int i = 4; i < argc; i++) {
@@ -4267,12 +4270,12 @@ int main(int argc, char const* argv[]) {
     } else if (std::string(argv[i]) == "--output-type") {
       if (i + 1 < argc) {
         outputType = argv[i + 1];
-        bool valid_output = (outputType == "zmq" || outputType == "all");
+        bool valid_output = (outputType == "none" || outputType == "zmq" || outputType == "all");
 #if HAS_ROS2
         valid_output = valid_output || (outputType == "ros2");
 #endif
         if (!valid_output) {
-          std::cerr << "Error: --output-type must be 'zmq', 'all'";
+          std::cerr << "Error: --output-type must be 'none', 'zmq', 'all'";
 #if HAS_ROS2
           std::cerr << ", or 'ros2'";
 #endif
@@ -4282,7 +4285,7 @@ int main(int argc, char const* argv[]) {
         std::cout << "[INFO] Using output type: " << outputType << std::endl;
         i++; // Skip the next argument since it's the output type
       } else {
-        std::cerr << "Error: --output-type requires a type argument (zmq, all";
+        std::cerr << "Error: --output-type requires a type argument (none, zmq, all";
 #if HAS_ROS2
         std::cerr << ", or ros2";
 #endif
@@ -4293,6 +4296,14 @@ int main(int argc, char const* argv[]) {
       if (i + 1 < argc) { zmq_out_port = std::stoi(argv[i + 1]); i++; }
     } else if (std::string(argv[i]) == "--zmq-out-topic") {
       if (i + 1 < argc) { zmq_out_topic = argv[i + 1]; i++; }
+    } else if (std::string(argv[i]) == "--dds-domain-id") {
+      if (i + 1 < argc) {
+        dds_domain_id = std::stoi(argv[i + 1]);
+        i++;
+      } else {
+        std::cerr << "Error: --dds-domain-id requires an integer argument" << std::endl;
+        exit(1);
+      }
     } else if (std::string(argv[i]) == "--record-input-file") {
       if (i + 1 < argc) {
         recordInputFile = argv[i + 1];
@@ -4448,9 +4459,10 @@ int main(int argc, char const* argv[]) {
     zmq_verbose,
     zmq_out_port,
     zmq_out_topic,
-    enableMotionRecording,
-    initial_compliance,
-    initial_max_close_ratio
+      enableMotionRecording,
+      initial_compliance,
+      initial_max_close_ratio,
+      dds_domain_id
   );
   std::cout << "[DEBUG] G1Deploy object created successfully!" << std::endl;
   
