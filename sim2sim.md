@@ -14,7 +14,7 @@ bash install_scripts/install_mujoco_sim.sh
 human motion和robot control都作为输入，分析tracking精度
 
 
-## mujoco 运行指令
+## mujoco 运行指令（单文件处理模式）
 
 ### 1) 终端A: 启动 MuJoCo sim
 
@@ -31,6 +31,7 @@ human motion和robot control都作为输入，分析tracking精度
 
    source /home/lab/miniconda3/etc/profile.d/conda.sh
    conda activate sonic
+   cd /home/lab/Desktop/GR00T-WholeBodyControl
    bash deploy.sh \
     --motion-data /tmp/sonic_motion_action_only \
     --motion-name episode_000001_action \
@@ -51,6 +52,7 @@ human motion和robot control都作为输入，分析tracking精度
 
    source /home/lab/miniconda3/etc/profile.d/conda.sh
    conda activate sonic
+   cd /home/lab/Desktop/GR00T-WholeBodyControl
    python tools/sonic_eval/stream_motionlib_to_deploy.py \
     --motion-file sample_data/robot_filtered/210531/walk_forward_amateur_001__A001.pkl \
     --motion-name walk_forward_amateur_001__A001 \
@@ -78,7 +80,7 @@ human motion和robot control都作为输入，分析tracking精度
 ### 4) 终端 D：计算 offline tracking metrics
    
    source /home/lab/miniconda3/etc/profile.d/conda.sh
-   conda activate sonic
+   conda activate sonic_eval
    python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
     --gt-format motionlib \
     --motion-file sample_data/robot_filtered/210531/walk_forward_amateur_001__A001.pkl \
@@ -92,6 +94,85 @@ human motion和robot control都作为输入，分析tracking精度
     --stream-prepend-stand-frames 50 \
     --stream-blend-from-stand-frames 100 \
     --align-mode source_frame_index
+
+
+
+## mujoco 运行指令（批量文件处理模式）
+fake批量模式
+
+### 1) 终端A: 启动 MuJoCo sim
+
+  cd /home/lab/Desktop/GR00T-WholeBodyControl
+  source .venv_sim/bin/activate
+  python gear_sonic/scripts/run_sim_loop.py --no-enable-onscreen --interface sim --simulator mujoco --env-name default --no-enable-offscreen
+
+### 2) 终端B: 启动 policy 推理（deploy）
+
+   source /home/lab/miniconda3/etc/profile.d/conda.sh
+   conda activate sonic
+   cd /home/lab/Desktop/GR00T-WholeBodyControl/gear_sonic_deploy
+
+   just run g1_deploy_onnx_ref lo policy/release/model_decoder.onnx /tmp/sonic_motion_action_only \
+    --obs-config policy/release/observation_config.yaml \
+    --encoder-file policy/release/model_encoder.onnx \
+    --planner-file planner/target_vel/V2/planner_sonic.onnx \
+    --input-type zmq_manager \
+    --output-type all \
+    --zmq-host localhost \
+    --zmq-port 5556 \
+    --zmq-out-port 5557 \
+    --enable-csv-logs \
+    --logs-dir /tmp/sonic_logs/parallel_deploy/worker_0 \
+    --target-motion-logfile /tmp/sonic_logs/parallel_deploy/worker_0/target_motion.csv \
+    --policy-input-logfile /tmp/sonic_logs/parallel_deploy/worker_0/policy_input.csv \
+    --enable-motion-recording \
+    --disable-crc-check
+
+  just run g1_deploy_onnx_ref lo policy/release/model_decoder.onnx /tmp/sonic_motion_action_only \
+    --obs-config policy/release/observation_config.yaml \
+    --encoder-file policy/release/model_encoder.onnx \
+    --planner-file planner/target_vel/V2/planner_sonic.onnx \
+    --input-type zmq_manager \
+    --output-type all \
+    --zmq-host localhost \
+    --zmq-port 5566 \
+    --zmq-out-port 5567 \
+    --enable-csv-logs \
+    --logs-dir /tmp/sonic_logs/parallel_deploy/worker_1 \
+    --target-motion-logfile /tmp/sonic_logs/parallel_deploy/worker_1/target_motion.csv \
+    --policy-input-logfile /tmp/sonic_logs/parallel_deploy/worker_1/policy_input.csv \
+    --enable-motion-recording \
+    --disable-crc-check
+
+### 3) 终端C：并行批量
+
+```bash
+cd /home/lab/Desktop/GR00T-WholeBodyControl
+source /home/lab/miniconda3/etc/profile.d/conda.sh
+conda activate sonic_backup
+tools/sonic_eval/run_mujoco_batch_eval_parallel.sh \
+    --motion-dir /home/lab/Desktop/GR00T-WholeBodyControl/sample_data/robot_filtered/210531 \
+    --workers 2 \
+    --host 127.0.0.1 \
+    --port-base 5556 \
+    --port-step 10 \
+    --logs-root-base /tmp/sonic_logs/batch_parallel \
+    --deploy-logs-dir-base /tmp/sonic_logs/parallel_deploy \
+    --results-root /tmp/sonic_batch_parallel \
+    --metrics-conda-env sonic_eval \
+    --use-isaacsim-app \
+    --align-mode source_frame_index
+```
+
+说明：
+
+- 终端A 和终端B 仍然需要提前启动；这个脚本不会代替你启动 A/B。
+- 并行模式下，每个 worker 需要一套独立的 B 端 deploy 实例，至少要隔离 `--zmq-port`、`--zmq-out-port`、`--logs-dir`。
+- `--motion-dir` 会自动递归扫描目录下的全部 `*.pkl`，不需要再手写 `motion_list.csv`。
+- C 阶段（stream）仍在当前 `sonic` 环境执行；D 阶段（metrics）会切到 `--metrics-conda-env` 指定的环境执行。
+- 推荐显式传 `--metrics-conda-env sonic_eval`，因为官方对齐指标依赖 `smpl_sim`。
+
+
 
 
 
@@ -425,6 +506,59 @@ python gear_sonic/eval_agent_trl.py +checkpoint=/home/lab/Desktop/GR00T-WholeBod
 
 
 
+-----------------------------------------------------------------------------------------
+
+
+
+### 目标
+
+在不改原有单文件链路逻辑的前提下，批量执行 C（stream）+ D（metrics）。
+
+- 串行批量：复用一套 A/B（最稳）
+- 并行批量：多 worker 并发（需要端口和实例隔离）
+
+
+
+### 1) 终端C：串行批量
+
+前提：
+- 终端A 和 终端B 按“单文件处理模式”先启动并保持常驻
+- B 端端口为 `5556`
+
+执行：
+
+```bash
+cd /home/lab/Desktop/GR00T-WholeBodyControl
+source /home/lab/miniconda3/etc/profile.d/conda.sh
+conda activate sonic
+
+tools/sonic_eval/run_mujoco_batch_eval.sh \
+  --motion-dir /home/lab/Desktop/GR00T-WholeBodyControl/sample_data/robot_filtered/210531 \
+  --logs-root /tmp/sonic_logs/batch_zmq \
+  --results-json /tmp/sonic_batch_metrics_summary.json \
+  --results-csv /tmp/sonic_batch_metrics_summary.csv \
+  --deploy-logs-dir /tmp/sonic_logs/official_walk_zmq01 \
+  --host 127.0.0.1 \
+  --port 5556 \
+  --target-fps 50 \
+  --chunk-size 20 \
+  --start-frame 1215 \
+  --prepend-stand-frames 50 \
+  --blend-from-stand-frames 100 \
+  --initial-burst-frames 160 \
+  --command-repeat 10 \
+  --command-interval 0.1 \
+  --command-heartbeat-interval 0.5 \
+  --use-isaacsim-app \
+  --align-mode source_frame_index
+```
+
+输出：
+- 汇总 JSON：`/tmp/sonic_batch_metrics_summary.json`
+- 汇总 CSV：`/tmp/sonic_batch_metrics_summary.csv`
+- 每条样本独立日志目录：`/tmp/sonic_logs/batch_zmq/...`
+- `--deploy-logs-dir` 用于兼容终端B固定 `--logs-dir` 的部署方式（会在每条样本后拷贝CSV快照到独立目录再算指标）
+
 
 
 
@@ -653,10 +787,6 @@ python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
       - 再通过同一个 URDF 做 FK，算同样这 14 个点的位置
       - 代码在 tools/sonic_eval/compute_mujoco_tracking_metrics.py:281 和 tools/
         sonic_eval/compute_mujoco_tracking_metrics.py:432
-
-
-
-
 
 
 
