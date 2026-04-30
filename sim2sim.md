@@ -31,7 +31,7 @@ human motion和robot control都作为输入，分析tracking精度
 
    source /home/lab/miniconda3/etc/profile.d/conda.sh
    conda activate sonic
-   cd /home/lab/Desktop/GR00T-WholeBodyControl
+   cd /home/lab/Desktop/GR00T-WholeBodyControl/gear_sonic_deploy
    bash deploy.sh \
     --motion-data /tmp/sonic_motion_action_only \
     --motion-name episode_000001_action \

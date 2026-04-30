@@ -279,9 +279,9 @@ private:
             has_heading_state = true;
         }
 
-        // State-logger fields: 18 base + 2 optional heading
+        // State-logger fields: 19 base + 2 optional heading
         // Visualisation fields: output_data_map_.size() (typically 11)
-        int num_state_fields = has_heading_state ? 20 : 18;
+        int num_state_fields = has_heading_state ? 21 : 19;
         int num_viz_fields = static_cast<int>(output_data_map_.size());
         pk.pack_map(num_state_fields + num_viz_fields);
 
@@ -295,6 +295,9 @@ private:
 
         pk.pack("ros_timestamp");
         pk.pack(state.ros_timestamp);
+
+        pk.pack("source_frame_index");
+        pk.pack(state.source_frame_index);
 
         pk.pack("base_quat");
         pk.pack_array(4);

@@ -216,3 +216,22 @@ models/
 # Downloaded from HuggingFace (hf download)
 sample_data/
 sonic_release/
+
+# Local recorded trajectories / streamed data (high-churn, very large)
+gear_sonic_deploy/reference/recorded_motion/
+gear_sonic_deploy/reference/**/recorded_motion/
+gear_sonic_deploy/reference/**/streamed_*/
+
+# Generic local data dumps and exports
+*.bag
+*.bag.active
+*.mcap
+*.npz
+*.npy
+*.parquet
+*.feather
+
+# Local runtime artifacts
+tmp/
+temp/
+*.tmp
