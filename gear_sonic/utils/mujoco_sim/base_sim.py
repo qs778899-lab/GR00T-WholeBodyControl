@@ -14,6 +14,7 @@ import json
 import tempfile
 from threading import Lock, Thread
 import time
+from collections import OrderedDict
 from typing import Dict
 import xml.etree.ElementTree as ET
 
@@ -32,6 +33,13 @@ from gear_sonic.utils.data_collection.zmq_state_subscriber import ZMQStateSubscr
 GEAR_SONIC_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 REFERENCE_NAME_PREFIX = "ref_"
 PACKED_ZMQ_HEADER_SIZE = 1280
+G1_ISAACLAB_TO_MUJOCO_DOF = np.array(
+    [
+        0, 3, 6, 9, 13, 17, 1, 4, 7, 10, 14, 18, 2, 5, 8,
+        11, 15, 19, 21, 23, 25, 27, 12, 16, 20, 22, 24, 26, 28,
+    ],
+    dtype=np.int32,
+)
 
 
 class PackedZMQSubscriber:
@@ -164,6 +172,13 @@ class ReferenceMotionVisualizer:
         self.body_qvel_adrs = np.array(self.body_qvel_adrs, dtype=np.int32)
         self.ref_geom_ids = np.array(get_subtree_geom_ids(mj_model, root_body_id), dtype=np.int32)
         self._shown_once = False
+        self._last_pose_log_time = 0.0
+        self._last_pose_frame_index = None
+        self._last_debug_source_frame_index = None
+        self._latest_debug_source_frame_index = None
+        self._pose_frame_buffer = OrderedDict()
+        self._max_pose_frame_buffer = 4096
+        self._translation_anchor_ready = False
         self.set_visible(False)
 
         self.debug_subscriber = ZMQStateSubscriber(host=host, port=port, topic=topic)
@@ -183,6 +198,13 @@ class ReferenceMotionVisualizer:
         self._target_anchor_base_pos = None
         self._actual_anchor_base_pos = None
         self._prev_target_base_pos = None
+        self._last_pose_frame_index = None
+        self._last_debug_source_frame_index = None
+        self._latest_debug_source_frame_index = None
+        self._pose_frame_buffer.clear()
+        self._translation_anchor_ready = False
+        self._shown_once = False
+        self.set_visible(False)
 
     def set_visible(self, visible: bool):
         self.visible = visible
@@ -197,16 +219,24 @@ class ReferenceMotionVisualizer:
         )
 
     def poll(self):
-        # Debug stream (g1_debug) carries deploy's current-frame state with heading correction
-        # applied — use it as the primary source for accurate root position tracking.
-        debug_msg = self.debug_subscriber.get_msg()
-        if debug_msg is not None and self._consume_debug_msg(debug_msg):
-            return
-
-        # Fall back to the raw pose stream only when the debug stream has no new data.
+        # Always ingest the raw pose stream first so we keep a frame-indexed buffer
+        # of the original streamed reference. Debug then tells us which source frame
+        # deploy is currently consuming, and we render that exact pose.
         pose_msg = self.pose_subscriber.get_msg() if self.pose_subscriber is not None else None
         if pose_msg is not None:
             self._consume_pose_stream_msg(pose_msg)
+
+        debug_msg = self.debug_subscriber.get_msg()
+        if debug_msg is not None:
+            if self._consume_debug_msg(debug_msg):
+                return
+
+        # If deploy has not published a source frame yet, fall back to the newest
+        # buffered pose so the reference still appears before control starts.
+        if self.pose_subscriber is not None and self._latest_debug_source_frame_index is None:
+            pose = self._get_latest_buffered_pose()
+            if pose is not None:
+                self._set_latest_pose(*pose)
 
     def _consume_debug_msg(self, msg: dict) -> bool:
         required = ("base_trans_target", "base_quat_target", "body_q_target")
@@ -218,7 +248,28 @@ class ReferenceMotionVisualizer:
         body_q = np.asarray(msg["body_q_target"], dtype=np.float64)
         if base_pos.shape != (3,) or base_quat.shape != (4,) or body_q.shape != (29,):
             return False
-        self._set_latest_pose(base_pos, base_quat, body_q)
+        source_frame_index = msg.get("source_frame_index")
+        if source_frame_index is not None:
+            try:
+                source_frame_index = int(source_frame_index)
+            except (TypeError, ValueError):
+                source_frame_index = None
+        if source_frame_index is not None and source_frame_index >= 0:
+            if (
+                self._last_debug_source_frame_index is not None
+                and source_frame_index < self._last_debug_source_frame_index
+            ):
+                self.reset_anchor()
+                print("[ReferenceMotionVisualizer] reset translation anchor at new debug stream start")
+            self._last_debug_source_frame_index = source_frame_index
+            self._latest_debug_source_frame_index = source_frame_index
+            self._set_latest_pose(base_pos, base_quat, body_q, synchronized=True)
+            return True
+        # Fall back to deploy debug only when the raw pose stream is unavailable or
+        # has not produced any usable frames yet.
+        if self.pose_subscriber is not None and self._pose_frame_buffer:
+            return False
+        self._set_latest_pose(base_pos, base_quat, body_q, synchronized=source_frame_index is not None and source_frame_index >= 0)
         return True
 
     def _consume_pose_stream_msg(self, msg: dict) -> bool:
@@ -229,32 +280,126 @@ class ReferenceMotionVisualizer:
         body_pos = np.asarray(msg["body_pos_w"], dtype=np.float64)
         body_quat = np.asarray(msg["body_quat_w"], dtype=np.float64)
         body_q = np.asarray(msg["joint_pos"], dtype=np.float64)
-        # Take the last frame of the chunk (most recent data) rather than the first.
-        if body_pos.ndim == 2:
-            base_pos = body_pos[-1]
-        elif body_pos.ndim == 1 and body_pos.shape == (3,):
-            base_pos = body_pos
-        else:
+        if body_pos.ndim == 1 and body_pos.shape == (3,):
+            body_pos = body_pos.reshape(1, 3)
+        if body_quat.ndim == 1 and body_quat.shape == (4,):
+            body_quat = body_quat.reshape(1, 4)
+        if body_q.ndim == 1 and body_q.shape == (29,):
+            body_q = body_q.reshape(1, 29)
+        if body_pos.ndim != 2 or body_quat.ndim != 2 or body_q.ndim != 2:
             return False
+        if body_pos.shape[1] != 3 or body_quat.shape[1] != 4 or body_q.shape[1] != 29:
+            return False
+        if not (body_pos.shape[0] == body_quat.shape[0] == body_q.shape[0]):
+            return False
+        body_q = body_q[:, G1_ISAACLAB_TO_MUJOCO_DOF]
 
-        if body_quat.ndim == 2:
-            base_quat = body_quat[-1]
-        elif body_quat.ndim == 1 and body_quat.shape == (4,):
-            base_quat = body_quat
+        frame_index_arr = None
+        if "frame_index" in msg:
+            frame_index_arr = np.asarray(msg["frame_index"], dtype=np.int64).reshape(-1)
+            if frame_index_arr.size > 0:
+                frame_index = int(frame_index_arr[-1])
+            else:
+                frame_index = None
         else:
-            return False
+            frame_index = None
+        if (
+            frame_index is not None
+            and self._last_pose_frame_index is not None
+            and frame_index <= self._last_pose_frame_index
+        ):
+            self.reset_anchor()
+            print("[ReferenceMotionVisualizer] re-anchored reference root at new stream start")
+        self._last_pose_frame_index = frame_index
 
-        if body_q.ndim == 2:
-            body_q = body_q[-1]
-        if base_pos.shape != (3,) or base_quat.shape != (4,) or body_q.shape != (29,):
-            return False
-        self._set_latest_pose(base_pos, base_quat, body_q)
+        if frame_index_arr is not None and frame_index_arr.size == body_pos.shape[0]:
+            for i, source_frame_index in enumerate(frame_index_arr.tolist()):
+                self._store_pose_frame(
+                    int(source_frame_index),
+                    body_pos[i].copy(),
+                    body_quat[i].copy(),
+                    body_q[i].copy(),
+                )
+        else:
+            start_idx = frame_index - body_pos.shape[0] + 1 if frame_index is not None else None
+            for i in range(body_pos.shape[0]):
+                inferred_index = start_idx + i if start_idx is not None else None
+                if inferred_index is not None:
+                    self._store_pose_frame(
+                        int(inferred_index),
+                        body_pos[i].copy(),
+                        body_quat[i].copy(),
+                        body_q[i].copy(),
+                    )
+
+        if self._latest_debug_source_frame_index is not None:
+            matched_pose = self._get_buffered_pose_for_frame(self._latest_debug_source_frame_index)
+            if matched_pose is not None:
+                self._set_latest_pose(*matched_pose, synchronized=True)
+                return True
+
+        self._set_latest_pose(body_pos[-1], body_quat[-1], body_q[-1], synchronized=False)
         return True
 
-    def _set_latest_pose(self, base_pos: np.ndarray, base_quat: np.ndarray, body_q: np.ndarray):
+    def _store_pose_frame(
+        self,
+        frame_index: int,
+        base_pos: np.ndarray,
+        base_quat: np.ndarray,
+        body_q: np.ndarray,
+    ):
+        self._pose_frame_buffer[frame_index] = (base_pos, base_quat, body_q)
+        self._pose_frame_buffer.move_to_end(frame_index)
+        while len(self._pose_frame_buffer) > self._max_pose_frame_buffer:
+            self._pose_frame_buffer.popitem(last=False)
+
+    def _get_latest_buffered_pose(self):
+        if not self._pose_frame_buffer:
+            return None
+        return next(reversed(self._pose_frame_buffer.values()))
+
+    def _get_buffered_pose_for_frame(self, frame_index: int):
+        if not self._pose_frame_buffer:
+            return None
+        pose = self._pose_frame_buffer.get(frame_index)
+        if pose is not None:
+            return pose
+        older_keys = [k for k in self._pose_frame_buffer.keys() if k <= frame_index]
+        if older_keys:
+            return self._pose_frame_buffer[older_keys[-1]]
+        newer_keys = [k for k in self._pose_frame_buffer.keys() if k > frame_index]
+        if newer_keys:
+            return self._pose_frame_buffer[newer_keys[0]]
+        return None
+
+    def _set_latest_pose(
+        self,
+        base_pos: np.ndarray,
+        base_quat: np.ndarray,
+        body_q: np.ndarray,
+        synchronized: bool = False,
+    ):
         self._latest_pose = (base_pos, base_quat, body_q)
-        self._maybe_refresh_translation_anchor(base_pos)
-        if not self._shown_once:
+        if synchronized and self.translation_mode == "delta_aligned" and not self._translation_anchor_ready:
+            self._target_anchor_base_pos = base_pos.copy()
+            self._actual_anchor_base_pos = self._get_actual_robot_root_pos()
+            self._translation_anchor_ready = True
+            print(
+                "[ReferenceMotionVisualizer] locked translation anchor "
+                f"at actual x={self._actual_anchor_base_pos[0]:.3f} "
+                f"y={self._actual_anchor_base_pos[1]:.3f} "
+                f"z={self._actual_anchor_base_pos[2]:.3f}"
+            )
+        if self.translation_mode != "delta_aligned" or self._translation_anchor_ready:
+            self._maybe_refresh_translation_anchor(base_pos)
+        now = time.monotonic()
+        if now - self._last_pose_log_time >= 1.0:
+            self._last_pose_log_time = now
+            print(
+                "[ReferenceMotionVisualizer] root pose "
+                f"x={base_pos[0]:.3f} y={base_pos[1]:.3f} z={base_pos[2]:.3f}"
+            )
+        if not self._shown_once and (self.translation_mode != "delta_aligned" or self._translation_anchor_ready):
             self._shown_once = True
             self.set_visible(True)
             print("[ReferenceMotionVisualizer] reference pose stream detected")
@@ -265,6 +410,8 @@ class ReferenceMotionVisualizer:
 
         base_pos, base_quat, body_q = self._latest_pose
         if self.translation_mode == "delta_aligned":
+            if not self._translation_anchor_ready:
+                return False
             if self._target_anchor_base_pos is None or self._actual_anchor_base_pos is None:
                 self._target_anchor_base_pos = base_pos.copy()
                 self._actual_anchor_base_pos = self._get_actual_robot_root_pos()
@@ -625,7 +772,7 @@ class DefaultEnv:
                 host=self.config.get("REFERENCE_MOTION_ZMQ_HOST", "127.0.0.1"),
                 port=int(self.config.get("REFERENCE_MOTION_ZMQ_PORT", 5608)),
                 topic=self.config.get("REFERENCE_MOTION_ZMQ_TOPIC", "g1_debug"),
-                pose_port=int(self.config.get("REFERENCE_MOTION_POSE_ZMQ_PORT", 5556)),
+                pose_port=int(self.config.get("REFERENCE_MOTION_POSE_ZMQ_PORT", 5596)),
                 pose_topic=self.config.get("REFERENCE_MOTION_POSE_ZMQ_TOPIC", "pose"),
                 translation_mode=self.config.get(
                     "REFERENCE_MOTION_TRANSLATION_MODE", "delta_aligned"

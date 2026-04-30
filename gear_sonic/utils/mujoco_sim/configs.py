@@ -306,7 +306,7 @@ class BaseConfig(ArgsConfigTemplate):
     reference_motion_zmq_topic: str = "g1_debug"
     """Topic for the deploy ZMQ debug publisher."""
 
-    reference_motion_pose_zmq_port: int = 5556
+    reference_motion_pose_zmq_port: int = 5596
     """Port for the packed pose stream used by reference motion visualization."""
 
     reference_motion_pose_zmq_topic: str = "pose"
