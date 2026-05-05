@@ -10,11 +10,12 @@ import pathlib
 from pathlib import Path
 import pickle
 from copy import deepcopy
+import csv
 import json
 import tempfile
 from threading import Lock, Thread
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from typing import Dict
 import xml.etree.ElementTree as ET
 
@@ -40,6 +41,23 @@ G1_ISAACLAB_TO_MUJOCO_DOF = np.array(
     ],
     dtype=np.int32,
 )
+
+SIM2SIM_BODY_FRAMES = [
+    "pelvis",
+    "left_hip_roll_link",
+    "left_knee_link",
+    "left_ankle_roll_link",
+    "right_hip_roll_link",
+    "right_knee_link",
+    "right_ankle_roll_link",
+    "torso_link",
+    "left_shoulder_roll_link",
+    "left_elbow_link",
+    "left_wrist_yaw_link",
+    "right_shoulder_roll_link",
+    "right_elbow_link",
+    "right_wrist_yaw_link",
+]
 
 
 class PackedZMQSubscriber:
@@ -193,12 +211,14 @@ class ReferenceMotionVisualizer:
         self._last_pose_frame_index = None
         self._last_debug_source_frame_index = None
         self._latest_debug_source_frame_index = None
+        self._current_applied_source_frame_index = None
         self._pose_frame_buffer = OrderedDict()
         self._max_pose_frame_buffer = 4096
+        self._pending_debug_source_frames = deque()
         self._translation_anchor_ready = False
         self.set_visible(False)
 
-        self.debug_subscriber = ZMQStateSubscriber(host=host, port=port, topic=topic)
+        self.debug_subscriber = ZMQStateSubscriber(host=host, port=port, topic=topic, conflate=False)
         self.pose_subscriber = None
         if pose_port is not None:
             try:
@@ -211,6 +231,14 @@ class ReferenceMotionVisualizer:
         if self.pose_subscriber is not None:
             self.pose_subscriber.close()
 
+    @property
+    def latest_debug_source_frame_index(self) -> int | None:
+        return self._latest_debug_source_frame_index
+
+    @property
+    def current_applied_source_frame_index(self) -> int | None:
+        return self._current_applied_source_frame_index
+
     def reset_anchor(self):
         self._target_anchor_base_pos = None
         self._actual_anchor_base_pos = None
@@ -218,7 +246,9 @@ class ReferenceMotionVisualizer:
         self._last_pose_frame_index = None
         self._last_debug_source_frame_index = None
         self._latest_debug_source_frame_index = None
+        self._current_applied_source_frame_index = None
         self._pose_frame_buffer.clear()
+        self._pending_debug_source_frames.clear()
         self._translation_anchor_ready = False
         self._shown_once = False
         self.set_visible(False)
@@ -243,10 +273,13 @@ class ReferenceMotionVisualizer:
         if pose_msg is not None:
             self._consume_pose_stream_msg(pose_msg)
 
-        debug_msg = self.debug_subscriber.get_msg()
-        if debug_msg is not None:
-            if self._consume_debug_msg(debug_msg):
-                return
+        debug_msgs = self.debug_subscriber.get_msgs()
+        if debug_msgs:
+            for debug_msg in debug_msgs:
+                self._consume_debug_msg(debug_msg)
+
+        if self._advance_pending_debug_frame():
+            return
 
         # If deploy has not published a source frame yet, fall back to the newest
         # buffered pose so the reference still appears before control starts.
@@ -283,7 +316,8 @@ class ReferenceMotionVisualizer:
                 print("[ReferenceMotionVisualizer] reset translation anchor at new debug stream start")
             self._last_debug_source_frame_index = source_frame_index
             self._latest_debug_source_frame_index = source_frame_index
-            self._set_latest_pose(base_pos, base_quat, body_q, synchronized=True)
+            self._store_pose_frame(source_frame_index, base_pos.copy(), base_quat.copy(), body_q.copy())
+            self._enqueue_debug_source_frame(source_frame_index)
             return True
         # Fall back to deploy debug only when the raw pose stream is unavailable or
         # has not produced any usable frames yet.
@@ -363,6 +397,26 @@ class ReferenceMotionVisualizer:
 
         self._set_latest_pose(body_pos[-1], body_quat[-1], body_q[-1], synchronized=False)
         return True
+
+    def _enqueue_debug_source_frame(self, source_frame_index: int):
+        if self._pending_debug_source_frames:
+            if self._pending_debug_source_frames[-1] == source_frame_index:
+                return
+        elif self._current_applied_source_frame_index == source_frame_index:
+            return
+        self._pending_debug_source_frames.append(source_frame_index)
+
+    def _advance_pending_debug_frame(self) -> bool:
+        while self._pending_debug_source_frames:
+            source_frame_index = int(self._pending_debug_source_frames[0])
+            matched_pose = self._get_buffered_pose_for_frame(source_frame_index)
+            if matched_pose is None:
+                break
+            self._pending_debug_source_frames.popleft()
+            self._current_applied_source_frame_index = source_frame_index
+            self._set_latest_pose(*matched_pose, synchronized=True)
+            return True
+        return False
 
     def _store_pose_frame(
         self,
@@ -510,8 +564,10 @@ class DefaultEnv:
         self.onscreen = onscreen
         self.reference_visualizer = None
         self.generated_scene_path = None
+        self._sim2sim_eval_logger = None
 
         self.init_scene()
+        self._init_sim2sim_eval_logger()
         self.last_reward = 0
 
         self.offscreen = offscreen
@@ -537,6 +593,12 @@ class DefaultEnv:
             verbose=self.config.get("verbose", False),
         )
         self.image_publish_process.start_process()
+
+    def _init_sim2sim_eval_logger(self):
+        if not self.config.get("ENABLE_SIM2SIM_EVAL_LOGGING", False):
+            return
+        logs_dir = Path(self.config.get("SIM2SIM_EVAL_LOGS_DIR", "/tmp/sonic_logs/official_walk_zmq01"))
+        self._sim2sim_eval_logger = Sim2SimEvalLogger(logs_dir=logs_dir, body_names=SIM2SIM_BODY_FRAMES)
 
     def _get_dof_indices_by_class(self):
         with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".xml") as f:
@@ -1000,7 +1062,21 @@ class DefaultEnv:
         if reference_pose_applied:
             mujoco.mj_forward(self.mj_model, self.mj_data)
 
+        self._log_sim2sim_eval_frame()
+
         self.check_fall()
+
+    def _log_sim2sim_eval_frame(self):
+        if self._sim2sim_eval_logger is None:
+            return
+        source_frame_index = None
+        if self.reference_visualizer is not None:
+            source_frame_index = self.reference_visualizer.latest_debug_source_frame_index
+        self._sim2sim_eval_logger.log(
+            mj_model=self.mj_model,
+            mj_data=self.mj_data,
+            source_frame_index=source_frame_index,
+        )
 
     def apply_perturbation(self, key):
         perturbation_x_body = 0.0
@@ -1108,12 +1184,90 @@ class DefaultEnv:
             self.reference_visualizer.reset_anchor()
 
     def close(self):
+        if self._sim2sim_eval_logger is not None:
+            self._sim2sim_eval_logger.close()
+            self._sim2sim_eval_logger = None
         if self.reference_visualizer is not None:
             self.reference_visualizer.close()
             self.reference_visualizer = None
         if self.generated_scene_path and os.path.exists(self.generated_scene_path):
             os.remove(self.generated_scene_path)
             self.generated_scene_path = None
+
+
+class Sim2SimEvalLogger:
+    def __init__(self, logs_dir: Path, body_names: list[str]):
+        self.logs_dir = logs_dir
+        self.body_names = body_names
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        self._row_index = 0
+        self._body_ids = None
+        self._ref_body_ids = None
+
+        self._body_pos_file = open(self.logs_dir / "body_pos_w_14.csv", "w", newline="", encoding="utf-8")
+        self._source_frame_file = open(
+            self.logs_dir / "sim_source_frame_index.csv", "w", newline="", encoding="utf-8"
+        )
+        self._step_sync_file = open(
+            self.logs_dir / "sim2sim_step_sync_body_pos_w_14.csv", "w", newline="", encoding="utf-8"
+        )
+        self._body_pos_writer = csv.writer(self._body_pos_file)
+        self._source_frame_writer = csv.writer(self._source_frame_file)
+        self._step_sync_writer = csv.writer(self._step_sync_file)
+
+        body_header = ["index", "sim_time"]
+        for name in self.body_names:
+            body_header.extend([f"{name}_x", f"{name}_y", f"{name}_z"])
+        self._body_pos_writer.writerow(body_header)
+        self._source_frame_writer.writerow(["index", "sim_time", "source_frame_index"])
+        step_sync_header = ["index", "sim_time", "source_frame_index"]
+        for prefix in ("actual", "ref"):
+            for name in self.body_names:
+                step_sync_header.extend([f"{prefix}_{name}_x", f"{prefix}_{name}_y", f"{prefix}_{name}_z"])
+        self._step_sync_writer.writerow(step_sync_header)
+
+    def _resolve_body_ids(self, mj_model: mujoco.MjModel):
+        if self._body_ids is not None and self._ref_body_ids is not None:
+            return
+        body_ids = []
+        ref_body_ids = []
+        for name in self.body_names:
+            body_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, name)
+            if body_id == -1:
+                raise ValueError(f"MuJoCo body not found for sim2sim eval logging: {name}")
+            body_ids.append(body_id)
+            ref_body_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, f"{REFERENCE_NAME_PREFIX}{name}")
+            if ref_body_id == -1:
+                raise ValueError(f"MuJoCo reference body not found for sim2sim eval logging: {REFERENCE_NAME_PREFIX}{name}")
+            ref_body_ids.append(ref_body_id)
+        self._body_ids = np.asarray(body_ids, dtype=np.int32)
+        self._ref_body_ids = np.asarray(ref_body_ids, dtype=np.int32)
+
+    def log(self, mj_model: mujoco.MjModel, mj_data: mujoco.MjData, source_frame_index: int | None):
+        self._resolve_body_ids(mj_model)
+        body_pos = np.asarray(mj_data.xpos[self._body_ids], dtype=np.float64)
+        ref_body_pos = np.asarray(mj_data.xpos[self._ref_body_ids], dtype=np.float64)
+        row = [self._row_index, float(mj_data.time)]
+        row.extend(body_pos.reshape(-1).tolist())
+        self._body_pos_writer.writerow(row)
+        source_frame_value = int(source_frame_index) if source_frame_index is not None else -1
+        self._source_frame_writer.writerow(
+            [
+                self._row_index,
+                float(mj_data.time),
+                source_frame_value,
+            ]
+        )
+        step_sync_row = [self._row_index, float(mj_data.time), source_frame_value]
+        step_sync_row.extend(body_pos.reshape(-1).tolist())
+        step_sync_row.extend(ref_body_pos.reshape(-1).tolist())
+        self._step_sync_writer.writerow(step_sync_row)
+        self._row_index += 1
+
+    def close(self):
+        self._body_pos_file.close()
+        self._source_frame_file.close()
+        self._step_sync_file.close()
 
 
 class BaseSimulator:

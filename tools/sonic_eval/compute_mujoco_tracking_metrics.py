@@ -16,7 +16,6 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import pinocchio as pin
 
 if __package__ is None or __package__ == "":
     import sys
@@ -186,7 +185,9 @@ def _mean_or_zero(x: np.ndarray) -> float:
 @dataclass
 class GTData:
     q43_source: np.ndarray
+    body_pos_w_source: np.ndarray | None
     motion_keys: list[str]
+    source: str | None = None
 
     @property
     def num_frames(self) -> int:
@@ -361,6 +362,30 @@ def _prepend_stand_transition_q29(
     return out
 
 
+def _prepend_stand_transition_body_pos_w(
+    body_pos_w: np.ndarray,
+    stand_frames: int,
+    blend_frames: int,
+) -> np.ndarray:
+    if stand_frames <= 0 and blend_frames <= 0:
+        return body_pos_w
+    if len(body_pos_w) == 0:
+        return body_pos_w
+
+    default_pose = body_pos_w[:1]
+    prefix_parts = []
+    if stand_frames > 0:
+        prefix_parts.append(np.repeat(default_pose, stand_frames, axis=0))
+    if blend_frames > 0:
+        alpha = np.linspace(0.0, 1.0, blend_frames + 1, dtype=np.float64)[:-1]
+        alpha = alpha[:, None, None]
+        prefix_parts.append((1.0 - alpha) * default_pose + alpha * body_pos_w[:1])
+    if not prefix_parts:
+        return body_pos_w
+    prefix = np.concatenate(prefix_parts, axis=0).astype(np.float64)
+    return np.concatenate([prefix, body_pos_w], axis=0).astype(np.float64)
+
+
 def _auto_align_by_q29_mae(
     q29_log: np.ndarray,
     q29_gt: np.ndarray,
@@ -430,7 +455,7 @@ def load_gt(parquet: Path, gt_source: str, gt_motion_dir: Path | None = None) ->
         q43[:, body29_idx] = body29_mj[:n_sync]
 
     motion_keys = [f"frame_{i:06d}" for i in range(len(q43))]
-    return GTData(q43_source=q43, motion_keys=motion_keys)
+    return GTData(q43_source=q43, body_pos_w_source=None, motion_keys=motion_keys, source="parquet")
 
 
 def load_gt_motionlib(
@@ -474,12 +499,37 @@ def load_gt_motionlib(
     )
     q43 = np.zeros((len(q29), len(STATE43_NAMES)), dtype=np.float64)
     q43[:, body29_idx] = q29
+    body_pos_w = seq.body_pos_w.detach().cpu().numpy().astype(np.float64)
+    if stream_start_frame > 0:
+        body_pos_w = body_pos_w[stream_start_frame:]
+    body_pos_w = _prepend_stand_transition_body_pos_w(
+        body_pos_w=body_pos_w,
+        stand_frames=max(0, stream_prepend_stand_frames),
+        blend_frames=max(0, stream_blend_from_stand_frames),
+    )
+    if len(body_pos_w) != len(q29):
+        raise ValueError(
+            f"motionlib body_pos_w length mismatch after stream slicing: {len(body_pos_w)} vs q29 {len(q29)}"
+        )
+    body_pos_w = body_pos_w[:, : len(BODY_FRAMES), :]
     motion_keys = [f"{seq.motion_name}:frame_{i:06d}" for i in range(len(q43))]
-    return GTData(q43_source=q43, motion_keys=motion_keys)
+    return GTData(
+        q43_source=q43,
+        body_pos_w_source=body_pos_w,
+        motion_keys=motion_keys,
+        source=seq.source,
+    )
 
 
 class BodyFK:
     def __init__(self, urdf: Path, body_frames: list[str]):
+        try:
+            import pinocchio as pin
+        except Exception as e:
+            raise RuntimeError(
+                "pinocchio is required for --actual-source q_fk, but import failed"
+            ) from e
+        self._pin = pin
         self.model = pin.buildModelFromUrdf(str(urdf))
         self.data = self.model.createData()
         self.frame_ids = [self.model.getFrameId(n) for n in body_frames]
@@ -487,11 +537,117 @@ class BodyFK:
             raise ValueError("Some body frames not found in URDF")
 
     def body_pos(self, q43: np.ndarray) -> np.ndarray:
-        pin.framesForwardKinematics(self.model, self.data, q43)
+        self._pin.framesForwardKinematics(self.model, self.data, q43)
         return np.stack(
             [np.asarray(self.data.oMf[fid].translation, dtype=np.float64) for fid in self.frame_ids],
             axis=0,
         )
+
+
+def read_logged_body_pos_w_14(logs_dir: Path) -> tuple[np.ndarray, np.ndarray]:
+    csv_path = logs_dir / "body_pos_w_14.csv"
+    if not csv_path.exists():
+        raise FileNotFoundError(f"missing {csv_path}")
+    df = pd.read_csv(csv_path)
+    numeric = df.select_dtypes(include=[np.number]).to_numpy(dtype=np.float64)
+    if numeric.shape[1] < 2 + 3 * len(BODY_FRAMES):
+        raise ValueError(
+            f"body_pos_w_14.csv has insufficient numeric columns: {numeric.shape[1]}"
+        )
+    row_idx = np.rint(numeric[:, 0]).astype(np.int64)
+    body_pos_flat = numeric[:, 2 : 2 + 3 * len(BODY_FRAMES)]
+    body_pos = body_pos_flat.reshape(-1, len(BODY_FRAMES), 3)
+    return row_idx, body_pos
+
+
+def read_step_sync_body_pos_w_14(logs_dir: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    csv_path = logs_dir / "sim2sim_step_sync_body_pos_w_14.csv"
+    if not csv_path.exists():
+        raise FileNotFoundError(f"missing {csv_path}")
+    df = pd.read_csv(csv_path)
+    numeric = df.select_dtypes(include=[np.number]).to_numpy(dtype=np.float64)
+    expected_cols = 3 + 2 * 3 * len(BODY_FRAMES)
+    if numeric.shape[1] < expected_cols:
+        raise ValueError(
+            f"sim2sim_step_sync_body_pos_w_14.csv has insufficient numeric columns: {numeric.shape[1]}"
+        )
+    source_frame_idx = np.rint(numeric[:, 2]).astype(np.int64)
+    actual_flat = numeric[:, 3 : 3 + 3 * len(BODY_FRAMES)]
+    ref_flat = numeric[:, 3 + 3 * len(BODY_FRAMES) : 3 + 2 * 3 * len(BODY_FRAMES)]
+    actual = actual_flat.reshape(-1, len(BODY_FRAMES), 3)
+    ref = ref_flat.reshape(-1, len(BODY_FRAMES), 3)
+    return source_frame_idx, actual, ref
+
+
+def read_sim_source_frame_index(logs_dir: Path) -> np.ndarray:
+    csv_path = logs_dir / "sim_source_frame_index.csv"
+    if not csv_path.exists():
+        raise FileNotFoundError(f"missing {csv_path}")
+    df = pd.read_csv(csv_path)
+    numeric = df.select_dtypes(include=[np.number]).to_numpy(dtype=np.float64)
+    if numeric.shape[1] < 1:
+        raise ValueError("sim_source_frame_index.csv numeric columns are empty")
+    return np.rint(numeric[:, -1]).astype(np.int64)
+
+
+def align_actual_body_pos_by_source_frame(
+    deploy_source_frame_idx: np.ndarray,
+    sim_source_frame_idx: np.ndarray,
+    sim_body_pos: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    if len(sim_source_frame_idx) != len(sim_body_pos):
+        raise ValueError(
+            f"sim_source_frame_index/body_pos_w_14 length mismatch: {len(sim_source_frame_idx)} vs {len(sim_body_pos)}"
+        )
+
+    source_to_rows: dict[int, list[int]] = {}
+    for i, src in enumerate(sim_source_frame_idx.tolist()):
+        if src < 0:
+            continue
+        source_to_rows.setdefault(int(src), []).append(i)
+
+    missing_sources = sorted({int(src) for src in deploy_source_frame_idx.tolist() if int(src) not in source_to_rows})
+    if missing_sources:
+        raise ValueError(
+            "sim body_pos_w_14 logs are missing source_frame_index values required for alignment; "
+            f"first few missing={missing_sources[:10]}"
+        )
+
+    taken_counts: dict[int, int] = {}
+    aligned_rows: list[np.ndarray] = []
+    for src in deploy_source_frame_idx.tolist():
+        src_i = int(src)
+        rows = source_to_rows[src_i]
+        occ = taken_counts.get(src_i, 0)
+        chosen = rows[min(occ, len(rows) - 1)]
+        aligned_rows.append(sim_body_pos[chosen])
+        taken_counts[src_i] = occ + 1
+    return np.stack(aligned_rows, axis=0), np.asarray(
+        [int(src) for src in deploy_source_frame_idx.tolist()], dtype=np.int64
+    )
+
+
+def filter_step_sync_body_pos_by_source_frame(
+    source_frame_idx: np.ndarray,
+    actual_body_pos: np.ndarray,
+    ref_body_pos: np.ndarray,
+    gt_num_frames: int,
+    valid_only: bool,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if not (len(source_frame_idx) == len(actual_body_pos) == len(ref_body_pos)):
+        raise ValueError(
+            "sim2sim step-sync logs length mismatch: "
+            f"src={len(source_frame_idx)} actual={len(actual_body_pos)} ref={len(ref_body_pos)}"
+        )
+    valid = source_frame_idx >= 0
+    valid &= source_frame_idx < gt_num_frames
+    if valid_only:
+        if not np.any(valid):
+            raise ValueError("sim2sim step-sync logs contain no valid source_frame_index rows")
+        source_frame_idx = source_frame_idx[valid]
+        actual_body_pos = actual_body_pos[valid]
+        ref_body_pos = ref_body_pos[valid]
+    return source_frame_idx, actual_body_pos, ref_body_pos
 
 
 def _compute_metrics_with_smpl(
@@ -603,6 +759,17 @@ def main() -> None:
         default="source_frame_index",
         help="frame alignment mode: source_frame_index (strict), index (legacy), auto_q29 (lag search)",
     )
+    parser.add_argument(
+        "--actual-source",
+        choices=["q_fk", "body_pos_w_14", "step_sync_body_pos_w_14"],
+        default="step_sync_body_pos_w_14",
+        help="source for actual robot trajectory: step_sync_body_pos_w_14 (strict step-synchronous sim/ref world-frame log), body_pos_w_14 (world-frame sim log aligned by source frame), or q_fk (legacy fixed-base FK)",
+    )
+    parser.add_argument(
+        "--sim-valid-only",
+        action="store_true",
+        help="for body_pos_w_14 actual logs, evaluate only the span where sim_source_frame_index is valid (>=0)",
+    )
     parser.add_argument("--align-lag-min", type=int, default=-150, help="min lag for auto_q29")
     parser.add_argument("--align-lag-max", type=int, default=150, help="max lag for auto_q29")
     parser.add_argument("--align-min-overlap", type=int, default=200, help="min overlap for auto_q29")
@@ -669,7 +836,7 @@ def main() -> None:
         else:
             raise ValueError("--streamed-only was set but motion_name.csv has no 'streamed' rows")
 
-    fk = BodyFK(args.urdf, BODY_FRAMES)
+    fk = BodyFK(args.urdf, BODY_FRAMES) if args.actual_source == "q_fk" else None
 
     idx43 = {n: i for i, n in enumerate(STATE43_NAMES)}
     body29_idx_in_43 = [idx43[n] for n in MUJOCO_29_NAMES]
@@ -713,10 +880,15 @@ def main() -> None:
             raise ValueError("No valid source_frame_index rows for strict alignment")
         source_frame_valid = int(np.sum(valid))
         source_frame_kept = int(np.sum(valid))
-        q29 = q29[valid]
         src = source_frame_idx[valid]
+        q29 = q29[valid]
         q43_gt = gt.q43_source[src]
-        n = len(q29)
+        gt_body_pos_w = (
+            gt.body_pos_w_source[src]
+            if gt.body_pos_w_source is not None
+            else None
+        )
+        n = len(src)
         eval_motion_keys = [gt.motion_keys[int(i)] for i in src.tolist()]
     elif args.align_mode == "auto_q29":
         align_lag_frames, align_overlap, align_q29_mae = _auto_align_by_q29_mae(
@@ -735,22 +907,94 @@ def main() -> None:
         n = min(len(q29_aligned), len(q43_gt_aligned))
         q29 = q29_aligned[:n]
         q43_gt = q43_gt_aligned[:n]
+        gt_body_pos_w = gt.body_pos_w_source[:n] if gt.body_pos_w_source is not None else None
         eval_motion_keys = gt.motion_keys[:n]
     else:
         n = min(len(q29), gt.num_frames)
         q29 = q29[:n]
         q43_gt = gt.q43_source[:n]
+        gt_body_pos_w = gt.body_pos_w_source[:n] if gt.body_pos_w_source is not None else None
         eval_motion_keys = gt.motion_keys[:n]
 
-    pred_pos_all: list[np.ndarray] = []
-    gt_pos_all: list[np.ndarray] = []
-    for i in range(n):
-        q_pred = q43_gt[i].copy()
-        q_pred[body29_idx_in_43] = q29[i]
-        pred_pos_all.append(fk.body_pos(q_pred))
-        gt_pos_all.append(fk.body_pos(q43_gt[i]))
-    pred_pos_arr = np.stack(pred_pos_all, axis=0)  # [T, B, 3]
-    gt_pos_arr = np.stack(gt_pos_all, axis=0)
+    actual_alignment_info: dict[str, Any] = {}
+    gt_body_source = "motionlib_body_pos_w" if gt.body_pos_w_source is not None else "fk_from_q43"
+    if args.actual_source == "step_sync_body_pos_w_14":
+        if args.align_mode != "source_frame_index":
+            raise ValueError("--actual-source step_sync_body_pos_w_14 currently requires --align-mode source_frame_index")
+        step_src, step_actual_pos, step_ref_pos = read_step_sync_body_pos_w_14(args.logs_dir)
+        step_src, step_actual_pos, step_ref_pos = filter_step_sync_body_pos_by_source_frame(
+            source_frame_idx=step_src,
+            actual_body_pos=step_actual_pos,
+            ref_body_pos=step_ref_pos,
+            gt_num_frames=gt.num_frames,
+            valid_only=bool(args.sim_valid_only),
+        )
+        pred_pos_arr = step_actual_pos
+        gt_pos_arr = step_ref_pos
+        q43_gt = gt.q43_source[step_src]
+        if gt.body_pos_w_source is not None:
+            gt_body_pos_w = gt.body_pos_w_source[step_src]
+        eval_motion_keys = [gt.motion_keys[int(i)] for i in step_src.tolist()]
+        n = len(step_src)
+        source_frame_valid = int(np.sum((step_src >= 0) & (step_src < gt.num_frames)))
+        source_frame_kept = int(n)
+        actual_alignment_info = {
+            "step_sync_rows": int(n),
+            "step_sync_gt_comparison_source": "mujoco_ref_body_pos_w_14",
+        }
+        gt_body_source = "mujoco_ref_body_pos_w_14"
+    elif args.actual_source == "body_pos_w_14":
+        sim_row_idx, sim_body_pos = read_logged_body_pos_w_14(args.logs_dir)
+        _ = sim_row_idx  # row index kept for CSV sanity only; explicit alignment uses source_frame_index.
+        sim_source_frame_idx = read_sim_source_frame_index(args.logs_dir)
+        if args.align_mode != "source_frame_index":
+            raise ValueError("--actual-source body_pos_w_14 currently requires --align-mode source_frame_index")
+        aligned_src = src
+        if args.sim_valid_only:
+            valid_sim_sources = sim_source_frame_idx[sim_source_frame_idx >= 0]
+            if valid_sim_sources.size == 0:
+                raise ValueError("sim_source_frame_index.csv contains no valid source frame indices")
+            sim_min = int(valid_sim_sources.min())
+            sim_max = int(valid_sim_sources.max())
+            sim_valid_mask = (src >= sim_min) & (src <= sim_max)
+            if not np.any(sim_valid_mask):
+                raise ValueError(
+                    f"No deploy-aligned source frames fall inside sim valid span [{sim_min}, {sim_max}]"
+                )
+            q29 = q29[sim_valid_mask]
+            q43_gt = q43_gt[sim_valid_mask]
+            if gt_body_pos_w is not None:
+                gt_body_pos_w = gt_body_pos_w[sim_valid_mask]
+            eval_motion_keys = [eval_motion_keys[i] for i in np.nonzero(sim_valid_mask)[0].tolist()]
+            aligned_src = src[sim_valid_mask]
+            n = len(aligned_src)
+
+        pred_pos_arr, aligned_src = align_actual_body_pos_by_source_frame(
+            deploy_source_frame_idx=aligned_src,
+            sim_source_frame_idx=sim_source_frame_idx,
+            sim_body_pos=sim_body_pos,
+        )
+        if gt_body_pos_w is None:
+            raise ValueError("motionlib/parquet GT body_pos_w is unavailable for world-frame comparison")
+        gt_pos_arr = gt_body_pos_w
+        actual_alignment_info = {
+            "step_sync_rows": None,
+            "step_sync_gt_comparison_source": None,
+        }
+    else:
+        pred_pos_all: list[np.ndarray] = []
+        gt_pos_all: list[np.ndarray] = []
+        for i in range(n):
+            q_pred = q43_gt[i].copy()
+            q_pred[body29_idx_in_43] = q29[i]
+            pred_pos_all.append(fk.body_pos(q_pred))
+            gt_pos_all.append(fk.body_pos(q43_gt[i]))
+        pred_pos_arr = np.stack(pred_pos_all, axis=0)  # [T, B, 3]
+        gt_pos_arr = np.stack(gt_pos_all, axis=0)
+        actual_alignment_info = {
+            "step_sync_rows": None,
+            "step_sync_gt_comparison_source": None,
+        }
     keypoint_err_mm = np.linalg.norm(pred_pos_arr - gt_pos_arr, axis=-1) * 1000.0  # [T, B]
 
     # Build per-sequence format expected by compute_metrics_lite: list of [T, B, 3]
@@ -861,6 +1105,9 @@ def main() -> None:
         "motion_file": str(args.motion_file) if args.motion_file is not None else None,
         "motion_name": args.motion_name,
         "logs_dir": str(args.logs_dir),
+        "actual_source": args.actual_source,
+        "gt_body_source": gt_body_source,
+        "motionlib_source": gt.source,
         "num_frames": int(n),
         "alignment": {
             "mode": args.align_mode,
@@ -868,9 +1115,11 @@ def main() -> None:
             "auto_overlap_frames": int(align_overlap) if align_overlap is not None else None,
             "auto_q29_mae_rad": float(align_q29_mae) if align_q29_mae is not None else None,
             "streamed_only": bool(args.streamed_only),
+            "sim_valid_only": bool(args.sim_valid_only),
             "streamed_row_start_in_logs": streamed_row_start,
             "source_frame_valid_rows": source_frame_valid,
             "source_frame_kept_rows": source_frame_kept,
+            **actual_alignment_info,
         },
         "gt_source": args.gt_source,
         "gt_motion_dir": str(args.gt_motion_dir) if args.gt_motion_dir is not None else None,

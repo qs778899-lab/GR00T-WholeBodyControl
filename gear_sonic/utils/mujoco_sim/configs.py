@@ -99,6 +99,8 @@ def override_wbc_config(
         "REFERENCE_MOTION_ALPHA": config.reference_motion_alpha,
         "REFERENCE_MOTION_TRANSLATION_MODE": config.reference_motion_translation_mode,
         "REFERENCE_MOTION_ALLOW_MIDRUN_REALIGN": config.reference_motion_allow_midrun_realign,
+        "ENABLE_SIM2SIM_EVAL_LOGGING": config.enable_sim2sim_eval_logging,
+        "SIM2SIM_EVAL_LOGS_DIR": config.sim2sim_eval_logs_dir,
     }
 
     if missed_keys_only:
@@ -321,6 +323,12 @@ class BaseConfig(ArgsConfigTemplate):
 
     reference_motion_allow_midrun_realign: bool = False
     """Whether reference root anchor can be re-aligned during a running clip."""
+
+    enable_sim2sim_eval_logging: bool = True
+    """Whether to log MuJoCo world-frame body positions for sim2sim metrics."""
+
+    sim2sim_eval_logs_dir: str = "/tmp/sonic_logs/official_walk_zmq01"
+    """Directory for MuJoCo sim2sim evaluation CSV logs."""
 
     commit_id: str = ""
     """Commit ID for the current codebase"""

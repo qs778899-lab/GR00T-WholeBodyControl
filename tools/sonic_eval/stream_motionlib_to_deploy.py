@@ -135,7 +135,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--initial-burst-frames",
         type=int,
-        default=60,
+        default=0,
         help=(
             "send this many frames immediately before realtime pacing; "
             "must cover deploy's future observation window"

@@ -50,12 +50,13 @@ class ZMQStateSubscriber:
         host: str = "localhost",
         port: int = DEFAULT_STATE_ZMQ_PORT,
         topic: str = STATE_ZMQ_TOPIC,
+        conflate: bool = True,
     ):
         mnp.patch()
         self._ctx = zmq.Context()
         self._socket = self._ctx.socket(zmq.SUB)
         self._socket.setsockopt_string(zmq.SUBSCRIBE, topic)
-        self._socket.setsockopt(zmq.CONFLATE, 1)
+        self._socket.setsockopt(zmq.CONFLATE, 1 if conflate else 0)
         self._socket.setsockopt(zmq.RCVTIMEO, 0)
         self._socket.connect(f"tcp://{host}:{port}")
         self._topic = topic
@@ -80,6 +81,20 @@ class ZMQStateSubscriber:
         if clear:
             self._msg = None
         return msg
+
+    def get_msgs(self) -> list[dict]:
+        """Drain all currently available messages in arrival order."""
+        msgs: list[dict] = []
+        while True:
+            try:
+                raw = self._socket.recv(zmq.NOBLOCK)
+            except zmq.Again:
+                break
+            msg = _unpack_msgpack_zmq(raw, self._topic)
+            msg = _convert_lists_to_numpy(msg)
+            msgs.append(msg)
+        self._msg = msgs[-1] if msgs else None
+        return msgs
 
     def close(self):
         self._socket.close()

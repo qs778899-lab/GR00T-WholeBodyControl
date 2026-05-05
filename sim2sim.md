@@ -8,19 +8,25 @@ bash install_scripts/install_mujoco_sim.sh
 在这个文档GR00T-WholeBodyControl/dowcs/source/user_guide/training.md有提到isaacsim eval包括metrics的计算，在代码库中isaacsim eval这条链路，是不是先读取pkl文件作为robot motion raw data, 然后进行Load_motion的预处理环节，在预处理中可以利用fk_batch可以把 pose_aa + trans 转成 robot reference trajectory从30fps插值到50fps，这个robot reference trajectory是不是就是isaacsim eval分析计算中的ground truth，用于计算MPJPE等的.
 另外，分析在isaacsim eval的链路中，在计算metrics时是如何做时间对齐的，每一帧的referecen motion和actual motion是同一时刻的吗？
 答：在同一个“当前 step / 当前 reference frame”上比较的，可以认为是同一时刻对齐的。
+另外，GT和actual link world position是具体怎么计算拿到的？motionlib在里面是什么作用？
+
+GT其实不是robot motion encoder的输入,应该是robot motion raw data,pkl文件里的就是robot motion raw data. 
 
 对官方sample data的pkl文件数据进行加载预处理后输入给robot motion encoder, 在mujoco中对universal control policy进行推理的整个链路，整个链路模仿isaacsim eval的。
 
 这个可视化既要能看出policy对pkl的动作的root position的tracking精度，也要可以看出track动作形态也就是不同关节角的效果。现在的问题是，为什么可视化出来的reference G1的位置不是按照refercence motion(pkl读取的)在移动，而是一直在原地？彻底解决这个问题
+
+mujoco和policy是先运行的，然后pkl动作是在终端C后发出的，所以前面很有很长一段时间是没有接收到输入动作。我希望在metrics计算时可以自动判断pkl动作何时输入和结束，只计算这段时间的error才合理。
+
+彻底解决这次路径是 Humanoid_Batch fallback，不是 TrackingCommand offline的问题，是不是TrackingCommand offline才是和isaacsim eval链路对齐，是的话必须解决
+
+实现严格的每一帧时间对齐，在 MuJoCo 每个物理步里，原子地同时记录：当前用于 reference visualization / target 的那一帧 source_frame_index，该帧 reference 的 14 个 world position，该物理步 actual 的 14 个 world position
 
 ## TODO功能
 
 占内存问题还没有解决
 
 和lirui哥对一下代码库合并
-
-GT其实不是robot motion encoder的输入,应该是robot motion raw data,这个和pkl文件的时什么关系，另外输出到底应该多少FPS 
-
 
 human motion和robot control都作为输入，分析tracking精度
 
@@ -71,15 +77,40 @@ human motion和robot control都作为输入，分析tracking精度
 
 ### 3) 终端C: 发送 official pkl motion  
 
-计算 metrics 需要哪些文件，最核心的是这几个：
+motionlib的作用：
+1. 读取 .pkl motion 数据。
+2. 做 IsaacSim 链路的预处理：
+      - 插值到目标 fps
+      - retarget / FK
+      - 生成 reference robot trajectory
+3. 提供：
+      - dof_pos
+      - root_pos_w
+      - root_quat_w
+      - body_pos_
+
+计算 metrics 需要哪些文件，最核心的是这几个（当前默认链路）：
   1. motion_file
      就是你的 sample_data/robot_filtered/...pkl。脚本用它重建 GT reference 序列。
-  2. q.csv
-     这是 actual motion，来自 deploy 记录的 post-physics joint state。离线脚本先读它，再做 FK。
-  3. source_frame_index.csv
-     这是严格时间对齐的关键。脚本会把 q.csv 每一行映射到 GT 的哪一帧。
+  2. sim2sim_step_sync_body_pos_w_14.csv
+     这是当前默认且最严格的 metrics 输入。来自 MuJoCo sim 每个 mj_step 后同步记录的：
+     - source_frame_index
+     - actual 14 个 link world position
+     - reference 14 个 link world position
+  3. body_pos_w_14.csv
+     兼容模式下的 actual motion，来自 MuJoCo sim 每个 mj_step 后记录的 14 个 link world position。
+  4. source_frame_index.csv
+     deploy 侧 source_frame_index 记录，用于兼容模式 `--actual-source body_pos_w_14` 的显式对齐。
+  5. sim_source_frame_index.csv
+     MuJoCo sim 侧 source_frame_index 记录，用于兼容模式排查对齐问题。
 
- 如何在q.csv 和 source_frame_index.csv的数据中写入source_frame_index: 通过 deploy 内部维护的 current_motion + current_frame 播放游标来判断的，sender端 stream 进来的每个 chunk 自带全局帧号
+ 如何写入 source_frame_index / step-sync 数据：
+ - deploy 侧：通过 current_motion + current_frame 播放游标写入 source_frame_index.csv
+ - sim 侧：从 reference debug stream 读取 source_frame_index，并在每个物理步同步写入：
+   - sim_source_frame_index.csv
+   - body_pos_w_14.csv
+   - sim2sim_step_sync_body_pos_w_14.csv
+ - sender 端 stream 进来的每个 chunk 自带全局 frame_index
 
    source /home/lab/miniconda3/etc/profile.d/conda.sh
    conda activate sonic
@@ -91,16 +122,9 @@ human motion和robot control都作为输入，分析tracking精度
     --port 5556 \
     --target-fps 50 \
     --chunk-size 20 \
-    --start-frame 0 \
-    --prepend-stand-frames 10 \
-    --blend-from-stand-frames 10 \
-    --initial-burst-frames 20 \
     --realtime \
     --send-command \
-    --use-isaacsim-app \
-    --command-repeat 10 \
-    --command-interval 0.1 \
-    --command-heartbeat-interval 0.5
+    --use-isaacsim-app
 
     python tools/sonic_eval/stream_motionlib_to_deploy.py \
     --motion-file sample_data/robot_filtered/210531/pick_lowplace.pkl \
@@ -109,16 +133,9 @@ human motion和robot control都作为输入，分析tracking精度
     --port 5556 \
     --target-fps 50 \
     --chunk-size 20 \
-    --start-frame 30 \
-    --prepend-stand-frames 50 \
-    --blend-from-stand-frames 100 \
-    --initial-burst-frames 160 \
     --realtime \
     --send-command \
-    --use-isaacsim-app \
-    --command-repeat 10 \
-    --command-interval 0.1 \
-    --command-heartbeat-interval 0.5
+    --use-isaacsim-app
 
 
    换 pkl 就改这两个参数：
@@ -130,7 +147,8 @@ human motion和robot control都作为输入，分析tracking精度
 ### 4) 终端D: 计算 offline tracking metrics (欧式距离)
    
    source /home/lab/miniconda3/etc/profile.d/conda.sh
-   conda activate sonic_eval
+   conda activate sonic_backup
+   export PYTHONPATH=/home/lab/Desktop/IsaacLab/source
 
    walk示例：
    python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
@@ -142,10 +160,10 @@ human motion和robot control都作为输入，分析tracking精度
     --no-motionlib-robot \
     --ignore-motion-playing-mask \
     --streamed-only \
-    --stream-start-frame 0 \
-    --stream-prepend-stand-frames 10 \
-    --stream-blend-from-stand-frames 10 \
-    --align-mode source_frame_index
+    --align-mode source_frame_index \
+    --actual-source step_sync_body_pos_w_14 \
+    --sim-valid-only \
+    --use-isaacsim-app
 
    pick示例：
    python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
@@ -157,10 +175,31 @@ human motion和robot control都作为输入，分析tracking精度
     --no-motionlib-robot \
     --ignore-motion-playing-mask \
     --streamed-only \
-    --stream-start-frame 0 \
-    --stream-prepend-stand-frames 50 \
-    --stream-blend-from-stand-frames 100 \
-    --align-mode source_frame_index
+    --align-mode source_frame_index \
+    --actual-source step_sync_body_pos_w_14 \
+    --sim-valid-only \
+    --use-isaacsim-app
+
+说明：
+- `stream_motionlib_to_deploy.py` 这些参数默认都是 `0`，常规单文件流程可省略不写：
+  - `--start-frame`
+  - `--prepend-stand-frames`
+  - `--blend-from-stand-frames`
+  - `--initial-burst-frames`
+- `compute_mujoco_tracking_metrics.py` 这些参数默认也都是 `0`，常规流程可省略：
+  - `--stream-start-frame`
+  - `--stream-prepend-stand-frames`
+  - `--stream-blend-from-stand-frames`
+- `--command-repeat` / `--command-interval` / `--command-heartbeat-interval` 是 `--send-command` 的高级稳态参数，默认分别是 `3` / `0.05` / `0.5`，多数单文件运行可直接省略使用默认值。
+- `--actual-source step_sync_body_pos_w_14` 是当前推荐且默认的 actual 轨迹来源。
+  它直接消费 MuJoCo 每个物理步同步写下来的 `actual + reference + source_frame_index`，时间对齐最严格，最接近 IsaacSim eval 的“同 step 比较”语义。
+- `--actual-source body_pos_w_14` 是兼容模式。
+  它只使用 MuJoCo actual 14 点 world position，再通过 `source_frame_index.csv + sim_source_frame_index.csv` 做显式回配。
+- 若要回退旧逻辑（q.csv + FK 近似），可显式使用 `--actual-source q_fk`。
+- 输出 JSON 里会增加：
+  - `actual_source`
+  - `gt_body_source`
+  - `motionlib_source`（显示 motionlib 具体走的是 TrackingCommand offline / MotionLibRobot / Humanoid_Batch）
 
     
 
@@ -505,6 +544,274 @@ conda activate sonic
 python gear_sonic/eval_agent_trl.py +checkpoint=/home/lab/Desktop/GR00T-WholeBodyControl/models/sonic_release/last.pt +headless=True ++eval_callbacks=im_eval ++run_eval_loop=False ++num_envs=1 "+manager_env/terminations=tracking/eval" "++manager_env.commands.motion.motion_lib_cfg.motion_file=/home/lab/Desktop/GR00T-WholeBodyControl/sample_data/robot_filtered/210531/walk_forward_amateur_001__A001.pkl" "++manager_env.commands.motion.motion_lib_cfg.filter_motion_keys=['walk_forward_amateur_001__A001']" "++manager_env.commands.motion.filter_motion_keys=['walk_forward_amateur_001__A001']" "++eval_output_dir=/tmp/isaac_eval_walk_a001"
 
 /tmp/isaac_eval_walk_a001/metrics_eval.json
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

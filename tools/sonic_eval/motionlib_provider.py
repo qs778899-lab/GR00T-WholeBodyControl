@@ -329,6 +329,9 @@ def _load_with_tracking_command_offline(
     used by IsaacSim/IsaacLab training and evaluation.  It requires a functional
     IsaacLab Python environment, including USD/pxr bindings.
     """
+    # Import TrackingCommand lazily here.  In IsaacSim/Omniverse environments,
+    # pxr/omni modules are only made available after SimulationApp has been
+    # instantiated by the caller.
     from gear_sonic.envs.manager_env.mdp.commands import TrackingCommand
 
     cfg = _make_motion_lib_cfg(
