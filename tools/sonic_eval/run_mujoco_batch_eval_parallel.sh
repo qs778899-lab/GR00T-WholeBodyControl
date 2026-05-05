@@ -37,7 +37,6 @@ COMMAND_HEARTBEAT_INTERVAL="0.5"
 USE_ISAACSIM_APP="true"
 ALIGN_MODE="source_frame_index"
 METRICS_CONDA_ENV=""
-ALLOW_FALLBACK_METRICS="false"
 STRICT_WORKER_READY_CHECK="false"
 EXPECTED_A_INSTANCES=""
 PROGRESS_INTERVAL_SEC="10"
@@ -74,7 +73,6 @@ Optional:
   --use-isaacsim-app / --no-use-isaacsim-app
   --align-mode MODE                    source_frame_index|index|auto_q29
   --metrics-conda-env NAME             Pass through to worker metrics stage
-  --allow-fallback-metrics             Pass through to worker metrics stage
   --strict-worker-ready-check          Validate per-worker deploy logs freshness and A-instance count
   --expected-a-instances N             Expected number of run_sim_loop.py processes (default: --workers when strict check is enabled)
   --progress-interval-sec N            Progress print interval in seconds (default: ${PROGRESS_INTERVAL_SEC}; 0 disables)
@@ -105,7 +103,6 @@ while [[ $# -gt 0 ]]; do
     --no-use-isaacsim-app) USE_ISAACSIM_APP="false"; shift ;;
     --align-mode) ALIGN_MODE="$2"; shift 2 ;;
     --metrics-conda-env) METRICS_CONDA_ENV="$2"; shift 2 ;;
-    --allow-fallback-metrics) ALLOW_FALLBACK_METRICS="true"; shift ;;
     --strict-worker-ready-check) STRICT_WORKER_READY_CHECK="true"; shift ;;
     --expected-a-instances) EXPECTED_A_INSTANCES="$2"; shift 2 ;;
     --progress-interval-sec) PROGRESS_INTERVAL_SEC="$2"; shift 2 ;;
@@ -297,10 +294,6 @@ for ((i=0; i<WORKERS; i++)); do
   if [[ -n "$METRICS_CONDA_ENV" ]]; then
     cmd+=(--metrics-conda-env "$METRICS_CONDA_ENV")
   fi
-  if [[ "$ALLOW_FALLBACK_METRICS" == "true" ]]; then
-    cmd+=(--allow-fallback-metrics)
-  fi
-
   echo "[INFO] launch worker=${i} motions=${count_i} port=${worker_port} log=${worker_log}"
   "${cmd[@]}" > "$worker_log" 2>&1 &
   PIDS+=("$!")

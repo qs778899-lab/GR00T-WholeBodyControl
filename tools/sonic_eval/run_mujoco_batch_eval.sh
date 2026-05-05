@@ -43,7 +43,6 @@ COMMAND_INTERVAL="0.1"
 COMMAND_HEARTBEAT_INTERVAL="0.5"
 USE_ISAACSIM_APP="true"
 METRICS_CONDA_ENV=""
-ALLOW_FALLBACK_METRICS="false"
 
 # Metric args (D)
 ALIGN_MODE="source_frame_index"
@@ -78,7 +77,6 @@ Optional:
   --command-heartbeat-interval SEC       Default: ${COMMAND_HEARTBEAT_INTERVAL}
   --use-isaacsim-app / --no-use-isaacsim-app
   --metrics-conda-env NAME               Conda env for D/metrics. If omitted, auto-detect one with smpl_sim.
-  --allow-fallback-metrics               Pass through to compute_mujoco_tracking_metrics.py
   --align-mode MODE                      source_frame_index|index|auto_q29 (default: ${ALIGN_MODE})
 
 Notes:
@@ -109,7 +107,6 @@ while [[ $# -gt 0 ]]; do
     --use-isaacsim-app) USE_ISAACSIM_APP="true"; shift ;;
     --no-use-isaacsim-app) USE_ISAACSIM_APP="false"; shift ;;
     --metrics-conda-env) METRICS_CONDA_ENV="$2"; shift 2 ;;
-    --allow-fallback-metrics) ALLOW_FALLBACK_METRICS="true"; shift ;;
     --align-mode) ALIGN_MODE="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "[ERROR] Unknown arg: $1"; usage; exit 1 ;;
@@ -284,9 +281,6 @@ while IFS=, read -r motion_file motion_name _rest; do
   )
   if [[ -n "$motion_name" ]]; then
     metric_args+=(--motion-name "$motion_name")
-  fi
-  if [[ "$ALLOW_FALLBACK_METRICS" == "true" ]]; then
-    metric_args+=(--allow-fallback-metrics)
   fi
   conda run -n "$METRICS_CONDA_ENV" "${metric_args[@]}"
   if [[ ! -f "$out_json" ]]; then

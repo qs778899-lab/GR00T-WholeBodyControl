@@ -2,16 +2,8 @@
 """
 Compute Isaac-eval-style tracking metrics from MuJoCo sim2sim logs.
 
-This script tries to reuse the same metric function as Isaac eval:
+This script strictly reuses the same metric function as Isaac eval:
 `smpl_sim.smpllib.smpl_eval.compute_metrics_lite`.
-
-If `smpl_sim` is unavailable, it can fall back to a local implementation for:
-- mpjpe_g / mpjpe_l / mpjpe_pa
-and their subset variants:
-- *_legs, *_vr_3points, *_other_upper_bodies, *_foot
-
-To strictly match IsaacSim eval definitions, run with default behavior
-(fallback disabled) and ensure `smpl_sim` is importable.
 """
 
 from __future__ import annotations
@@ -502,68 +494,17 @@ class BodyFK:
         )
 
 
-def _similarity_transform(pred: np.ndarray, gt: np.ndarray) -> np.ndarray:
-    mu_x = pred.mean(axis=0, keepdims=True)
-    mu_y = gt.mean(axis=0, keepdims=True)
-    x0 = pred - mu_x
-    y0 = gt - mu_y
-    var_x = np.sum(x0 * x0)
-    if var_x < 1e-12:
-        return pred.copy()
-    k = x0.T @ y0
-    u, s, vt = np.linalg.svd(k)
-    r = u @ vt
-    if np.linalg.det(r) < 0:
-        vt[-1, :] *= -1.0
-        r = u @ vt
-    scale = float(np.sum(s) / var_x)
-    t = mu_y - scale * (mu_x @ r)
-    return scale * (pred @ r) + t
-
-
-def _mpjpe_mm(pred: np.ndarray, gt: np.ndarray) -> np.ndarray:
-    return np.linalg.norm(pred - gt, axis=-1) * 1000.0
-
-
-def _compute_metrics_lite_fallback(pred_pos_all: list[np.ndarray], gt_pos_all: list[np.ndarray]) -> dict[str, list[np.ndarray]]:
-    out_g: list[np.ndarray] = []
-    out_l: list[np.ndarray] = []
-    out_pa: list[np.ndarray] = []
-    for p_seq, g_seq in zip(pred_pos_all, gt_pos_all):
-        t = p_seq.shape[0]
-        g_arr = np.zeros((t,), dtype=np.float64)
-        l_arr = np.zeros((t,), dtype=np.float64)
-        pa_arr = np.zeros((t,), dtype=np.float64)
-        for i in range(t):
-            p = p_seq[i]
-            g = g_seq[i]
-            g_arr[i] = float(_mpjpe_mm(p, g).mean())
-            p_l = p - p[0:1]
-            g_l = g - g[0:1]
-            l_arr[i] = float(_mpjpe_mm(p_l, g_l).mean())
-            p_pa = _similarity_transform(p, g)
-            pa_arr[i] = float(_mpjpe_mm(p_pa, g).mean())
-        out_g.append(g_arr)
-        out_l.append(l_arr)
-        out_pa.append(pa_arr)
-    return {"mpjpe_g": out_g, "mpjpe_l": out_l, "mpjpe_pa": out_pa}
-
-
-def _compute_metrics_with_optional_smpl(
+def _compute_metrics_with_smpl(
     pred_pos_all: list[np.ndarray],
     gt_pos_all: list[np.ndarray],
-    allow_fallback_metrics: bool,
 ) -> tuple[dict[str, list[np.ndarray]], str]:
     try:
         from smpl_sim.smpllib.smpl_eval import compute_metrics_lite  # type: ignore
     except Exception as e:
-        if not allow_fallback_metrics:
-            raise RuntimeError(
-                "smpl_sim.smpllib.smpl_eval.compute_metrics_lite is required for IsaacSim-aligned metrics, "
-                "but import failed. Install/activate env with smpl_sim, or pass --allow-fallback-metrics "
-                "if you explicitly accept non-official fallback metrics."
-            ) from e
-        return _compute_metrics_lite_fallback(pred_pos_all, gt_pos_all), "fallback_local_mpjpe"
+        raise RuntimeError(
+            "smpl_sim.smpllib.smpl_eval.compute_metrics_lite is required for IsaacSim-aligned metrics, "
+            "but import failed. Install/activate env with smpl_sim."
+        ) from e
     metrics = compute_metrics_lite(pred_pos_all, gt_pos_all, concatenate=False)  # type: ignore
     return metrics, "smpl_sim.compute_metrics_lite"
 
@@ -582,6 +523,33 @@ def _aggregate_metrics_per_motion(metrics: dict[str, list[np.ndarray]]) -> dict[
             vals.append(float(np.mean(a)) if "mpjpe" in k else float(np.sum(a)))
         reduced[k] = np.asarray(vals, dtype=np.float64)
     return reduced
+
+
+def _as_frame_metric(arr_like: Any, expected_frames: int, name: str) -> np.ndarray:
+    """
+    Normalize metric output to per-frame 1D vector of length expected_frames.
+    If backend returns extra non-time dimensions, reduce them by mean.
+    """
+    arr = np.asarray(arr_like, dtype=np.float64)
+    if arr.ndim == 0:
+        return np.repeat(arr.reshape(1), expected_frames).astype(np.float64)
+    if arr.ndim == 1:
+        if arr.shape[0] != expected_frames:
+            raise ValueError(
+                f"{name} frame length mismatch: got {arr.shape[0]}, expected {expected_frames}"
+            )
+        return arr
+
+    # Prefer axis 0 as time axis when it matches expected frame count.
+    if arr.shape[0] == expected_frames:
+        return arr.reshape(expected_frames, -1).mean(axis=1)
+    # Fallback: if last axis matches expected frame count, reduce others.
+    if arr.shape[-1] == expected_frames:
+        return arr.reshape(-1, expected_frames).mean(axis=0)
+
+    raise ValueError(
+        f"{name} shape {arr.shape} cannot be normalized to {expected_frames} frames"
+    )
 
 
 def main() -> None:
@@ -638,11 +606,6 @@ def main() -> None:
     parser.add_argument("--align-lag-min", type=int, default=-150, help="min lag for auto_q29")
     parser.add_argument("--align-lag-max", type=int, default=150, help="max lag for auto_q29")
     parser.add_argument("--align-min-overlap", type=int, default=200, help="min overlap for auto_q29")
-    parser.add_argument(
-        "--allow-fallback-metrics",
-        action="store_true",
-        help="allow local fallback metric implementation when smpl_sim is unavailable (not IsaacSim-official)",
-    )
     parser.add_argument(
         "--gt-source",
         type=str,
@@ -788,12 +751,12 @@ def main() -> None:
         gt_pos_all.append(fk.body_pos(q43_gt[i]))
     pred_pos_arr = np.stack(pred_pos_all, axis=0)  # [T, B, 3]
     gt_pos_arr = np.stack(gt_pos_all, axis=0)
+    keypoint_err_mm = np.linalg.norm(pred_pos_arr - gt_pos_arr, axis=-1) * 1000.0  # [T, B]
 
     # Build per-sequence format expected by compute_metrics_lite: list of [T, B, 3]
-    metrics_all_raw, metrics_impl = _compute_metrics_with_optional_smpl(
+    metrics_all_raw, metrics_impl = _compute_metrics_with_smpl(
         [pred_pos_arr],
         [gt_pos_arr],
-        allow_fallback_metrics=args.allow_fallback_metrics,
     )
     reduced_all = _aggregate_metrics_per_motion(metrics_all_raw)
 
@@ -802,10 +765,9 @@ def main() -> None:
     for suffix, sidx in subset_indices.items():
         if suffix == "":
             continue
-        subset_raw[suffix], _ = _compute_metrics_with_optional_smpl(
+        subset_raw[suffix], _ = _compute_metrics_with_smpl(
             [pred_pos_arr[:, sidx, :]],
             [gt_pos_arr[:, sidx, :]],
-            allow_fallback_metrics=args.allow_fallback_metrics,
         )
     reduced_subsets = {sfx: _aggregate_metrics_per_motion(m) for sfx, m in subset_raw.items()}
 
@@ -819,11 +781,10 @@ def main() -> None:
 
     # For this script each frame is treated as one "motion key"
     # (single-episode online eval proxy).
-    # Derive frame-level proxy metrics for termination/success from unaggregated all-body mpjpe.
-    # If smpl_sim path returned extra keys, we still use mpjpe_* for termination.
-    mpjpe_g_frame = _compute_metrics_lite_fallback([pred_pos_arr], [gt_pos_arr])["mpjpe_g"][0]
-    mpjpe_l_frame = _compute_metrics_lite_fallback([pred_pos_arr], [gt_pos_arr])["mpjpe_l"][0]
-    mpjpe_pa_frame = _compute_metrics_lite_fallback([pred_pos_arr], [gt_pos_arr])["mpjpe_pa"][0]
+    # Derive frame-level proxy metrics for termination/success from frame-wise smpl_sim outputs.
+    mpjpe_g_frame = _as_frame_metric(metrics_all_raw["mpjpe_g"][0], n, "mpjpe_g")
+    mpjpe_l_frame = _as_frame_metric(metrics_all_raw["mpjpe_l"][0], n, "mpjpe_l")
+    mpjpe_pa_frame = _as_frame_metric(metrics_all_raw["mpjpe_pa"][0], n, "mpjpe_pa")
 
     terminated = (
         (mpjpe_l_frame > args.success_thresh_mpjpe_l_mm)
@@ -831,7 +792,7 @@ def main() -> None:
         | (mpjpe_pa_frame > args.success_thresh_mpjpe_pa_mm)
     )
     success_mask = ~terminated
-    progress = np.ones_like(mpjpe_l_frame, dtype=np.float64)
+    progress = np.ones((n,), dtype=np.float64)
 
     # Expand aggregated metrics to frame-wise arrays for all_metrics_dict compatibility.
     # For keys lacking frame-level definition, repeat scalar mean per frame.
@@ -845,22 +806,29 @@ def main() -> None:
     all_metrics_dict["mpjpe_l"] = mpjpe_l_frame.tolist()
     all_metrics_dict["mpjpe_pa"] = mpjpe_pa_frame.tolist()
 
-    # Fill subset frame-level via fallback exact computation.
+    # Fill subset frame-level from same smpl_sim backend for consistency.
     for suffix, sidx in subset_indices.items():
         if suffix == "":
             continue
-        sub = _compute_metrics_lite_fallback(
-            [pred_pos_arr[:, sidx, :]],
-            [gt_pos_arr[:, sidx, :]],
-        )
-        all_metrics_dict[f"mpjpe_g{suffix}"] = sub["mpjpe_g"][0].tolist()
-        all_metrics_dict[f"mpjpe_l{suffix}"] = sub["mpjpe_l"][0].tolist()
-        all_metrics_dict[f"mpjpe_pa{suffix}"] = sub["mpjpe_pa"][0].tolist()
+        sub = subset_raw[suffix]
+        all_metrics_dict[f"mpjpe_g{suffix}"] = _as_frame_metric(
+            sub["mpjpe_g"][0], n, f"mpjpe_g{suffix}"
+        ).tolist()
+        all_metrics_dict[f"mpjpe_l{suffix}"] = _as_frame_metric(
+            sub["mpjpe_l"][0], n, f"mpjpe_l{suffix}"
+        ).tolist()
+        all_metrics_dict[f"mpjpe_pa{suffix}"] = _as_frame_metric(
+            sub["mpjpe_pa"][0], n, f"mpjpe_pa{suffix}"
+        ).tolist()
 
     all_metrics_dict["terminated"] = terminated.tolist()
     all_metrics_dict["progress"] = progress.tolist()
     all_metrics_dict["motion_keys"] = eval_motion_keys
     all_metrics_dict["sampling_prob"] = [1.0 / n] * n if n > 0 else []
+    all_metrics_dict["keypoint_names"] = BODY_FRAMES
+    all_metrics_dict["keypoint_tracking_error_mm_by_frame"] = {
+        BODY_FRAMES[j]: keypoint_err_mm[:, j].tolist() for j in range(len(BODY_FRAMES))
+    }
 
     failed_idx = np.nonzero(terminated)[0]
     failed_metrics_dict: dict[str, Any] = {}
@@ -878,6 +846,12 @@ def main() -> None:
         arr = np.asarray(v, dtype=np.float64)
         metrics_all[k] = _mean_or_zero(arr)
         metrics_success[k] = _mean_or_zero(arr[success_mask]) if np.any(success_mask) else 0.0
+    for j, name in enumerate(BODY_FRAMES):
+        kp_arr = keypoint_err_mm[:, j]
+        metrics_all[f"kp_err_mm::{name}"] = _mean_or_zero(kp_arr)
+        metrics_success[f"kp_err_mm::{name}"] = (
+            _mean_or_zero(kp_arr[success_mask]) if np.any(success_mask) else 0.0
+        )
     metrics_success["success_rate"] = float(np.mean(success_mask.astype(np.float64))) if n > 0 else 0.0
     metrics_success["progress_rate"] = float(np.mean(progress)) if n > 0 else 0.0
 

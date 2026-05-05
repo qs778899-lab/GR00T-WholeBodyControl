@@ -35,8 +35,7 @@ human motion和robot control都作为输入，分析tracking精度
 
   点击mujoco窗口，按一次9,让机器人落地
 
-  MuJoCo 窗口显示什么是“物理仿真后的机器人状态”，不是单独的 decoder 可视化。链路是：deploy 输出关节命令 -> run_sim_loop 通过 DDS 收到低层命令 -> MuJoCo mj_step 更新状态 -> 窗口显示这。
-
+  MuJoCo 窗口显示什么是“物理仿真后的机器人状态”，不是单独的 decoder 可视化。链路是：deploy 输出关节命令 -> run_sim_loop 通过 DDS 收到低层命令 -> MuJoCo mj_step 更新状态 -> 窗口显示
 
 ### 2) 终端B: 启动 policy 推理（deploy）
 
@@ -44,8 +43,6 @@ human motion和robot control都作为输入，分析tracking精度
    conda activate sonic
    cd /home/lab/Desktop/GR00T-WholeBodyControl/gear_sonic_deploy
    bash deploy.sh \
-    --motion-data /tmp/sonic_motion_action_only \
-    --motion-name episode_000001_action \
     --obs-config policy/release/observation_config.yaml \
     --input-type zmq_manager \
     --output-type all \
@@ -59,8 +56,6 @@ human motion和robot control都作为输入，分析tracking精度
     sim 
 
   bash deploy.sh \
-    --motion-data /tmp/sonic_motion_action_only \
-    --motion-name episode_000001_action \
     --obs-config policy/release/observation_config.yaml \
     --input-type zmq_manager \
     --output-type all \
@@ -72,7 +67,6 @@ human motion和robot control都作为输入，分析tracking精度
     --target-motion-logfile /tmp/sonic_logs/official_walk_zmq01/target_motion.csv \
     --policy-input-logfile /tmp/sonic_logs/official_walk_zmq01/policy_input.csv \
     sim 
-
 
 
 ### 3) 终端C: 发送 official pkl motion  
@@ -133,12 +127,12 @@ human motion和robot control都作为输入，分析tracking精度
    如果 pkl 里只有一个 motion，理论上可以省略 --motion-name
 
 
-### 4) 终端 D：计算 offline tracking metrics
+### 4) 终端D: 计算 offline tracking metrics (欧式距离)
    
    source /home/lab/miniconda3/etc/profile.d/conda.sh
    conda activate sonic_eval
 
-   长动作示例：
+   walk示例：
    python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
     --gt-format motionlib \
     --motion-file sample_data/robot_filtered/210531/walk_forward_amateur_001__A001.pkl \
@@ -153,7 +147,7 @@ human motion和robot control都作为输入，分析tracking精度
     --stream-blend-from-stand-frames 10 \
     --align-mode source_frame_index
 
-   短动作示例：
+   pick示例：
    python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
     --gt-format motionlib \
     --motion-file sample_data/robot_filtered/210531/pick_lowplace.pkl \

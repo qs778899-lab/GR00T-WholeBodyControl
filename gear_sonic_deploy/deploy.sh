@@ -506,25 +506,29 @@ check_file "$CHECKPOINT_ENCODER" || MISSING_FILES=$((MISSING_FILES + 1))
 check_file "$OBS_CONFIG" || MISSING_FILES=$((MISSING_FILES + 1))
 check_file "$PLANNER" || MISSING_FILES=$((MISSING_FILES + 1))
 
-if [ -d "$MOTION_DATA" ]; then
-    echo -e "${GREEN}✅ Found: $MOTION_DATA${NC}"
+if [[ "$INPUT_TYPE" == "zmq_manager" ]]; then
+    echo -e "${YELLOW}ℹ️  Skipping --motion-data/--motion-name directory checks for input_type=zmq_manager${NC}"
 else
-    echo -e "${RED}❌ Missing directory: $MOTION_DATA${NC}"
-    MISSING_FILES=$((MISSING_FILES + 1))
-fi
-
-# Optional motion selection by name (single subfolder under --motion-data).
-if [[ -n "$MOTION_NAME" ]]; then
-    SELECTED_MOTION_PATH="${MOTION_DATA%/}/$MOTION_NAME"
-    if [[ ! -d "$SELECTED_MOTION_PATH" ]]; then
-        echo -e "${RED}❌ Selected motion folder not found: $SELECTED_MOTION_PATH${NC}"
-        echo "   Hint: ensure --motion-name matches a direct subfolder under --motion-data."
-        exit 1
+    if [ -d "$MOTION_DATA" ]; then
+        echo -e "${GREEN}✅ Found: $MOTION_DATA${NC}"
+    else
+        echo -e "${RED}❌ Missing directory: $MOTION_DATA${NC}"
+        MISSING_FILES=$((MISSING_FILES + 1))
     fi
-    MOTION_SELECT_TMP_DIR="$(mktemp -d /tmp/g1_deploy_motion_XXXXXX)"
-    ln -s "$SELECTED_MOTION_PATH" "$MOTION_SELECT_TMP_DIR/$MOTION_NAME"
-    EFFECTIVE_MOTION_DATA="$MOTION_SELECT_TMP_DIR"
-    echo -e "${GREEN}✅ Motion selected by name: $MOTION_NAME${NC}"
+
+    # Optional motion selection by name (single subfolder under --motion-data).
+    if [[ -n "$MOTION_NAME" ]]; then
+        SELECTED_MOTION_PATH="${MOTION_DATA%/}/$MOTION_NAME"
+        if [[ ! -d "$SELECTED_MOTION_PATH" ]]; then
+            echo -e "${RED}❌ Selected motion folder not found: $SELECTED_MOTION_PATH${NC}"
+            echo "   Hint: ensure --motion-name matches a direct subfolder under --motion-data."
+            exit 1
+        fi
+        MOTION_SELECT_TMP_DIR="$(mktemp -d /tmp/g1_deploy_motion_XXXXXX)"
+        ln -s "$SELECTED_MOTION_PATH" "$MOTION_SELECT_TMP_DIR/$MOTION_NAME"
+        EFFECTIVE_MOTION_DATA="$MOTION_SELECT_TMP_DIR"
+        echo -e "${GREEN}✅ Motion selected by name: $MOTION_NAME${NC}"
+    fi
 fi
 
 if [ $MISSING_FILES -gt 0 ]; then
