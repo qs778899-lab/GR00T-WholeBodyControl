@@ -130,6 +130,8 @@ class ReferenceMotionVisualizer:
         mj_model: mujoco.MjModel,
         mj_data: mujoco.MjData,
         body_joint_names: list[str],
+        left_hand_joint_names: list[str],
+        right_hand_joint_names: list[str],
         alpha: float,
         host: str,
         port: int,
@@ -137,6 +139,7 @@ class ReferenceMotionVisualizer:
         translation_mode: str,
         pose_port: int | None = None,
         pose_topic: str = "pose",
+        allow_midrun_realign: bool = False,
     ):
         self.mj_model = mj_model
         self.mj_data = mj_data
@@ -145,6 +148,7 @@ class ReferenceMotionVisualizer:
         self.enabled = True
         self._latest_pose = None
         self.translation_mode = translation_mode
+        self.allow_midrun_realign = bool(allow_midrun_realign)
         self._target_anchor_base_pos = None
         self._actual_anchor_base_pos = None
         self._prev_target_base_pos = None
@@ -170,6 +174,19 @@ class ReferenceMotionVisualizer:
 
         self.body_qpos_adrs = np.array(self.body_qpos_adrs, dtype=np.int32)
         self.body_qvel_adrs = np.array(self.body_qvel_adrs, dtype=np.int32)
+        self.ref_hand_qpos_adrs = []
+        self.actual_hand_qpos_adrs = []
+        for joint_name in list(left_hand_joint_names) + list(right_hand_joint_names):
+            actual_joint_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+            ref_joint_id = mujoco.mj_name2id(
+                mj_model, mujoco.mjtObj.mjOBJ_JOINT, f"{REFERENCE_NAME_PREFIX}{joint_name}"
+            )
+            if actual_joint_id == -1 or ref_joint_id == -1:
+                continue
+            self.actual_hand_qpos_adrs.append(mj_model.jnt_qposadr[actual_joint_id])
+            self.ref_hand_qpos_adrs.append(mj_model.jnt_qposadr[ref_joint_id])
+        self.actual_hand_qpos_adrs = np.array(self.actual_hand_qpos_adrs, dtype=np.int32)
+        self.ref_hand_qpos_adrs = np.array(self.ref_hand_qpos_adrs, dtype=np.int32)
         self.ref_geom_ids = np.array(get_subtree_geom_ids(mj_model, root_body_id), dtype=np.int32)
         self._shown_once = False
         self._last_pose_log_time = 0.0
@@ -256,8 +273,11 @@ class ReferenceMotionVisualizer:
                 source_frame_index = None
         if source_frame_index is not None and source_frame_index >= 0:
             if (
+                self.allow_midrun_realign
+                and (
                 self._last_debug_source_frame_index is not None
                 and source_frame_index < self._last_debug_source_frame_index
+                )
             ):
                 self.reset_anchor()
                 print("[ReferenceMotionVisualizer] reset translation anchor at new debug stream start")
@@ -304,9 +324,12 @@ class ReferenceMotionVisualizer:
         else:
             frame_index = None
         if (
+            self.allow_midrun_realign
+            and (
             frame_index is not None
             and self._last_pose_frame_index is not None
             and frame_index <= self._last_pose_frame_index
+            )
         ):
             self.reset_anchor()
             print("[ReferenceMotionVisualizer] re-anchored reference root at new stream start")
@@ -420,6 +443,8 @@ class ReferenceMotionVisualizer:
         self.mj_data.qpos[self.root_qpos_adr + 3 : self.root_qpos_adr + 7] = base_quat
         self.mj_data.qvel[self.root_qvel_adr : self.root_qvel_adr + 6] = 0.0
         self.mj_data.qpos[self.body_qpos_adrs] = body_q
+        if self.ref_hand_qpos_adrs.size > 0 and self.actual_hand_qpos_adrs.size > 0:
+            self.mj_data.qpos[self.ref_hand_qpos_adrs] = self.mj_data.qpos[self.actual_hand_qpos_adrs]
         self.mj_data.qvel[self.body_qvel_adrs] = 0.0
         return True
 
@@ -428,6 +453,9 @@ class ReferenceMotionVisualizer:
 
     def _maybe_refresh_translation_anchor(self, target_base_pos: np.ndarray):
         if self.translation_mode != "delta_aligned":
+            self._prev_target_base_pos = target_base_pos.copy()
+            return
+        if not self.allow_midrun_realign:
             self._prev_target_base_pos = target_base_pos.copy()
             return
         if self._target_anchor_base_pos is None or self._actual_anchor_base_pos is None:
@@ -768,12 +796,17 @@ class DefaultEnv:
                 mj_model=self.mj_model,
                 mj_data=self.mj_data,
                 body_joint_names=self.body_joint_names,
+                left_hand_joint_names=self.left_hand_joint_names,
+                right_hand_joint_names=self.right_hand_joint_names,
                 alpha=self.config.get("REFERENCE_MOTION_ALPHA", 0.35),
                 host=self.config.get("REFERENCE_MOTION_ZMQ_HOST", "127.0.0.1"),
                 port=int(self.config.get("REFERENCE_MOTION_ZMQ_PORT", 5608)),
                 topic=self.config.get("REFERENCE_MOTION_ZMQ_TOPIC", "g1_debug"),
                 pose_port=int(self.config.get("REFERENCE_MOTION_POSE_ZMQ_PORT", 5596)),
                 pose_topic=self.config.get("REFERENCE_MOTION_POSE_ZMQ_TOPIC", "pose"),
+                allow_midrun_realign=bool(
+                    self.config.get("REFERENCE_MOTION_ALLOW_MIDRUN_REALIGN", False)
+                ),
                 translation_mode=self.config.get(
                     "REFERENCE_MOTION_TRANSLATION_MODE", "delta_aligned"
                 ),

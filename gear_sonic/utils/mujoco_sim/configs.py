@@ -98,6 +98,7 @@ def override_wbc_config(
         "REFERENCE_MOTION_POSE_ZMQ_TOPIC": config.reference_motion_pose_zmq_topic,
         "REFERENCE_MOTION_ALPHA": config.reference_motion_alpha,
         "REFERENCE_MOTION_TRANSLATION_MODE": config.reference_motion_translation_mode,
+        "REFERENCE_MOTION_ALLOW_MIDRUN_REALIGN": config.reference_motion_allow_midrun_realign,
     }
 
     if missed_keys_only:
@@ -317,6 +318,9 @@ class BaseConfig(ArgsConfigTemplate):
 
     reference_motion_translation_mode: Literal["delta_aligned", "raw_global"] = "delta_aligned"
     """How reference root translation is visualized in MuJoCo."""
+
+    reference_motion_allow_midrun_realign: bool = False
+    """Whether reference root anchor can be re-aligned during a running clip."""
 
     commit_id: str = ""
     """Commit ID for the current codebase"""

@@ -5,17 +5,22 @@ bash install_scripts/install_mujoco_sim.sh
 
 ## prompt
 
+在这个文档GR00T-WholeBodyControl/dowcs/source/user_guide/training.md有提到isaacsim eval包括metrics的计算，在代码库中isaacsim eval这条链路，是不是先读取pkl文件作为robot motion raw data, 然后进行Load_motion的预处理环节，在预处理中可以利用fk_batch可以把 pose_aa + trans 转成 robot reference trajectory从30fps插值到50fps，这个robot reference trajectory是不是就是isaacsim eval分析计算中的ground truth，用于计算MPJPE等的.
+另外，分析在isaacsim eval的链路中，在计算metrics时是如何做时间对齐的，每一帧的referecen motion和actual motion是同一时刻的吗？
+答：在同一个“当前 step / 当前 reference frame”上比较的，可以认为是同一时刻对齐的。
+
 对官方sample data的pkl文件数据进行加载预处理后输入给robot motion encoder, 在mujoco中对universal control policy进行推理的整个链路，整个链路模仿isaacsim eval的。
 
 这个可视化既要能看出policy对pkl的动作的root position的tracking精度，也要可以看出track动作形态也就是不同关节角的效果。现在的问题是，为什么可视化出来的reference G1的位置不是按照refercence motion(pkl读取的)在移动，而是一直在原地？彻底解决这个问题
 
 ## TODO功能
 
+占内存问题还没有解决
+
 和lirui哥对一下代码库合并
 
-GT其实不是robot motion encoder,应该是robot motion raw data,这个和pkl文件的时什么关系，另外输出到底应该多少FPS 
+GT其实不是robot motion encoder的输入,应该是robot motion raw data,这个和pkl文件的时什么关系，另外输出到底应该多少FPS 
 
-start frame也它有问题，检查每一个运行参数
 
 human motion和robot control都作为输入，分析tracking精度
 
@@ -31,7 +36,7 @@ human motion和robot control都作为输入，分析tracking精度
   点击mujoco窗口，按一次9,让机器人落地
 
   MuJoCo 窗口显示什么是“物理仿真后的机器人状态”，不是单独的 decoder 可视化。链路是：deploy 输出关节命令 -> run_sim_loop 通过 DDS 收到低层命令 -> MuJoCo mj_step 更新状态 -> 窗口显示这。
-你把文档
+
 
 ### 2) 终端B: 启动 policy 推理（deploy）
 
@@ -72,6 +77,16 @@ human motion和robot control都作为输入，分析tracking精度
 
 ### 3) 终端C: 发送 official pkl motion  
 
+计算 metrics 需要哪些文件，最核心的是这几个：
+  1. motion_file
+     就是你的 sample_data/robot_filtered/...pkl。脚本用它重建 GT reference 序列。
+  2. q.csv
+     这是 actual motion，来自 deploy 记录的 post-physics joint state。离线脚本先读它，再做 FK。
+  3. source_frame_index.csv
+     这是严格时间对齐的关键。脚本会把 q.csv 每一行映射到 GT 的哪一帧。
+
+ 如何在q.csv 和 source_frame_index.csv的数据中写入source_frame_index: 通过 deploy 内部维护的 current_motion + current_frame 播放游标来判断的，sender端 stream 进来的每个 chunk 自带全局帧号
+
    source /home/lab/miniconda3/etc/profile.d/conda.sh
    conda activate sonic
    cd /home/lab/Desktop/GR00T-WholeBodyControl
@@ -82,10 +97,10 @@ human motion和robot control都作为输入，分析tracking精度
     --port 5556 \
     --target-fps 50 \
     --chunk-size 20 \
-    --start-frame 1215 \
-    --prepend-stand-frames 50 \
-    --blend-from-stand-frames 100 \
-    --initial-burst-frames 160 \
+    --start-frame 0 \
+    --prepend-stand-frames 10 \
+    --blend-from-stand-frames 10 \
+    --initial-burst-frames 20 \
     --realtime \
     --send-command \
     --use-isaacsim-app \
@@ -133,9 +148,9 @@ human motion和robot control都作为输入，分析tracking精度
     --no-motionlib-robot \
     --ignore-motion-playing-mask \
     --streamed-only \
-    --stream-start-frame 1215 \
-    --stream-prepend-stand-frames 50 \
-    --stream-blend-from-stand-frames 100 \
+    --stream-start-frame 0 \
+    --stream-prepend-stand-frames 10 \
+    --stream-blend-from-stand-frames 10 \
     --align-mode source_frame_index
 
    短动作示例：
