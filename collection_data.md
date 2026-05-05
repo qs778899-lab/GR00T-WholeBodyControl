@@ -33,7 +33,7 @@
 3. robot control和robot motion都会超调吗？
 4. rrd的robot control可视化的原理: 它只是让电机理想化转动这个关节角度，并没有在仿真器中运行，也就是没有考虑重力摩擦等真实阻力，只是简单replay
 5. VLA真机推理动作不流畅，很多碎小动作，目前是motion token 直接做平滑处理，效果不好。后面引入RTC。猜测可以：RTC 应该处理的是 解码后的 robot target/control 层，例如 joint target、end-effector target、root/body target、短 horizon trajectory，而不是直接处理离散 token。它会根据当前机器人状态，把 VLA 每次输出的跳变动作变成连续可执行动作。
-
+6. VLA的prompt要精细，训推的不完全相同也会影响单任务的训练推理效果
 
 待解决问题：
 脚踝：

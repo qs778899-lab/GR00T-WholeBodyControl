@@ -1,7 +1,0 @@
-Metadata for: streamed
-==============================
-
-Body part indexes:
-[0]
-
-Total timesteps: 65134
