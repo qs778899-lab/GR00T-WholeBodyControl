@@ -228,6 +228,31 @@ def _prepend_stand_transition(
     return new_pos, new_vel, new_quat
 
 
+def _send_pose_range(
+    pub: PackedPublisher,
+    *,
+    dof_pos: np.ndarray,
+    dof_vel: np.ndarray,
+    root_pos_w: np.ndarray,
+    root_quat: np.ndarray,
+    start: int,
+    end: int,
+    chunk_size: int,
+    catch_up: bool,
+) -> None:
+    for i in range(start, end, chunk_size):
+        j = min(i + chunk_size, end)
+        idx = np.arange(i, j, dtype=np.int64)
+        pub.send_pose(
+            joint_pos=dof_pos[i:j],
+            joint_vel=dof_vel[i:j],
+            body_pos_w=root_pos_w[i:j],
+            body_quat_w=root_quat[i:j],
+            frame_indices=idx,
+            catch_up=catch_up,
+        )
+
+
 def main() -> None:
     args = parse_args()
     seq = load_motionlib_sequence(
@@ -280,47 +305,63 @@ def main() -> None:
     )
     try:
         time.sleep(args.startup_delay)
+        frame_period = 1.0 / float(args.target_fps)
+        # Pre-buffer pose data before sending start=true so deploy never enters
+        # streamed-motion control with an empty reference window.
+        prestart_frames = min(
+            end,
+            max(
+                0,
+                args.initial_burst_frames,
+                args.chunk_size,
+                args.num_future_frames,
+            ),
+        )
+        if prestart_frames > start:
+            _send_pose_range(
+                pub,
+                dof_pos=dof_pos,
+                dof_vel=dof_vel,
+                root_pos_w=root_pos_w,
+                root_quat=root_quat,
+                start=start,
+                end=prestart_frames,
+                chunk_size=args.chunk_size,
+                catch_up=args.catch_up,
+            )
+            if args.verbose:
+                print(
+                    "[startup] prebuffered pose frames "
+                    f"{start}..{prestart_frames - 1} before start command"
+                )
+
         last_command_heartbeat = time.monotonic()
         if args.send_command:
             for _ in range(max(1, args.command_repeat)):
                 pub.send_command(start=True, stop=False, planner=False)
                 time.sleep(max(0.0, args.command_interval))
+            # Give the command subscriber a short window to process the mode
+            # switch after pose data is already buffered.
             time.sleep(0.1)
             last_command_heartbeat = time.monotonic()
-        frame_period = 1.0 / float(args.target_fps)
 
-        burst_end = min(end, start + max(0, args.initial_burst_frames))
-        for i in range(start, burst_end, args.chunk_size):
-            j = min(i + args.chunk_size, burst_end)
-            idx = np.arange(i, j, dtype=np.int64)
-            if args.send_command and args.command_heartbeat_interval > 0.0:
-                now = time.monotonic()
-                if now - last_command_heartbeat >= args.command_heartbeat_interval:
-                    pub.send_command(start=True, stop=False, planner=False)
-                    last_command_heartbeat = now
-            pub.send_pose(
-                joint_pos=dof_pos[i:j],
-                joint_vel=dof_vel[i:j],
-                body_pos_w=root_pos_w[i:j],
-                body_quat_w=root_quat[i:j],
-                frame_indices=idx,
-                catch_up=args.catch_up,
-            )
-
+        burst_end = min(end, max(prestart_frames, start + max(0, args.initial_burst_frames)))
         for i in range(burst_end, end, args.chunk_size):
             j = min(i + args.chunk_size, end)
-            idx = np.arange(i, j, dtype=np.int64)
             if args.send_command and args.command_heartbeat_interval > 0.0:
                 now = time.monotonic()
                 if now - last_command_heartbeat >= args.command_heartbeat_interval:
                     pub.send_command(start=True, stop=False, planner=False)
                     last_command_heartbeat = now
-            pub.send_pose(
-                joint_pos=dof_pos[i:j],
-                joint_vel=dof_vel[i:j],
-                body_pos_w=root_pos_w[i:j],
-                body_quat_w=root_quat[i:j],
-                frame_indices=idx,
+            _send_pose_range(
+                pub,
+                dof_pos=dof_pos,
+                dof_vel=dof_vel,
+                root_pos_w=root_pos_w,
+                root_quat=root_quat,
+                start=i,
+                end=j,
+                chunk_size=args.chunk_size,
                 catch_up=args.catch_up,
             )
             if args.realtime:

@@ -124,7 +124,7 @@ motionlib的作用：
     --chunk-size 20 \
     --realtime \
     --send-command \
-    --use-isaacsim-app
+    --use-isaacsim-app 
 
     python tools/sonic_eval/stream_motionlib_to_deploy.py \
     --motion-file sample_data/robot_filtered/210531/pick_lowplace.pkl \

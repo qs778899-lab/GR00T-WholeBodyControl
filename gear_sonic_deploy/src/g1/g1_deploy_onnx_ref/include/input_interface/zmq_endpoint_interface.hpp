@@ -596,6 +596,13 @@ public:
       return static_cast<int64_t>(stream_window_start_) +
              static_cast<int64_t>(last_frame_step_) * static_cast<int64_t>(current_frame);
     }
+
+    bool HasUsableStreamedMotion() const {
+      return use_zmq_stream &&
+             streamed_motion_ &&
+             streamed_motion_->timesteps > 0 &&
+             last_receive_time_.has_value();
+    }
     
 private:
     /// Reset the streamed motion buffer, merger state, and protocol version.
