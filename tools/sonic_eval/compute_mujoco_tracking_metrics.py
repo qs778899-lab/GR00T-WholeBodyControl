@@ -182,6 +182,37 @@ def _mean_or_zero(x: np.ndarray) -> float:
     return float(np.mean(x))
 
 
+def _body_position_summary(
+    actual_body_pos: np.ndarray,
+    ref_body_pos: np.ndarray,
+    body_names: list[str],
+) -> dict[str, dict[str, Any]]:
+    if actual_body_pos.shape != ref_body_pos.shape:
+        raise ValueError(
+            f"actual/ref body position shape mismatch: {actual_body_pos.shape} vs {ref_body_pos.shape}"
+        )
+    if actual_body_pos.ndim != 3 or actual_body_pos.shape[1] != len(body_names) or actual_body_pos.shape[2] != 3:
+        raise ValueError(
+            f"unexpected body position shape {actual_body_pos.shape}; expected [T, {len(body_names)}, 3]"
+        )
+
+    diff = actual_body_pos - ref_body_pos
+    out: dict[str, dict[str, Any]] = {}
+    for j, name in enumerate(body_names):
+        actual_mean = np.mean(actual_body_pos[:, j, :], axis=0)
+        ref_mean = np.mean(ref_body_pos[:, j, :], axis=0)
+        mean_delta = actual_mean - ref_mean
+        frame_err_mm = np.linalg.norm(diff[:, j, :], axis=-1) * 1000.0
+        out[name] = {
+            "actual_mean_xyz_m": actual_mean.astype(np.float64).tolist(),
+            "reference_mean_xyz_m": ref_mean.astype(np.float64).tolist(),
+            "mean_delta_xyz_m": mean_delta.astype(np.float64).tolist(),
+            "mean_err_mm": float(np.mean(frame_err_mm)) if frame_err_mm.size > 0 else 0.0,
+            "max_err_mm": float(np.max(frame_err_mm)) if frame_err_mm.size > 0 else 0.0,
+        }
+    return out
+
+
 @dataclass
 class GTData:
     q43_source: np.ndarray
@@ -1047,6 +1078,13 @@ def main() -> None:
             "step_sync_gt_comparison_source": None,
         }
     keypoint_err_mm = np.linalg.norm(pred_pos_arr - gt_pos_arr, axis=-1) * 1000.0  # [T, B]
+    body_position_summary = _body_position_summary(
+        actual_body_pos=pred_pos_arr,
+        ref_body_pos=gt_pos_arr,
+        body_names=BODY_FRAMES,
+    )
+    actual_global_mean = np.mean(pred_pos_arr.reshape(-1, 3), axis=0) if pred_pos_arr.size > 0 else np.zeros(3, dtype=np.float64)
+    ref_global_mean = np.mean(gt_pos_arr.reshape(-1, 3), axis=0) if gt_pos_arr.size > 0 else np.zeros(3, dtype=np.float64)
 
     # Build per-sequence format expected by compute_metrics_lite: list of [T, B, 3]
     metrics_all_raw, metrics_impl = _compute_metrics_with_smpl(
@@ -1202,6 +1240,12 @@ def main() -> None:
         "metrics_success": metrics_success,
         "all_metrics_dict": all_metrics_dict,
         "frame_metrics_dict": frame_metrics_dict,
+        "body_position_debug": {
+            "all_links_global_actual_mean_xyz_m": actual_global_mean.astype(np.float64).tolist(),
+            "all_links_global_reference_mean_xyz_m": ref_global_mean.astype(np.float64).tolist(),
+            "all_links_global_mean_delta_xyz_m": (actual_global_mean - ref_global_mean).astype(np.float64).tolist(),
+            "per_link": body_position_summary,
+        },
         "failed_metrics_dict": failed_metrics_dict,
         "failed_idxes": failed_idx,
         "failed_keys": failed_metrics_dict.get("motion_keys", []),

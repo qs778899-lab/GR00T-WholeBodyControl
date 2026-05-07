@@ -16,12 +16,23 @@ import zmq
 STATE_ZMQ_TOPIC = "g1_debug"
 CONFIG_ZMQ_TOPIC = "robot_config"
 DEFAULT_STATE_ZMQ_PORT = 5557
+_EXTRA_DATA_WARNED_TOPICS: set[str] = set()
 
 
 def _unpack_msgpack_zmq(raw: bytes, topic: str) -> dict:
     """Strip a ZMQ topic prefix and decode the msgpack payload."""
     payload = raw[len(topic):]
-    return msgpack.unpackb(payload, raw=False)
+    try:
+        return msgpack.unpackb(payload, raw=False)
+    except msgpack.ExtraData as exc:
+        if topic not in _EXTRA_DATA_WARNED_TOPICS:
+            _EXTRA_DATA_WARNED_TOPICS.add(topic)
+            print(
+                "[ZMQStateSubscriber] warning: msgpack payload has trailing bytes "
+                f"for topic '{topic}'; using first object only "
+                f"(payload_bytes={len(payload)}, extra_bytes={len(exc.extra)})"
+            )
+        return exc.unpacked
 
 
 def _convert_lists_to_numpy(data: dict) -> dict:

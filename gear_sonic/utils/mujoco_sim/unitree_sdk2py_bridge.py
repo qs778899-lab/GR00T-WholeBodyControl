@@ -7,6 +7,7 @@ so the WBC policy sees the sim as a real robot.
 
 import sys
 import threading
+import time
 from typing import Dict, Tuple
 
 import numpy as np
@@ -106,6 +107,10 @@ class UnitreeSdk2Bridge:
         )
         self.wireless_controller_puber.Init()
 
+        self._lowstate_publish_count = 0
+        self._last_lowstate_publish_log_time = 0.0
+        self._last_lowstate_tick = None
+
         # joystick
         self.key_map = {
             "R1": 0,
@@ -201,6 +206,8 @@ class UnitreeSdk2Bridge:
             raise NotImplementedError("Frame sensor data is not implemented yet.")
         self.low_state.tick = int(obs["time"] * 1e3)
         self.low_state_puber.Write(self.low_state)
+        self._lowstate_publish_count += 1
+        self._last_lowstate_tick = int(self.low_state.tick)
 
         self.odo_state.tick = int(obs["time"] * 1e3)
         self.odo_state_puber.Write(self.odo_state)
@@ -217,6 +224,16 @@ class UnitreeSdk2Bridge:
             self.right_hand_state.motor_state[i].q = obs["right_hand_q"][i]
             self.right_hand_state.motor_state[i].dq = obs["right_hand_dq"][i]
         self.right_hand_state_puber.Write(self.right_hand_state)
+
+        now = time.monotonic()
+        if now - self._last_lowstate_publish_log_time >= 1.0:
+            self._last_lowstate_publish_log_time = now
+            print(
+                "[UnitreeSdk2Bridge] lowstate publish heartbeat "
+                f"count={self._lowstate_publish_count} "
+                f"tick_ms={self._last_lowstate_tick} "
+                f"sim_time={float(obs['time']):.3f}"
+            )
 
     def GetAction(self) -> Tuple[np.ndarray, bool, bool]:
         with self.low_cmd_lock:

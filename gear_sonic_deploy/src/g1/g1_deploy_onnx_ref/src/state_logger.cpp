@@ -62,6 +62,7 @@ StateLogger::StateLogger(std::string csv_dir, size_t ring_capacity, int num_join
   sink_encoder_mode_(enable_csv, csv_path_, "encoder_mode", "encoder_mode", FileSink::HeaderType::VECTOR),
   sink_motion_playing_(enable_csv, csv_path_, "motion_playing", "playing", FileSink::HeaderType::VECTOR),
   sink_source_frame_index_(enable_csv, csv_path_, "source_frame_index", "source_frame_index", FileSink::HeaderType::VECTOR),
+  sink_applied_source_frame_index_(enable_csv, csv_path_, "applied_source_frame_index", "applied_source_frame_index", FileSink::HeaderType::VECTOR),
 
   robot_config_(std::move(robot_config)) {
   // Open motion_name CSV file
@@ -174,6 +175,33 @@ bool StateLogger::LogPostState(const std::span<double>& token_state,
     appendTokenStateToCSV_(newest);
   }
 
+  return true;
+}
+
+bool StateLogger::UpdateAppliedSourceFrameIndex(int64_t applied_source_frame_index) {
+  std::lock_guard<std::mutex> lock(ring_mutex_);
+  if (size_ == 0) {
+    return false;
+  }
+  size_t newest_idx = (start_ + size_ - 1) % capacity_;
+  Entry& newest = ring_[newest_idx];
+  newest.applied_source_frame_index = applied_source_frame_index;
+
+  if (!enable_csv_ || !newest.has_post_state_data) {
+    return true;
+  }
+
+  const double t_ms = toMillisNormalized_(newest.timestamp);
+  const double t_realtime_ms = std::chrono::duration<double, std::milli>(newest.timestamp.time_since_epoch()).count();
+  const double t_monotonic_ms = std::chrono::duration<double, std::milli>(newest.timestamp_monotonic.time_since_epoch()).count();
+  std::array<double, 1> applied_source_frame_idx_arr = {static_cast<double>(newest.applied_source_frame_index)};
+  sink_applied_source_frame_index_.writeLine(
+      newest.index,
+      t_ms,
+      t_realtime_ms,
+      t_monotonic_ms,
+      newest.ros_timestamp,
+      std::span(applied_source_frame_idx_arr));
   return true;
 }
 
@@ -348,6 +376,15 @@ void StateLogger::appendTokenStateToCSV_(const Entry& e) {
   // Write source frame index (convert int64 to double for FileSink)
   std::array<double, 1> source_frame_idx_arr = {static_cast<double>(e.source_frame_index)};
   sink_source_frame_index_.writeLine(e.index, t_ms, t_realtime_ms, t_monotonic_ms, e.ros_timestamp, std::span(source_frame_idx_arr));
+
+  std::array<double, 1> applied_source_frame_idx_arr = {static_cast<double>(e.applied_source_frame_index)};
+  sink_applied_source_frame_index_.writeLine(
+      e.index,
+      t_ms,
+      t_realtime_ms,
+      t_monotonic_ms,
+      e.ros_timestamp,
+      std::span(applied_source_frame_idx_arr));
   
   // Write motion name to separate file (custom string handling)
   writeMotionNameLine_(e.index, t_ms, t_realtime_ms, t_monotonic_ms, e.ros_timestamp, e.motion_name);

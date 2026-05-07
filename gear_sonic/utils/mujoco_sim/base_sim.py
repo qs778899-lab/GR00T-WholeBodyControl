@@ -335,7 +335,9 @@ class ReferenceMotionVisualizer:
             self._advance_display_pose()
 
     def _consume_debug_msg(self, msg: dict) -> bool:
-        source_frame_index = msg.get("source_frame_index")
+        source_frame_index = msg.get("applied_source_frame_index")
+        if source_frame_index is None:
+            source_frame_index = msg.get("source_frame_index")
         if source_frame_index is not None:
             try:
                 source_frame_index = int(source_frame_index)
@@ -692,8 +694,10 @@ class ReferenceMotionVisualizer:
     def compute_exact_reference_body_pos(
         self,
         body_ids: np.ndarray,
+        ref_body_ids: np.ndarray | None = None,
     ) -> tuple[int | None, np.ndarray | None]:
-        return self._compute_reference_body_pos(body_ids, apply_visual_alignment=True)
+        target_body_ids = ref_body_ids if ref_body_ids is not None else body_ids
+        return self._compute_reference_body_pos(target_body_ids, apply_visual_alignment=True)
 
     def get_control_tick_reference_pose(
         self,
@@ -863,6 +867,7 @@ class DefaultEnv:
         self.reference_visualizer = None
         self.generated_scene_path = None
         self._sim2sim_eval_logger = None
+        self._last_sim_step_perf_log_time = 0.0
 
         self.init_scene()
         self._init_sim2sim_eval_logger()
@@ -1322,14 +1327,18 @@ class DefaultEnv:
         return obs
 
     def sim_step(self):
+        step_wall_start = time.monotonic()
         is_new_control_frame = False
         if self.unitree_bridge is not None:
             try:
                 _, _, is_new_control_frame = self.unitree_bridge.GetAction()
             except Exception:
                 is_new_control_frame = False
+        t_after_get_action = time.monotonic()
         self.obs = self.prepare_obs()
+        t_after_prepare_obs = time.monotonic()
         self.unitree_bridge.PublishLowState(self.obs)
+        t_after_publish_lowstate = time.monotonic()
         if self.unitree_bridge.joystick:
             self.unitree_bridge.PublishWirelessController()
         if self.elastic_band:
@@ -1369,6 +1378,7 @@ class DefaultEnv:
         else:
             self.mj_data.ctrl = self.torques
         mujoco.mj_step(self.mj_model, self.mj_data)
+        t_after_mj_step = time.monotonic()
         actual_body_pos_pre_ref = None
         if self._sim2sim_eval_logger is not None:
             self._sim2sim_eval_logger._resolve_body_ids(self.mj_model)
@@ -1384,8 +1394,25 @@ class DefaultEnv:
             actual_body_pos=actual_body_pos_pre_ref,
             write_step_sync=bool(is_new_control_frame),
         )
+        t_after_logging = time.monotonic()
 
         self.check_fall()
+        t_after_check_fall = time.monotonic()
+
+        now = t_after_check_fall
+        if now - self._last_sim_step_perf_log_time >= 1.0:
+            self._last_sim_step_perf_log_time = now
+            print(
+                "[BaseSim] sim_step heartbeat "
+                f"sim_time={float(self.mj_data.time):.3f} "
+                f"is_new_control_frame={int(bool(is_new_control_frame))} "
+                f"get_action_ms={(t_after_get_action - step_wall_start) * 1e3:.2f} "
+                f"prepare_obs_ms={(t_after_prepare_obs - t_after_get_action) * 1e3:.2f} "
+                f"publish_lowstate_ms={(t_after_publish_lowstate - t_after_prepare_obs) * 1e3:.2f} "
+                f"mj_step_ms={(t_after_mj_step - t_after_publish_lowstate) * 1e3:.2f} "
+                f"post_step_ms={(t_after_check_fall - t_after_mj_step) * 1e3:.2f} "
+                f"total_ms={(t_after_check_fall - step_wall_start) * 1e3:.2f}"
+            )
 
     def _log_sim2sim_eval_frame(
         self,
@@ -1396,9 +1423,11 @@ class DefaultEnv:
             return
 
         body_ids = None
+        ref_body_ids = None
         if self._sim2sim_eval_logger is not None:
             self._sim2sim_eval_logger._resolve_body_ids(self.mj_model)
             body_ids = self._sim2sim_eval_logger.body_ids
+            ref_body_ids = self._sim2sim_eval_logger.ref_body_ids
         elif self._tracking_overlay is not None:
             self._tracking_overlay._resolve_body_ids(self.mj_model)
             body_ids = self._tracking_overlay._body_ids
@@ -1411,7 +1440,9 @@ class DefaultEnv:
         source_frame_index = None
         ref_body_pos = None
         if self.reference_visualizer is not None and body_ids is not None:
-            source_frame_index, ref_body_pos = self.reference_visualizer.compute_exact_reference_body_pos(body_ids)
+            source_frame_index, ref_body_pos = self.reference_visualizer.compute_exact_reference_body_pos(
+                body_ids, ref_body_ids=ref_body_ids
+            )
 
         if self._tracking_overlay is not None:
             self._tracking_overlay.update(
@@ -1558,6 +1589,7 @@ class Sim2SimEvalLogger:
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self._row_index = 0
         self._body_ids = None
+        self._ref_body_ids = None
         self._last_step_sync_source_frame_index = None
 
         self._body_pos_file = open(self.logs_dir / "body_pos_w_14.csv", "w", newline="", encoding="utf-8")
@@ -1581,21 +1613,42 @@ class Sim2SimEvalLogger:
             for name in self.body_names:
                 step_sync_header.extend([f"{prefix}_{name}_x", f"{prefix}_{name}_y", f"{prefix}_{name}_z"])
         self._step_sync_writer.writerow(step_sync_header)
+        print(f"[Sim2SimEvalLogger] writing body_pos_w_14.csv: {self.logs_dir / 'body_pos_w_14.csv'}")
+        print(
+            "[Sim2SimEvalLogger] writing sim2sim_step_sync_body_pos_w_14.csv: "
+            f"{self.logs_dir / 'sim2sim_step_sync_body_pos_w_14.csv'}"
+        )
+        print(
+            "[Sim2SimEvalLogger] writing sim_source_frame_index.csv: "
+            f"{self.logs_dir / 'sim_source_frame_index.csv'}"
+        )
 
     def _resolve_body_ids(self, mj_model: mujoco.MjModel):
         if self._body_ids is not None:
             return
         body_ids = []
+        ref_body_ids = []
         for name in self.body_names:
             body_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, name)
             if body_id == -1:
                 raise ValueError(f"MuJoCo body not found for sim2sim eval logging: {name}")
             body_ids.append(body_id)
+            ref_name = f"{REFERENCE_NAME_PREFIX}{name}"
+            ref_body_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, ref_name)
+            ref_body_ids.append(ref_body_id)
         self._body_ids = np.asarray(body_ids, dtype=np.int32)
+        if all(bid != -1 for bid in ref_body_ids):
+            self._ref_body_ids = np.asarray(ref_body_ids, dtype=np.int32)
+        else:
+            self._ref_body_ids = None
 
     @property
     def body_ids(self) -> np.ndarray | None:
         return self._body_ids
+
+    @property
+    def ref_body_ids(self) -> np.ndarray | None:
+        return self._ref_body_ids
 
     def log(
         self,

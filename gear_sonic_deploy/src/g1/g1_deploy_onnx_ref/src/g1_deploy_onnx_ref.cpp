@@ -294,6 +294,9 @@ class G1Deploy {
     // =========================================================================
     static constexpr std::chrono::milliseconds LOW_STATE_LATE_THRESHOLD{50};
     static constexpr std::chrono::milliseconds LOW_STATE_ABSENT_THRESHOLD{500};
+    static constexpr std::chrono::milliseconds LOW_STATE_ABSENT_THRESHOLD_SIM{5000};
+    std::chrono::steady_clock::time_point last_lowstate_rx_log_time_ = std::chrono::steady_clock::time_point{};
+    uint64_t lowstate_rx_count_ = 0;
     ProgramState program_state_;
     std::array<double, G1_NUM_MOTOR> last_action;
     std::array<double, 7> last_left_hand_action;
@@ -2595,6 +2598,10 @@ class G1Deploy {
     }
 
     void SetThreadPriority() {
+      if (disable_crc_check_) {
+        std::cout << "[INFO] Simulation mode detected: skip SCHED_FIFO/CPU0 pinning for main thread" << std::endl;
+        return;
+      }
       struct sched_param param;
       param.sched_priority = sched_get_priority_max(SCHED_FIFO);
       pthread_setschedparam(pthread_self(), SCHED_FIFO, &param);
@@ -2635,6 +2642,16 @@ class G1Deploy {
       }
 
       low_state_buffer_.SetData(low_state);
+      lowstate_rx_count_++;
+
+      auto now = std::chrono::steady_clock::now();
+      if (last_lowstate_rx_log_time_ == std::chrono::steady_clock::time_point{} ||
+          now - last_lowstate_rx_log_time_ >= std::chrono::seconds(1)) {
+        last_lowstate_rx_log_time_ = now;
+        std::cout << "[LowStateHandler] rx heartbeat count=" << lowstate_rx_count_
+                  << " tick_ms=" << low_state.tick()
+                  << " mode_machine=" << unsigned(low_state.mode_machine()) << std::endl;
+      }
 
       // update mode machine
       if (mode_machine_ != low_state.mode_machine()) {
@@ -2768,8 +2785,30 @@ class G1Deploy {
       }
 
       auto now = std::chrono::steady_clock::now();
-      if (now - low_state_data.timestamp > LOW_STATE_ABSENT_THRESHOLD) {
-        std::cout << "[ERROR] Lost LowState data connection from robot!" << std::endl;
+      const auto age = std::chrono::duration_cast<std::chrono::milliseconds>(now - low_state_data.timestamp);
+      if (disable_crc_check_) {
+        if (age > LOW_STATE_ABSENT_THRESHOLD_SIM) {
+          std::cout << "[ERROR] Lost LowState data connection from MuJoCo sim! age_ms=" << age.count()
+                    << " threshold_ms=" << LOW_STATE_ABSENT_THRESHOLD_SIM.count() << std::endl;
+          return false;
+        }
+        static int sim_lowstate_late_warn_count = 0;
+        if (age > LOW_STATE_ABSENT_THRESHOLD) {
+          if (sim_lowstate_late_warn_count % 50 == 0) {
+            std::cout << "[WARN] LowState update is late in sim mode. age_ms=" << age.count()
+                      << " soft_threshold_ms=" << LOW_STATE_ABSENT_THRESHOLD.count()
+                      << " hard_threshold_ms=" << LOW_STATE_ABSENT_THRESHOLD_SIM.count() << std::endl;
+          }
+          sim_lowstate_late_warn_count++;
+        } else {
+          sim_lowstate_late_warn_count = 0;
+        }
+        return true;
+      }
+
+      if (age > LOW_STATE_ABSENT_THRESHOLD) {
+        std::cout << "[ERROR] Lost LowState data connection from robot! age_ms=" << age.count()
+                  << " threshold_ms=" << LOW_STATE_ABSENT_THRESHOLD.count() << std::endl;
         return false;
       }
 
@@ -3957,6 +3996,19 @@ class G1Deploy {
             std::cout << "Stopping control system." << std::endl;
             operator_state.stop = true;
             return;
+          }
+          if (state_logger_) {
+            int64_t applied_source_frame_index = -1;
+            if (input_interface_) {
+              auto maybe_applied_source_idx =
+                  input_interface_->GetSourceFrameIndex(current_motion_copy.get(), current_frame_copy);
+              if (maybe_applied_source_idx.has_value()) {
+                applied_source_frame_index = *maybe_applied_source_idx;
+              }
+            }
+            if (!state_logger_->UpdateAppliedSourceFrameIndex(applied_source_frame_index)) {
+              std::cerr << "[WARNING] Failed to update applied_source_frame_index in state logger" << std::endl;
+            }
           }
           auto motor_command_end_time = std::chrono::steady_clock::now();
 

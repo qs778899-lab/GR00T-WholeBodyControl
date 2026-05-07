@@ -36,7 +36,8 @@
  *   encoder_mode.csv    | Encoder mode per tick
  *   motion_name.csv     | Active motion name per tick
  *   motion_playing.csv  | Play/pause state per tick
- *   source_frame_index.csv | Source stream frame index (for strict GT alignment)
+ *   source_frame_index.csv | Observation/reference cursor frame index
+ *   applied_source_frame_index.csv | Action-applied source frame index (for strict GT alignment)
  *   metadata.json       | Robot config + logging parameters
  *
  * Times are normalised so the first record is 0.0 ms.
@@ -118,7 +119,8 @@ class StateLogger {
     int encoder_mode = -2;          // Encoder mode when token state was generated; -2: no token state, -1: need token but no encoder, 0,1,2,...: encoder mode.
     std::string motion_name = "";   // Name of the motion sequence being executed
     bool play = false;              // Operator play state (controls motion playback)
-    int64_t source_frame_index = -1; // Source timeline frame index (e.g., ZMQ frame_index), -1 if unavailable
+    int64_t source_frame_index = -1; // Observation/reference cursor frame index.
+    int64_t applied_source_frame_index = -1; // Source frame index for the action generated this tick.
   };
 
   // Logging period (seconds). Informational only; logger does not enforce cadence.
@@ -190,6 +192,8 @@ class StateLogger {
                     bool play = false,
                     int64_t source_frame_index = -1);
 
+  bool UpdateAppliedSourceFrameIndex(int64_t applied_source_frame_index = -1);
+
   size_t capacity() const;
   size_t size() const;
 
@@ -256,6 +260,7 @@ class StateLogger {
   FileSink sink_encoder_mode_;     // Post-state data (encoder mode)
   FileSink sink_motion_playing_;   // Post-state data (motion playing state)
   FileSink sink_source_frame_index_; // Post-state data (source frame index)
+  FileSink sink_applied_source_frame_index_; // Post-state data (action-applied source frame index)
   
   // Custom sink for motion_name (string data)
   std::ofstream motion_name_file_;
