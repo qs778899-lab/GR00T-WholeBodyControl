@@ -141,7 +141,12 @@ class PackedZMQSubscriber:
 
 
 class ReferenceMotionVisualizer:
-    """Drive a translucent reference robot from the pose stream or deploy debug pose."""
+    """Drive a translucent reference robot from the raw pose stream.
+
+    The deploy debug topic is used only for `source_frame_index` timing sync.
+    Reference pose content for both visualization and strict metrics GT must
+    come from the original `pose` stream, not deploy's heading-corrected target.
+    """
 
     def __init__(
         self,
@@ -224,10 +229,17 @@ class ReferenceMotionVisualizer:
         self._current_applied_source_frame_index = None
         self._current_exact_pose = None
         self._current_display_pose = None
+        self._latest_control_tick_reference_pose = None
+        self._display_frame_index = None
+        self._display_frame_phase = 0.0
+        self._last_display_update_time = time.monotonic()
+        self._display_fps = 50.0
+        self._display_debug_lag_frames = 1
         self._pose_frame_buffer = OrderedDict()
         self._max_pose_frame_buffer = 4096
         self._pending_debug_source_frames = deque()
         self._translation_anchor_ready = False
+        self._raw_pose_stream_seen = False
         self.set_visible(False)
 
         self.debug_subscriber = ZMQStateSubscriber(host=host, port=port, topic=topic, conflate=False)
@@ -270,9 +282,14 @@ class ReferenceMotionVisualizer:
         self._current_applied_source_frame_index = None
         self._current_exact_pose = None
         self._current_display_pose = None
+        self._latest_control_tick_reference_pose = None
+        self._display_frame_index = None
+        self._display_frame_phase = 0.0
+        self._last_display_update_time = time.monotonic()
         self._pose_frame_buffer.clear()
         self._pending_debug_source_frames.clear()
         self._translation_anchor_ready = False
+        self._raw_pose_stream_seen = False
         self._shown_once = False
         self.set_visible(False)
 
@@ -295,8 +312,8 @@ class ReferenceMotionVisualizer:
 
     def poll(self):
         # Always ingest the raw pose stream first so we keep a frame-indexed buffer
-        # of the original streamed reference. Debug then tells us which source frame
-        # deploy is currently consuming, and we render that exact pose.
+        # of the original streamed reference. Debug is only a timing/sync channel
+        # telling us which source frame deploy is currently consuming.
         pose_msg = self.pose_subscriber.get_msg() if self.pose_subscriber is not None else None
         if pose_msg is not None:
             self._consume_pose_stream_msg(pose_msg)
@@ -306,8 +323,7 @@ class ReferenceMotionVisualizer:
             for debug_msg in debug_msgs:
                 self._consume_debug_msg(debug_msg)
 
-        if self._advance_pending_debug_frame():
-            return
+        self._advance_pending_debug_frame()
 
         # If deploy has not published a source frame yet, fall back to the newest
         # buffered pose so the reference still appears before control starts.
@@ -315,17 +331,10 @@ class ReferenceMotionVisualizer:
             pose = self._get_latest_buffered_pose()
             if pose is not None:
                 self._set_latest_pose(*pose)
+        else:
+            self._advance_display_pose()
 
     def _consume_debug_msg(self, msg: dict) -> bool:
-        required = ("base_trans_target", "base_quat_target", "body_q_target")
-        if not all(key in msg for key in required):
-            return False
-
-        base_pos = np.asarray(msg["base_trans_target"], dtype=np.float64)
-        base_quat = np.asarray(msg["base_quat_target"], dtype=np.float64)
-        body_q = np.asarray(msg["body_q_target"], dtype=np.float64)
-        if base_pos.shape != (3,) or base_quat.shape != (4,) or body_q.shape != (29,):
-            return False
         source_frame_index = msg.get("source_frame_index")
         if source_frame_index is not None:
             try:
@@ -333,6 +342,24 @@ class ReferenceMotionVisualizer:
             except (TypeError, ValueError):
                 source_frame_index = None
         if source_frame_index is not None and source_frame_index >= 0:
+            raw_required = ("ref_base_trans_raw", "ref_base_quat_raw", "ref_body_q_raw")
+            if all(key in msg for key in raw_required):
+                raw_base_pos = np.asarray(msg["ref_base_trans_raw"], dtype=np.float64)
+                raw_base_quat = np.asarray(msg["ref_base_quat_raw"], dtype=np.float64)
+                raw_body_q = np.asarray(msg["ref_body_q_raw"], dtype=np.float64)
+                if raw_base_pos.shape == (3,) and raw_base_quat.shape == (4,) and raw_body_q.shape == (29,):
+                    exact_pose = (
+                        raw_base_pos.copy(),
+                        raw_base_quat.copy(),
+                        raw_body_q.copy(),
+                    )
+                    self._latest_control_tick_reference_pose = (
+                        int(source_frame_index),
+                        exact_pose,
+                    )
+                    self._current_applied_source_frame_index = int(source_frame_index)
+                    self._current_exact_pose = exact_pose
+                    self._set_latest_pose(*exact_pose, synchronized=True)
             if (
                 self.allow_midrun_realign
                 and (
@@ -344,9 +371,25 @@ class ReferenceMotionVisualizer:
                 print("[ReferenceMotionVisualizer] reset translation anchor at new debug stream start")
             self._last_debug_source_frame_index = source_frame_index
             self._latest_debug_source_frame_index = source_frame_index
-            self._enqueue_debug_source_frame(source_frame_index)
+            if self._latest_control_tick_reference_pose is None or self._latest_control_tick_reference_pose[0] != int(source_frame_index):
+                self._enqueue_debug_source_frame(source_frame_index)
             return True
-        self._set_latest_pose(base_pos, base_quat, body_q, synchronized=source_frame_index is not None and source_frame_index >= 0)
+
+        # Ignore deploy's heading/root-corrected target pose content when a raw
+        # pose stream exists. It is not GT and should not drive reference state.
+        if self.pose_subscriber is not None or self._raw_pose_stream_seen:
+            return bool("source_frame_index" in msg)
+
+        # Fallback only when no raw pose stream is available at all.
+        required = ("base_trans_target", "base_quat_target", "body_q_target")
+        if not all(key in msg for key in required):
+            return False
+        base_pos = np.asarray(msg["base_trans_target"], dtype=np.float64)
+        base_quat = np.asarray(msg["base_quat_target"], dtype=np.float64)
+        body_q = np.asarray(msg["body_q_target"], dtype=np.float64)
+        if base_pos.shape != (3,) or base_quat.shape != (4,) or body_q.shape != (29,):
+            return False
+        self._set_latest_pose(base_pos, base_quat, body_q, synchronized=False)
         return True
 
     def _consume_pose_stream_msg(self, msg: dict) -> bool:
@@ -369,6 +412,7 @@ class ReferenceMotionVisualizer:
             return False
         if not (body_pos.shape[0] == body_quat.shape[0] == body_q.shape[0]):
             return False
+        self._raw_pose_stream_seen = True
         body_q = body_q[:, G1_ISAACLAB_TO_MUJOCO_DOF]
 
         frame_index_arr = None
@@ -393,6 +437,8 @@ class ReferenceMotionVisualizer:
         self._last_pose_frame_index = frame_index
 
         if frame_index_arr is not None and frame_index_arr.size == body_pos.shape[0]:
+            if self._display_frame_index is None:
+                self._display_frame_index = int(frame_index_arr[0])
             for i, source_frame_index in enumerate(frame_index_arr.tolist()):
                 self._store_pose_frame(
                     int(source_frame_index),
@@ -405,6 +451,8 @@ class ReferenceMotionVisualizer:
             for i in range(body_pos.shape[0]):
                 inferred_index = start_idx + i if start_idx is not None else None
                 if inferred_index is not None:
+                    if self._display_frame_index is None:
+                        self._display_frame_index = int(inferred_index)
                     self._store_pose_frame(
                         int(inferred_index),
                         body_pos[i].copy(),
@@ -417,13 +465,11 @@ class ReferenceMotionVisualizer:
             if matched_pose is not None:
                 self._current_applied_source_frame_index = int(self._latest_debug_source_frame_index)
                 self._current_exact_pose = tuple(np.asarray(x, dtype=np.float64).copy() for x in matched_pose)
-                self._set_latest_pose(*matched_pose, synchronized=True)
-                return True
 
-        # Keep the reference visible using the latest raw streamed pose while we
-        # wait for an exact source-frame match. This is display-only: strict GT
-        # remains gated by _current_exact_pose/_current_applied_source_frame_index.
-        self._set_latest_pose(body_pos[-1], body_quat[-1], body_q[-1], synchronized=True)
+        # Update display immediately toward the latest debug-synchronized pose so
+        # reference timing stays close to the actual robot instead of free-running
+        # on a local playback clock.
+        self._advance_display_pose(force_pose=(body_pos[-1], body_quat[-1], body_q[-1]))
         return True
 
     def _enqueue_debug_source_frame(self, source_frame_index: int):
@@ -435,6 +481,8 @@ class ReferenceMotionVisualizer:
         self._pending_debug_source_frames.append(source_frame_index)
 
     def _advance_pending_debug_frame(self) -> bool:
+        if self._latest_control_tick_reference_pose is not None:
+            return False
         while self._pending_debug_source_frames:
             source_frame_index = int(self._pending_debug_source_frames[0])
             exact_pose = self._get_exact_pose_for_frame(source_frame_index)
@@ -443,7 +491,6 @@ class ReferenceMotionVisualizer:
             self._pending_debug_source_frames.popleft()
             self._current_applied_source_frame_index = source_frame_index
             self._current_exact_pose = tuple(np.asarray(x, dtype=np.float64).copy() for x in exact_pose)
-            self._set_latest_pose(*exact_pose, synchronized=True)
             return True
         return False
 
@@ -535,6 +582,50 @@ class ReferenceMotionVisualizer:
             self.set_visible(True)
             print("[ReferenceMotionVisualizer] reference pose stream detected")
 
+    def _advance_display_pose(self, force_pose: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None):
+        target_frame_index = None
+        if self._latest_debug_source_frame_index is not None:
+            target_frame_index = max(
+                0,
+                int(self._latest_debug_source_frame_index) - int(self._display_debug_lag_frames),
+            )
+        if target_frame_index is not None:
+            pose = self._get_buffered_pose_for_frame(target_frame_index)
+            if pose is not None:
+                self._display_frame_index = target_frame_index
+                self._display_frame_phase = 0.0
+                self._set_latest_pose(*pose, synchronized=True)
+                return
+
+        if force_pose is not None and self._display_frame_index is None:
+            self._set_latest_pose(*force_pose, synchronized=True)
+            return
+        if not self._pose_frame_buffer:
+            if force_pose is not None:
+                self._set_latest_pose(*force_pose, synchronized=True)
+            return
+
+        now = time.monotonic()
+        elapsed = max(0.0, now - self._last_display_update_time)
+        self._last_display_update_time = now
+        self._display_frame_phase += elapsed * self._display_fps
+
+        sorted_keys = list(self._pose_frame_buffer.keys())
+        if self._display_frame_index is None:
+            self._display_frame_index = int(sorted_keys[0])
+
+        steps = int(self._display_frame_phase)
+        if steps > 0:
+            self._display_frame_phase -= steps
+            latest_available = int(sorted_keys[-1])
+            self._display_frame_index = min(self._display_frame_index + steps, latest_available)
+
+        pose = self._get_buffered_pose_for_frame(int(self._display_frame_index))
+        if pose is None and force_pose is not None:
+            pose = force_pose
+        if pose is not None:
+            self._set_latest_pose(*pose, synchronized=True)
+
     def apply(self):
         if self._current_display_pose is None or not self.enabled:
             return False
@@ -553,17 +644,22 @@ class ReferenceMotionVisualizer:
         self._log_reference_debug_state(base_pos)
         return True
 
-    def compute_exact_reference_body_pos(
+    def _compute_reference_body_pos(
         self,
         body_ids: np.ndarray,
+        apply_visual_alignment: bool,
     ) -> tuple[int | None, np.ndarray | None]:
         if self._current_applied_source_frame_index is None or self._current_exact_pose is None:
             return None, None
 
         base_pos, base_quat, body_q = self._current_exact_pose
-        transformed_base_pos, transformed_base_quat = self._transform_reference_root_pose(base_pos, base_quat)
-        if transformed_base_pos is None:
-            return None, None
+        if apply_visual_alignment:
+            root_pos, root_quat = self._transform_reference_root_pose(base_pos, base_quat)
+            if root_pos is None:
+                return None, None
+        else:
+            root_pos = np.asarray(base_pos, dtype=np.float64).copy()
+            root_quat = np.asarray(base_quat, dtype=np.float64).copy()
         saved_root_qpos = self.mj_data.qpos[self.root_qpos_adr : self.root_qpos_adr + 7].copy()
         saved_root_qvel = self.mj_data.qvel[self.root_qvel_adr : self.root_qvel_adr + 6].copy()
         saved_body_qpos = self.mj_data.qpos[self.body_qpos_adrs].copy()
@@ -573,8 +669,8 @@ class ReferenceMotionVisualizer:
             saved_hand_qpos = self.mj_data.qpos[self.ref_hand_qpos_adrs].copy()
 
         try:
-            self.mj_data.qpos[self.root_qpos_adr : self.root_qpos_adr + 3] = transformed_base_pos
-            self.mj_data.qpos[self.root_qpos_adr + 3 : self.root_qpos_adr + 7] = transformed_base_quat
+            self.mj_data.qpos[self.root_qpos_adr : self.root_qpos_adr + 3] = root_pos
+            self.mj_data.qpos[self.root_qpos_adr + 3 : self.root_qpos_adr + 7] = root_quat
             self.mj_data.qvel[self.root_qvel_adr : self.root_qvel_adr + 6] = 0.0
             self.mj_data.qpos[self.body_qpos_adrs] = body_q
             self.mj_data.qvel[self.body_qvel_adrs] = 0.0
@@ -592,6 +688,20 @@ class ReferenceMotionVisualizer:
             mujoco.mj_forward(self.mj_model, self.mj_data)
 
         return self._current_applied_source_frame_index, body_pos
+
+    def compute_exact_reference_body_pos(
+        self,
+        body_ids: np.ndarray,
+    ) -> tuple[int | None, np.ndarray | None]:
+        return self._compute_reference_body_pos(body_ids, apply_visual_alignment=True)
+
+    def get_control_tick_reference_pose(
+        self,
+    ) -> tuple[int | None, tuple[np.ndarray, np.ndarray, np.ndarray] | None]:
+        if self._latest_control_tick_reference_pose is None:
+            return None, None
+        source_frame_index, pose = self._latest_control_tick_reference_pose
+        return int(source_frame_index), tuple(np.asarray(x, dtype=np.float64).copy() for x in pose)
 
     def _get_actual_robot_root_pos(self) -> np.ndarray:
         return self.mj_data.qpos[:3].copy()
@@ -924,6 +1034,10 @@ class DefaultEnv:
             self.viewer.cam.lookat = np.array([0, 0, 0.5])
             self.viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
             self.viewer.cam.trackbodyid = self.mj_model.body("pelvis").id
+            try:
+                self.viewer.user_scn.ngeom = 0
+            except Exception:
+                pass
 
         self.body_joint_index = []
         self.left_hand_index = []
@@ -959,6 +1073,9 @@ class DefaultEnv:
         self.right_hand_index = np.array(self.right_hand_index)
 
         self._init_reference_visualizer()
+        self._tracking_overlay = (
+            Sim2SimTrackingOverlay(self.viewer, SIM2SIM_BODY_FRAMES) if self.viewer is not None else None
+        )
 
     def _maybe_create_reference_visualization_scene(self, xml_path: pathlib.Path) -> str:
         if not self.config.get("ENABLE_REFERENCE_MOTION_VISUALIZATION", False):
@@ -1205,6 +1322,12 @@ class DefaultEnv:
         return obs
 
     def sim_step(self):
+        is_new_control_frame = False
+        if self.unitree_bridge is not None:
+            try:
+                _, _, is_new_control_frame = self.unitree_bridge.GetAction()
+            except Exception:
+                is_new_control_frame = False
         self.obs = self.prepare_obs()
         self.unitree_bridge.PublishLowState(self.obs)
         if self.unitree_bridge.joystick:
@@ -1246,34 +1369,67 @@ class DefaultEnv:
         else:
             self.mj_data.ctrl = self.torques
         mujoco.mj_step(self.mj_model, self.mj_data)
+        actual_body_pos_pre_ref = None
+        if self._sim2sim_eval_logger is not None:
+            self._sim2sim_eval_logger._resolve_body_ids(self.mj_model)
+            actual_body_pos_pre_ref = np.asarray(
+                self.mj_data.xpos[self._sim2sim_eval_logger.body_ids],
+                dtype=np.float64,
+            ).copy()
         reference_pose_applied = self.update_reference_motion_visualization()
         if reference_pose_applied:
             mujoco.mj_forward(self.mj_model, self.mj_data)
 
-        self._log_sim2sim_eval_frame()
+        self._log_sim2sim_eval_frame(
+            actual_body_pos=actual_body_pos_pre_ref,
+            write_step_sync=bool(is_new_control_frame),
+        )
 
         self.check_fall()
 
-    def _log_sim2sim_eval_frame(self):
-        if self._sim2sim_eval_logger is None:
+    def _log_sim2sim_eval_frame(
+        self,
+        actual_body_pos: np.ndarray | None = None,
+        write_step_sync: bool = True,
+    ):
+        if self._sim2sim_eval_logger is None and self._tracking_overlay is None:
             return
-        self._sim2sim_eval_logger._resolve_body_ids(self.mj_model)
-        actual_body_pos = np.asarray(
-            self.mj_data.xpos[self._sim2sim_eval_logger.body_ids],
-            dtype=np.float64,
-        ).copy()
+
+        body_ids = None
+        if self._sim2sim_eval_logger is not None:
+            self._sim2sim_eval_logger._resolve_body_ids(self.mj_model)
+            body_ids = self._sim2sim_eval_logger.body_ids
+        elif self._tracking_overlay is not None:
+            self._tracking_overlay._resolve_body_ids(self.mj_model)
+            body_ids = self._tracking_overlay._body_ids
+
+        if actual_body_pos is None and body_ids is not None:
+            actual_body_pos = np.asarray(
+                self.mj_data.xpos[body_ids],
+                dtype=np.float64,
+            ).copy()
         source_frame_index = None
         ref_body_pos = None
-        if self.reference_visualizer is not None:
-            source_frame_index, ref_body_pos = self.reference_visualizer.compute_exact_reference_body_pos(
-                self._sim2sim_eval_logger.body_ids
+        if self.reference_visualizer is not None and body_ids is not None:
+            source_frame_index, ref_body_pos = self.reference_visualizer.compute_exact_reference_body_pos(body_ids)
+
+        if self._tracking_overlay is not None:
+            self._tracking_overlay.update(
+                mj_model=self.mj_model,
+                actual_body_pos=actual_body_pos,
+                ref_body_pos=ref_body_pos,
+                source_frame_index=source_frame_index,
             )
+
+        if self._sim2sim_eval_logger is None:
+            return
         self._sim2sim_eval_logger.log(
             mj_model=self.mj_model,
             mj_data=self.mj_data,
             source_frame_index=source_frame_index,
             actual_body_pos=actual_body_pos,
             ref_body_pos=ref_body_pos,
+            write_step_sync=write_step_sync,
         )
 
     def apply_perturbation(self, key):
@@ -1299,6 +1455,8 @@ class DefaultEnv:
 
     def update_viewer(self):
         if self.viewer is not None:
+            if self._tracking_overlay is not None:
+                self._tracking_overlay.render()
             self.viewer.sync()
 
     def update_viewer_camera(self):
@@ -1400,6 +1558,7 @@ class Sim2SimEvalLogger:
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self._row_index = 0
         self._body_ids = None
+        self._last_step_sync_source_frame_index = None
 
         self._body_pos_file = open(self.logs_dir / "body_pos_w_14.csv", "w", newline="", encoding="utf-8")
         self._source_frame_file = open(
@@ -1445,6 +1604,7 @@ class Sim2SimEvalLogger:
         source_frame_index: int | None,
         actual_body_pos: np.ndarray,
         ref_body_pos: np.ndarray | None,
+        write_step_sync: bool = True,
     ):
         self._resolve_body_ids(mj_model)
         row = [self._row_index, float(mj_data.time)]
@@ -1458,19 +1618,167 @@ class Sim2SimEvalLogger:
                 source_frame_value,
             ]
         )
-        step_sync_row = [self._row_index, float(mj_data.time), source_frame_value]
-        step_sync_row.extend(np.asarray(actual_body_pos, dtype=np.float64).reshape(-1).tolist())
-        if ref_body_pos is None:
-            step_sync_row.extend([float("nan")] * (len(self.body_names) * 3))
-        else:
+        should_write_step_sync = (
+            bool(write_step_sync)
+            and
+            source_frame_value >= 0
+            and ref_body_pos is not None
+            and source_frame_value != self._last_step_sync_source_frame_index
+        )
+        if should_write_step_sync:
+            step_sync_row = [self._row_index, float(mj_data.time), source_frame_value]
+            step_sync_row.extend(np.asarray(actual_body_pos, dtype=np.float64).reshape(-1).tolist())
             step_sync_row.extend(np.asarray(ref_body_pos, dtype=np.float64).reshape(-1).tolist())
-        self._step_sync_writer.writerow(step_sync_row)
+            self._step_sync_writer.writerow(step_sync_row)
+            self._last_step_sync_source_frame_index = source_frame_value
         self._row_index += 1
 
     def close(self):
         self._body_pos_file.close()
         self._source_frame_file.close()
         self._step_sync_file.close()
+
+
+class Sim2SimTrackingOverlay:
+    def __init__(self, viewer, body_names: list[str]):
+        self.viewer = viewer
+        self.body_names = body_names
+        self._body_ids = None
+        self.last_actual_body_pos = None
+        self.last_ref_body_pos = None
+        self.last_source_frame_index = None
+        self.last_mean_error_mm = None
+        self.last_max_error_mm = None
+
+    def _resolve_body_ids(self, mj_model: mujoco.MjModel):
+        if self._body_ids is not None:
+            return
+        body_ids = []
+        for name in self.body_names:
+            body_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, name)
+            if body_id == -1:
+                raise ValueError(f"MuJoCo body not found for tracking overlay: {name}")
+            body_ids.append(body_id)
+        self._body_ids = np.asarray(body_ids, dtype=np.int32)
+
+    def update(
+        self,
+        mj_model: mujoco.MjModel,
+        actual_body_pos: np.ndarray | None,
+        ref_body_pos: np.ndarray | None,
+        source_frame_index: int | None,
+    ):
+        self._resolve_body_ids(mj_model)
+        self.last_source_frame_index = source_frame_index
+        self.last_actual_body_pos = (
+            None if actual_body_pos is None else np.asarray(actual_body_pos, dtype=np.float64).copy()
+        )
+        self.last_ref_body_pos = (
+            None if ref_body_pos is None else np.asarray(ref_body_pos, dtype=np.float64).copy()
+        )
+        if self.last_actual_body_pos is None or self.last_ref_body_pos is None:
+            self.last_mean_error_mm = None
+            self.last_max_error_mm = None
+            return
+        err = np.linalg.norm(self.last_actual_body_pos - self.last_ref_body_pos, axis=1) * 1000.0
+        self.last_mean_error_mm = float(np.mean(err)) if err.size > 0 else None
+        self.last_max_error_mm = float(np.max(err)) if err.size > 0 else None
+
+    def render(self):
+        if self.viewer is None or self.last_actual_body_pos is None or self.last_ref_body_pos is None:
+            return
+        try:
+            scn = self.viewer.user_scn
+        except AttributeError:
+            return
+        scn.ngeom = 0
+
+        err_vec = self.last_ref_body_pos - self.last_actual_body_pos
+        err_mm = np.linalg.norm(err_vec, axis=1) * 1000.0
+        max_geoms = max(0, int(getattr(scn, "maxgeom", 0)) - 1)
+        num_lines = min(len(err_mm), max_geoms)
+        for i in range(num_lines):
+            if err_mm[i] <= 1e-9:
+                continue
+            geom = scn.geoms[scn.ngeom]
+            red = float(np.clip(err_mm[i] / 30.0, 0.0, 1.0))
+            green = float(np.clip(1.0 - err_mm[i] / 30.0, 0.0, 1.0))
+            rgba = np.array([red, green, 0.1, 0.95], dtype=np.float32)
+            mujoco.mjv_initGeom(
+                geom,
+                mujoco.mjtGeom.mjGEOM_LINE,
+                np.zeros(3, dtype=np.float64),
+                np.zeros(3, dtype=np.float64),
+                np.eye(3, dtype=np.float64).reshape(-1),
+                rgba,
+            )
+            mujoco.mjv_connector(
+                geom,
+                mujoco.mjtGeom.mjGEOM_LINE,
+                0.006,
+                self.last_actual_body_pos[i],
+                self.last_ref_body_pos[i],
+            )
+            scn.ngeom += 1
+
+        if scn.ngeom < getattr(scn, "maxgeom", 0):
+            geom = scn.geoms[scn.ngeom]
+            if self.last_mean_error_mm is None:
+                sphere_pos = self.last_actual_body_pos[0]
+                rgba = np.array([0.8, 0.8, 0.8, 0.0], dtype=np.float32)
+                size = np.array([0.0, 0.0, 0.0], dtype=np.float64)
+            else:
+                sphere_pos = self.last_actual_body_pos[0]
+                max_err = float(self.last_max_error_mm or 0.0)
+                rgba = np.array(
+                    [
+                        float(np.clip(max_err / 30.0, 0.0, 1.0)),
+                        float(np.clip(1.0 - max_err / 30.0, 0.0, 1.0)),
+                        0.2,
+                        0.9,
+                    ],
+                    dtype=np.float32,
+                )
+                size = np.array([0.015, 0.015, 0.015], dtype=np.float64)
+            mujoco.mjv_initGeom(
+                geom,
+                mujoco.mjtGeom.mjGEOM_SPHERE,
+                size,
+                sphere_pos,
+                np.eye(3, dtype=np.float64).reshape(-1),
+                rgba,
+            )
+            scn.ngeom += 1
+
+        try:
+            self.viewer.add_overlay(
+                mujoco.mjtGridPos.mjGRID_TOPRIGHT,
+                "sim2sim tracking",
+                (
+                    f"src={self.last_source_frame_index} | "
+                    f"mean={0.0 if self.last_mean_error_mm is None else self.last_mean_error_mm:.3f} mm | "
+                    f"max={0.0 if self.last_max_error_mm is None else self.last_max_error_mm:.3f} mm"
+                ),
+            )
+        except Exception:
+            pass
+
+        try:
+            if self.last_actual_body_pos is None or self.last_ref_body_pos is None:
+                return
+            err_mm = np.linalg.norm(self.last_actual_body_pos - self.last_ref_body_pos, axis=1) * 1000.0
+            left_lines = []
+            right_lines = []
+            for name, err in zip(self.body_names, err_mm.tolist()):
+                left_lines.append(name)
+                right_lines.append(f"{err:7.3f} mm")
+            self.viewer.add_overlay(
+                mujoco.mjtGridPos.mjGRID_BOTTOMRIGHT,
+                "\n".join(left_lines),
+                "\n".join(right_lines),
+            )
+        except Exception:
+            pass
 
 
 class BaseSimulator:

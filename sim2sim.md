@@ -11,29 +11,28 @@ bash install_scripts/install_mujoco_sim.sh
 另外，GT和actual link world position是具体怎么计算拿到的？motionlib在里面是什么作用？
 
 reference G1和actual G1的起始位置应该是一样的，相当于actual G1先设置起始位置在 refercence G1的第一帧，然后运行policy看track pkl动作的精度。
-可视化referecen G1是相对于pkl原始数据进行了一个root position位置的xy方向的平移吗？但是只要reference G1和actual G1的起始位置是一样，这个平移量统一是一个数值整个动作中，那可视化看的还是policy整个track的精度。
+可视化referecen G1是相对于pkl原始数据所有帧进行了固定数值的一个root position位置的xy方向的平移和朝向的对齐，这个数值对于每一帧都是一样的。但是只要reference G1和actual G1的起始位置是一样，这个平移量统一是一个数值整个动作中，那可视化的作用是实时看policy整个track的精度。
 metrics计算时的GT和actual应该都是从mujoco中每一帧/step直接取才是能够和可视化对齐，方便从可视化中分析metrics的计算是否合理正确的。
+一个json文件就是对一条完整的pkl数据从开始到结束的中所有帧的error计算平均值计算metrics
 
 
 GT其实不是robot motion encoder的输入,应该是robot motion raw data,pkl文件里的就是robot motion raw data. 
 
-对官方sample data的pkl文件数据进行加载预处理后输入给robot motion encoder, 在mujoco中对universal control policy进行推理的整个链路，整个链路模仿isaacsim eval的。
-
 这个可视化既要能看出policy对pkl的动作的root position的tracking精度，也要可以看出track动作形态也就是不同关节角的效果。现在的问题是，为什么可视化出来的reference G1的位置不是按照refercence motion(pkl读取的)在移动，而是一直在原地？彻底解决这个问题
+
+reference 可视化和metrics GT： 先对原始 pkl 做一次固定的初始刚体变换，这个变换只由起始帧决定，之后整段动作都不再变化，reference 可视化 和 metrics GT 都用这同一条轨迹。
+
+实现严格的每一帧时间对齐，在 MuJoCo 每个物理步里，原子地同时记录：当前用于 reference visualization / target 的那一帧 source_frame_index，该帧 reference 的 14 个 world position，该物理步 actual 的 14 个 world position
 
 mujoco和policy是先运行的，然后pkl动作是在终端C后发出的，所以前面很有很长一段时间是没有接收到输入动作。我希望在metrics计算时可以自动判断pkl动作何时输入和结束，只计算这段时间的error才合理。
 
 彻底解决这次路径是 Humanoid_Batch fallback，不是 TrackingCommand offline的问题，是不是TrackingCommand offline才是和isaacsim eval链路对齐，是的话必须解决
 
-实现严格的每一帧时间对齐，在 MuJoCo 每个物理步里，原子地同时记录：当前用于 reference visualization / target 的那一帧 source_frame_index，该帧 reference 的 14 个 world position，该物理步 actual 的 14 个 world position
-
-strict GT和refercence G1的区别具体是什么？
 
 
 之前为什么metrics的GT有问题：
   旧代码里，step_sync 的 ref_* 来自 MuJoCo 场景 reference body 的 xpos。
   核心问题有三个：
-
   1. GT 被显示平移污染
      如果 reference_motion_translation_mode = delta_aligned，reference root 会被平移到 actual 附
      近。
@@ -49,8 +48,6 @@ strict GT和refercence G1的区别具体是什么？
 ## TODO功能
 
 占内存问题还没有解决
-
-和lirui哥对一下代码库合并
 
 human motion和robot control都作为输入，分析tracking精度
 
@@ -191,6 +188,7 @@ motionlib的作用：
     --actual-source step_sync_body_pos_w_14 \
     --sim-valid-only \
     --use-isaacsim-app
+
 
 说明：
 - `stream_motionlib_to_deploy.py` 这些参数默认都是 `0`，常规单文件流程可省略不写：
@@ -796,37 +794,254 @@ python gear_sonic/eval_agent_trl.py +checkpoint=/home/lab/Desktop/GR00T-WholeBod
 
 
 
+------------------------------------------------------------------------------------
+
+
+  至于“为什么 IsaacSim eval 这么容易，而 sim2sim 这么难”，核心不是算法难，而是系统边
+  界不同。
+
+  IsaacSim eval 容易的原因
+  IsaacSim 里：
+
+  - policy rollout
+  - GT motion
+  - 仿真时钟
+  - 采样时刻
+  - metrics 收集
+
+  都在同一个进程/同一个仿真循环里。
+
+  所以每个 t 都天然明确：
+
+  - 这一步 policy 输出是什么
+  - 这一步 robot 状态是什么
+  - 这一步 GT 是什么
+
+  不需要额外“对齐”，因为它们本来就共用同一个时间轴。
+
+  sim2sim 难的原因
+  你现在这条链是分裂的：
+
+  - sender 在发原始 pkl frame
+  - deploy 在做 streaming merge/window/catch-up
+  - MuJoCo 在跑自己的 physics step
+  - debug/pose topic 是异步传输
+  - metrics 是离线再读 CSV
+
+  这意味着至少有四套时间语义：
+
+  1. 原始 pkl frame index
+  2. deploy 当前消费 frame
+  3. MuJoCo physics step
+  4. 异步 topic 到达时刻
+
+  只要这四套时间轴里有一层不是一一对应，对齐就会变难。
+
+  再具体一点，IsaacSim 没有这些额外复杂度：
+
+  - 没有跨进程
+  - 没有 ZMQ 异步传输
+  - 没有 sliding window merge
+  - 没有 catch-up reset
+  - 没有 physics step 和 control tick 分离后再靠日志补配对
+
+  而 sim2sim 全都有。
+
+  所以不是“sim2sim 的时间对齐算法更难”，而是：
+
+  - IsaacSim 是单时钟系统
+  - sim2sim 是多时钟、跨进程、异步系统
+
+  单时钟系统里，对齐是默认成立的。
+  多时钟异步系统里，对齐必须被显式设计出来。
+
+  你现在遇到的问题，本质就是这句话：
+  IsaacSim 里的对齐是“天然存在的”，sim2sim 里的对齐是“后天重建的”。
+
+
+----------------------------------------------------------------------
+
+
+• 卡顿的根因不是 sender 的 50Hz 本身不够，而是我们之前把 reference G1 的显示也绑到了 strict
+  source_frame_index 这条链上。
+
+  这会导致两件事：
+
+  - actual G1 是 MuJoCo 每个 physics step 都在更新，看起来很连续
+  - reference G1 之前只有在 debug/source-frame 推进时才换一帧，所以视觉上像低频跳帧
+
+  代码上原来是这条路径：
+
+  - pose stream 进来先存 buffer
+  - debug 给出 source_frame_index
+  - 只有 exact frame match 成功，reference 才更新到那一帧
+  - 可视化和 metrics 共用了这一套
+
+  所以它天然会“严格，但卡”。
+
+  我刚刚已经把这两层拆开了：
+
+  - 显示层：用最新 pose stream 连续刷新 reference，可视化更平滑
+  - metrics 层：继续只用 exact source_frame_index 的 strict pose，不改时间对齐语义
+
+  也就是说现在：
+
+  - 你看到的 reference G1 是高频连续显示
+  - sim2sim_step_sync_body_pos_w_14.csv 仍然是严格逐帧 GT
+
+  这次改动在：
+
+  - gear_sonic/utils/mujoco_sim/base_sim.py:494
+  - gear_sonic/utils/mujoco_sim/base_sim.py:538
+  - gear_sonic/utils/mujoco_sim/base_sim.py:556
+
+  结论：
+
+  - 卡顿严重的直接原因：显示被 strict source-frame 对齐节流了
+  - 现在已经改成“显示平滑、metrics 仍严格”
+
+  你接下来重新跑一遍 MuJoCo + deploy + sender 看效果。如果还有明显卡顿，那下一层就要看：
+
+  - deploy 的 debug/source-frame 是否本身推进不稳
+  - 或者 MuJoCo viewer 刷新频率是不是跟不上
+
+  但就当前代码逻辑来说，最大那层卡顿源已经去掉了。
+
+
+能看，但语义变了：
+
+  - 能看出的
+      - policy 有没有大体跟上 pkl 动作
+      - 姿态、步态、手脚摆动是否明显偏掉
+      - 实时 tracking 的大误差、相位差、漂移
+  - 不能再把它当成完全严格的“当前这一物理步 GT”
+      - 因为我刚把显示层改成了“按最新 pose stream 平滑刷新”
+      - 它不再严格绑定 deploy 当前 source_frame_index
+      - 所以可视化现在更适合实时观察，不适合做逐步精确判读
+
+  现在两层语义是分开的：
+
+  - 可视化 reference G1
+      - 目标：平滑、好看、能直观看 tracking
+      - 语义：近实时参考，不保证严格 step-sync
+  - metrics / GT
+      - 目标：严格
+      - 语义：继续按 exact source_frame_index 做 step-sync 对齐
+      - 这个才是你最终看精度的准绳
+
+  所以结论很直接：
+
+  - 如果你问“还能不能看 policy 实时 track 得准不准？”
+    可以，能看 qualitative 实时精度。
+  - 如果你问“它现在还能不能代表严格逐帧 GT？”
+    不能，严格逐帧语义已经只保留在 metrics 里。
+
+结论：这个修改方向是对的.
 
 
 
+----------------------------------------------------------------------------------
+
+当前 MuJoCo/metrics 用的 ref_body_pos，不是“原始 pkl 的 world-frame GT”，而是
+    deploy 内部已经做过 heading/root 对齐后的 target。
+  怎麼理解這個？
+  這個和這個：可视化referecen G1是相对于pkl原始数据进行了一个root position位置的xy方
+  向的平移吗？但是只要reference G1和actual G1的起始位置是一样，这个平移量统一是一个
+  数值整个动作中，那可视化看的还是policy整个track的精度。
+  有區別嗎？如果只是後面這個，理論是對的？因爲ie只有在統一起點計算metrics纔有意義，
+  而且即使統一了起點，tracking 誤差量級也不應該是個位數。
 
 
+• 有区别，而且区别不小。
 
+  你说的这件事：
 
+  - reference G1 只对原始 pkl 做一个固定的起点对齐
+  - 比如统一初始 XY，或者再统一一个固定初始 yaw
+  - 之后整个动作期间都用同一个刚体变换
 
+  这个理论上是对的，也是合理的。
+  因为这种变换只是：
 
+  - 平移一个常数
+  - 或再加一个固定旋转
 
+  它不会把 tracking error 消掉，只是把比较坐标系统一了。
+  如果 policy 没跟上，后面的误差还是会正常暴露出来。
+  所以你说“即使统一了起点，tracking 误差量级也不应该是个位数”，这个判断是对的。
 
+  现在问题在于，当前我们 metrics 里用的 ref_body_pos，不是这么简单的“原始 pkl + 固定
+  起点对齐”。
 
+  它更接近：
 
+  - deploy 先把 motion 当前帧拿出来
+  - 再根据机器人初始化朝向做 heading correction
+  - base_trans_target 也会被这个 heading 旋转
+  - base_quat_target 也会被这个 heading 旋转
+  - body_q_target 是 deploy 当前正在消费的 target joint
+  - 这套 target 还处在 deploy 自己的运行语义里，不是单纯的原始 pkl world-frame GT
 
+  也就是说，现在的 ref 不是：
 
+  - 原始 pkl
+  - 经过一次固定刚体对齐
+  - 然后全程不再变化
 
+  而是：
 
+  - deploy 内部当前 target
+  - 已经经过 heading/root 相关变换
+  - 属于“deploy 控制语义下的参考目标”
 
+  这和你说的那种“统一起点后直接比较原始 GT”不是一回事。
 
+  最关键的差别是：
 
+  1. 你的方案
+     “原始 pkl + 固定起点对齐”
+     这是离线评测常见且合理的定义。
+  2. 现在这套
+     “deploy 当前目标 + deploy 内部 heading/root 处理后输出”
+     这已经不是纯 GT 了，而是控制链中的 target representation。
 
+  所以现在误差被压到 2~3 mm，不是因为“统一起点本身有问题”，而是因为我们比较的对象已经
+  变了。
 
+  你说得很准确：
 
+  - 如果只是固定起点统一
+  - metrics 仍然应该是有意义的
+  - 而且量级不该小到个位数毫米
 
+  所以现在真正错的点不是“要不要对齐起点”，而是：
 
+  - ref_body_pos 现在不是“原始 pkl 的 GT after fixed alignment”
+  - 而是“deploy corrected target”
 
+  这两者不能混为一谈。
 
+  还要再强调一个点：
 
+  - 可视化 reference G1 用固定起点对齐，是合理的
+  - metrics 也可以基于同样的固定对齐来算
+  - 但前提是 reference 必须来自原始 pkl GT，而不是 deploy 二次加工后的 target
 
+  所以接下来正确方向就是：
 
+  - 可视化层：可以继续保留现在这种起点对齐思路
+  - metrics 层：必须把 strict ref 改回原始 pose stream / 原始 motionlib GT
+  - 只允许做固定初始对齐，不再用 deploy 的 corrected target 作为 GT
 
+  这才会回到你预期的误差量级。
+
+  下一步我会直接改这条链：
+
+  - metrics ref 改成取原始 pose topic 的 strict frame
+  - 只做固定初始对齐
+  - 不再从 g1_debug 的 base_trans_target/body_q_target 生成 metrics GT
+
+  这样改完之后，数值才会回到你期待的几十到上百毫米区间。
 
 
 

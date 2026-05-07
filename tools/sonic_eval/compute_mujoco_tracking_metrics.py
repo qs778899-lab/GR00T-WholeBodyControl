@@ -320,6 +320,12 @@ def read_logs_data(
 
     motion_name = _load_motion_name_series(logs_dir)
     if motion_name is not None:
+        # Some deploy CSVs can end a few rows earlier than q.csv during shutdown.
+        # Align by the shared prefix so downstream filtering does not index past
+        # the motion-name series.
+        shared_n = min(len(q29), len(row_idx), len(motion_name))
+        q29 = q29[:shared_n]
+        row_idx = row_idx[:shared_n]
         motion_name = motion_name[row_idx]
     return LogData(q29=q29, row_index=row_idx, motion_name=motion_name)
 
@@ -647,6 +653,17 @@ def filter_step_sync_body_pos_by_source_frame(
         source_frame_idx = source_frame_idx[valid]
         actual_body_pos = actual_body_pos[valid]
         ref_body_pos = ref_body_pos[valid]
+
+    # Defensive deduplication for legacy MuJoCo logs that wrote the same strict
+    # source frame across many physics steps. Isaac-style evaluation expects one
+    # aligned sample per GT frame, not tens of repeated rows for the same source
+    # frame index.
+    if len(source_frame_idx) > 1:
+        keep = np.ones(len(source_frame_idx), dtype=bool)
+        keep[1:] = source_frame_idx[1:] != source_frame_idx[:-1]
+        source_frame_idx = source_frame_idx[keep]
+        actual_body_pos = actual_body_pos[keep]
+        ref_body_pos = ref_body_pos[keep]
     return source_frame_idx, actual_body_pos, ref_body_pos
 
 
@@ -706,6 +723,40 @@ def _as_frame_metric(arr_like: Any, expected_frames: int, name: str) -> np.ndarr
     raise ValueError(
         f"{name} shape {arr.shape} cannot be normalized to {expected_frames} frames"
     )
+
+
+def _mean_episode_metric_sum(metric_name: str, frame_values: np.ndarray) -> float:
+    arr = np.asarray(frame_values, dtype=np.float64)
+    if arr.size == 0:
+        return 0.0
+    if "mpjpe" in metric_name:
+        return float(np.sum(arr))
+    return float(np.sum(arr))
+
+
+def _episode_metric_from_sum(metric_name: str, metric_sum: float, frame_count: int) -> float:
+    if frame_count <= 0:
+        return 0.0
+    return float(metric_sum / float(frame_count))
+
+
+def _infer_episode_key(
+    motion_name_series: np.ndarray | None,
+    eval_motion_keys: list[str],
+    target_motion_name: str | None,
+) -> str:
+    if motion_name_series is not None and len(motion_name_series) > 0:
+        unique_names = pd.unique(motion_name_series.astype(str))
+        if len(unique_names) == 1:
+            return str(unique_names[0])
+    if target_motion_name:
+        return str(target_motion_name)
+    if eval_motion_keys:
+        first = eval_motion_keys[0]
+        if ":frame_" in first:
+            return first.split(":frame_", 1)[0]
+        return first
+    return "episode_000000"
 
 
 def main() -> None:
@@ -1023,9 +1074,8 @@ def main() -> None:
         for k, v in d.items():
             per_motion_metrics[f"{k}{sfx}"] = v
 
-    # For this script each frame is treated as one "motion key"
-    # (single-episode online eval proxy).
-    # Derive frame-level proxy metrics for termination/success from frame-wise smpl_sim outputs.
+    # Derive frame-level metrics, then aggregate them with Isaac-style episode semantics:
+    # one streamed rollout/log replay corresponds to one episode.
     mpjpe_g_frame = _as_frame_metric(metrics_all_raw["mpjpe_g"][0], n, "mpjpe_g")
     mpjpe_l_frame = _as_frame_metric(metrics_all_raw["mpjpe_l"][0], n, "mpjpe_l")
     mpjpe_pa_frame = _as_frame_metric(metrics_all_raw["mpjpe_pa"][0], n, "mpjpe_pa")
@@ -1035,69 +1085,87 @@ def main() -> None:
         | (mpjpe_g_frame > args.success_thresh_mpjpe_g_mm)
         | (mpjpe_pa_frame > args.success_thresh_mpjpe_pa_mm)
     )
-    success_mask = ~terminated
-    progress = np.ones((n,), dtype=np.float64)
+    episode_terminated = bool(np.any(terminated))
+    success_mask = np.asarray([not episode_terminated], dtype=bool)
+    progress = np.asarray([1.0 if not episode_terminated else float(np.mean(~terminated))], dtype=np.float64)
+    episode_key = _infer_episode_key(motion_name_series, eval_motion_keys, target_motion_name)
 
-    # Expand aggregated metrics to frame-wise arrays for all_metrics_dict compatibility.
-    # For keys lacking frame-level definition, repeat scalar mean per frame.
-    all_metrics_dict: dict[str, Any] = {}
-    for k, v in per_motion_metrics.items():
-        scalar = float(v[0]) if v.size else 0.0
-        all_metrics_dict[k] = [scalar] * n
-
-    # Overwrite known frame-level keys with true per-frame values.
-    all_metrics_dict["mpjpe_g"] = mpjpe_g_frame.tolist()
-    all_metrics_dict["mpjpe_l"] = mpjpe_l_frame.tolist()
-    all_metrics_dict["mpjpe_pa"] = mpjpe_pa_frame.tolist()
+    # Keep explicit per-frame detail for debugging/sanity-checking.
+    frame_metrics_dict: dict[str, Any] = {}
+    frame_metrics_dict["mpjpe_g"] = mpjpe_g_frame.tolist()
+    frame_metrics_dict["mpjpe_l"] = mpjpe_l_frame.tolist()
+    frame_metrics_dict["mpjpe_pa"] = mpjpe_pa_frame.tolist()
 
     # Fill subset frame-level from same smpl_sim backend for consistency.
     for suffix, sidx in subset_indices.items():
         if suffix == "":
             continue
         sub = subset_raw[suffix]
-        all_metrics_dict[f"mpjpe_g{suffix}"] = _as_frame_metric(
+        frame_metrics_dict[f"mpjpe_g{suffix}"] = _as_frame_metric(
             sub["mpjpe_g"][0], n, f"mpjpe_g{suffix}"
         ).tolist()
-        all_metrics_dict[f"mpjpe_l{suffix}"] = _as_frame_metric(
+        frame_metrics_dict[f"mpjpe_l{suffix}"] = _as_frame_metric(
             sub["mpjpe_l"][0], n, f"mpjpe_l{suffix}"
         ).tolist()
-        all_metrics_dict[f"mpjpe_pa{suffix}"] = _as_frame_metric(
+        frame_metrics_dict[f"mpjpe_pa{suffix}"] = _as_frame_metric(
             sub["mpjpe_pa"][0], n, f"mpjpe_pa{suffix}"
         ).tolist()
 
-    all_metrics_dict["terminated"] = terminated.tolist()
-    all_metrics_dict["progress"] = progress.tolist()
-    all_metrics_dict["motion_keys"] = eval_motion_keys
-    all_metrics_dict["sampling_prob"] = [1.0 / n] * n if n > 0 else []
-    all_metrics_dict["keypoint_names"] = BODY_FRAMES
-    all_metrics_dict["keypoint_tracking_error_mm_by_frame"] = {
+    frame_metrics_dict["terminated"] = terminated.tolist()
+    frame_metrics_dict["motion_keys"] = eval_motion_keys
+    frame_metrics_dict["keypoint_names"] = BODY_FRAMES
+    frame_metrics_dict["keypoint_tracking_error_mm_by_frame"] = {
         BODY_FRAMES[j]: keypoint_err_mm[:, j].tolist() for j in range(len(BODY_FRAMES))
     }
 
-    failed_idx = np.nonzero(terminated)[0]
-    failed_metrics_dict: dict[str, Any] = {}
-    for k, v in all_metrics_dict.items():
-        if isinstance(v, list) and len(v) == n:
-            failed_metrics_dict[k] = [v[i] for i in failed_idx.tolist()]
-    failed_metrics_dict["motion_keys"] = [eval_motion_keys[i] for i in failed_idx.tolist()]
-    failed_metrics_dict["sampling_prob"] = [1.0 / n] * len(failed_idx) if n > 0 else []
+    metric_names = list(per_motion_metrics.keys())
+    episode_metric_sums: dict[str, float] = {}
+    for metric_name in metric_names:
+        if metric_name in frame_metrics_dict:
+            episode_metric_sums[metric_name] = _mean_episode_metric_sum(
+                metric_name, np.asarray(frame_metrics_dict[metric_name], dtype=np.float64)
+            )
+        else:
+            metric_value = float(per_motion_metrics[metric_name][0]) if per_motion_metrics[metric_name].size else 0.0
+            episode_metric_sums[metric_name] = metric_value * float(n)
 
-    metrics_all = {}
-    metrics_success = {}
-    for k, v in all_metrics_dict.items():
-        if not isinstance(v, list) or len(v) != n or k in {"motion_keys", "sampling_prob", "terminated", "progress"}:
-            continue
-        arr = np.asarray(v, dtype=np.float64)
-        metrics_all[k] = _mean_or_zero(arr)
-        metrics_success[k] = _mean_or_zero(arr[success_mask]) if np.any(success_mask) else 0.0
+    episode_metric_means = {
+        metric_name: _episode_metric_from_sum(metric_name, metric_sum, n)
+        for metric_name, metric_sum in episode_metric_sums.items()
+    }
     for j, name in enumerate(BODY_FRAMES):
         kp_arr = keypoint_err_mm[:, j]
-        metrics_all[f"kp_err_mm::{name}"] = _mean_or_zero(kp_arr)
-        metrics_success[f"kp_err_mm::{name}"] = (
-            _mean_or_zero(kp_arr[success_mask]) if np.any(success_mask) else 0.0
+        metric_name = f"kp_err_mm::{name}"
+        episode_metric_sums[metric_name] = float(np.sum(kp_arr))
+        episode_metric_means[metric_name] = _episode_metric_from_sum(
+            metric_name, episode_metric_sums[metric_name], n
         )
-    metrics_success["success_rate"] = float(np.mean(success_mask.astype(np.float64))) if n > 0 else 0.0
-    metrics_success["progress_rate"] = float(np.mean(progress)) if n > 0 else 0.0
+
+    all_metrics_dict: dict[str, Any] = {
+        metric_name: [metric_value] for metric_name, metric_value in episode_metric_means.items()
+    }
+    all_metrics_dict["terminated"] = [episode_terminated]
+    all_metrics_dict["progress"] = progress.tolist()
+    all_metrics_dict["motion_keys"] = [episode_key]
+    all_metrics_dict["sampling_prob"] = [1.0]
+
+    failed_metrics_dict: dict[str, Any] = {}
+    if episode_terminated:
+        for metric_name, metric_value in episode_metric_means.items():
+            failed_metrics_dict[metric_name] = [metric_value]
+        failed_metrics_dict["motion_keys"] = [episode_key]
+        failed_metrics_dict["sampling_prob"] = [1.0]
+
+    metrics_all = dict(episode_metric_means)
+    metrics_success = (
+        dict(episode_metric_means)
+        if not episode_terminated
+        else {metric_name: 0.0 for metric_name in episode_metric_means.keys()}
+    )
+    metrics_success["success_rate"] = float(success_mask.astype(np.float64).mean()) if n > 0 else 0.0
+    metrics_success["progress_rate"] = float(progress.mean()) if n > 0 else 0.0
+
+    failed_idx = [0] if episode_terminated else []
 
     result = {
         "gt_format": args.gt_format,
@@ -1133,10 +1201,11 @@ def main() -> None:
         "metrics_all": metrics_all,
         "metrics_success": metrics_success,
         "all_metrics_dict": all_metrics_dict,
+        "frame_metrics_dict": frame_metrics_dict,
         "failed_metrics_dict": failed_metrics_dict,
-        "failed_idxes": failed_idx.tolist(),
+        "failed_idxes": failed_idx,
         "failed_keys": failed_metrics_dict.get("motion_keys", []),
-        "success_keys": [eval_motion_keys[i] for i in np.nonzero(success_mask)[0].tolist()],
+        "success_keys": [episode_key] if not episode_terminated else [],
     }
 
     print(json.dumps(result, ensure_ascii=False, indent=2))

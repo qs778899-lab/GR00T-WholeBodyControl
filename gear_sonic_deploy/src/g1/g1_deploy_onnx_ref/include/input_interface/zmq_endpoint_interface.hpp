@@ -593,8 +593,15 @@ public:
       if (current_frame < 0) {
         return std::nullopt;
       }
-      return static_cast<int64_t>(stream_window_start_) +
-             static_cast<int64_t>(last_frame_step_) * static_cast<int64_t>(current_frame);
+      const int64_t* source_frame_indices = current_motion->SourceFrameIndices();
+      if (source_frame_indices == nullptr) {
+        return std::nullopt;
+      }
+      const int64_t source_frame_index = source_frame_indices[current_frame];
+      if (source_frame_index < 0) {
+        return std::nullopt;
+      }
+      return source_frame_index;
     }
 
     bool HasUsableStreamedMotion() const {

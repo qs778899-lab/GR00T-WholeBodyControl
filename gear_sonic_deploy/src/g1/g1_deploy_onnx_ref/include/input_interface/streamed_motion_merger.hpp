@@ -416,6 +416,8 @@ private:
         if (data.num_joints > 0 && old_motion->GetNumJoints() > 0) {
             int joints_to_copy = std::min(data.num_joints, old_motion->GetNumJoints());
             for (int i = 0; i < copy_count; ++i) {
+                new_motion->SourceFrameIndices()[copy_dst_idx + i] =
+                    old_motion->SourceFrameIndices()[copy_src_idx + i];
                 for (int joint = 0; joint < joints_to_copy; ++joint) {
                     new_motion->JointPositions(copy_dst_idx + i)[joint] = 
                         old_motion->JointPositions(copy_src_idx + i)[joint];
@@ -493,6 +495,9 @@ private:
         
         // Copy body positions (always present)
         for (int frame = 0; frame < data.num_frames; ++frame) {
+            if (frame < static_cast<int>(data.frame_indices.size())) {
+                motion->SourceFrameIndices()[dst_frame_offset + frame] = data.frame_indices[frame];
+            }
             for (int body = 0; body < data.num_pos_bodies; ++body) {
                 for (int xyz = 0; xyz < 3; ++xyz) {
                     motion->BodyPositions(dst_frame_offset + frame)[body][xyz] =
