@@ -360,7 +360,7 @@ struct PlannerMotionState {
 class MotionRecorder {
 public:
   MotionRecorder(const std::string& base_dir = "reference/recorded_motion") 
-    : base_dir_(base_dir), active_(false), frames_written_(0) {}
+    : base_dir_(base_dir), active_(false), frames_written_(0), last_frame_idx_(-1) {}
   
   ~MotionRecorder() {
     if (active_) {
@@ -400,6 +400,7 @@ public:
       
       motion_name_ = motion_name;
       frames_written_ = 0;
+      last_frame_idx_ = -1;
       active_ = true;
       
       std::cout << "[MotionRecorder] Recording started: " << motion_dir_ << std::endl;
@@ -414,6 +415,13 @@ public:
   bool WriteFrame(std::shared_ptr<const MotionSequence> motion, int frame_idx) {
     if (!active_ || !motion || frame_idx >= motion->timesteps) {
       return false;
+    }
+
+    // After streamed motion completes, deploy can keep replaying the same
+    // terminal frame while waiting for the next clip. Do not append identical
+    // frame indices forever, or the recorder will grow without bound.
+    if (frame_idx == last_frame_idx_) {
+      return true;
     }
     
     // Lazily open files on first write when we know dimensions
@@ -506,6 +514,7 @@ public:
       }
       
       frames_written_++;
+      last_frame_idx_ = frame_idx;
       return true;
     } catch (const std::exception& e) {
       std::cerr << "[MotionRecorder] Failed to write frame: " << e.what() << std::endl;
@@ -548,6 +557,7 @@ public:
     active_ = false;
     files_open_ = false;
     frames_written_ = 0;
+    last_frame_idx_ = -1;
   }
   
   bool IsActive() const { return active_; }
@@ -649,6 +659,7 @@ private:
   bool active_;
   bool files_open_ = false;
   int frames_written_;
+  int last_frame_idx_;
   
   std::ofstream joint_pos_file_;
   std::ofstream joint_vel_file_;

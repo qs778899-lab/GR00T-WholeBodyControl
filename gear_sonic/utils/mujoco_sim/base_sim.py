@@ -169,6 +169,11 @@ class ReferenceMotionVisualizer:
         self.allow_midrun_realign = bool(allow_midrun_realign)
         self._target_anchor_base_pos = None
         self._actual_anchor_base_pos = None
+        self._start_aligned_gt_base_pos = None
+        self._start_aligned_actual_base_pos = None
+        self._start_aligned_gt_yaw = None
+        self._start_aligned_actual_yaw = None
+        self._start_aligned_yaw_delta = None
         self._prev_target_base_pos = None
 
         root_joint_name = f"{REFERENCE_NAME_PREFIX}floating_base_joint"
@@ -180,6 +185,10 @@ class ReferenceMotionVisualizer:
 
         self.root_qpos_adr = mj_model.jnt_qposadr[root_joint_id]
         self.root_qvel_adr = mj_model.jnt_dofadr[root_joint_id]
+        self.ref_root_body_id = root_body_id
+        self.actual_root_body_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, "pelvis")
+        if self.actual_root_body_id == -1:
+            raise ValueError("actual robot pelvis was not found in the loaded MuJoCo model")
         self.body_qpos_adrs = []
         self.body_qvel_adrs = []
         for joint_name in body_joint_names:
@@ -208,15 +217,15 @@ class ReferenceMotionVisualizer:
         self.ref_geom_ids = np.array(get_subtree_geom_ids(mj_model, root_body_id), dtype=np.int32)
         self._shown_once = False
         self._last_pose_log_time = 0.0
+        self._last_debug_visibility_log_time = 0.0
         self._last_pose_frame_index = None
         self._last_debug_source_frame_index = None
         self._latest_debug_source_frame_index = None
         self._current_applied_source_frame_index = None
         self._current_exact_pose = None
+        self._current_display_pose = None
         self._pose_frame_buffer = OrderedDict()
-        self._debug_pose_buffer = OrderedDict()
         self._max_pose_frame_buffer = 4096
-        self._max_debug_pose_buffer = 4096
         self._pending_debug_source_frames = deque()
         self._translation_anchor_ready = False
         self.set_visible(False)
@@ -249,14 +258,19 @@ class ReferenceMotionVisualizer:
     def reset_anchor(self):
         self._target_anchor_base_pos = None
         self._actual_anchor_base_pos = None
+        self._start_aligned_gt_base_pos = None
+        self._start_aligned_actual_base_pos = None
+        self._start_aligned_gt_yaw = None
+        self._start_aligned_actual_yaw = None
+        self._start_aligned_yaw_delta = None
         self._prev_target_base_pos = None
         self._last_pose_frame_index = None
         self._last_debug_source_frame_index = None
         self._latest_debug_source_frame_index = None
         self._current_applied_source_frame_index = None
         self._current_exact_pose = None
+        self._current_display_pose = None
         self._pose_frame_buffer.clear()
-        self._debug_pose_buffer.clear()
         self._pending_debug_source_frames.clear()
         self._translation_anchor_ready = False
         self._shown_once = False
@@ -266,6 +280,11 @@ class ReferenceMotionVisualizer:
         self.visible = visible
         alpha = self.alpha if visible and self.enabled else 0.0
         self.mj_model.geom_rgba[self.ref_geom_ids, 3] = alpha
+        print(
+            "[ReferenceMotionVisualizer] set_visible "
+            f"visible={visible} enabled={self.enabled} alpha={alpha:.3f} "
+            f"ref_geoms={len(self.ref_geom_ids)}"
+        )
 
     def toggle(self):
         self.set_visible(not self.visible)
@@ -325,11 +344,7 @@ class ReferenceMotionVisualizer:
                 print("[ReferenceMotionVisualizer] reset translation anchor at new debug stream start")
             self._last_debug_source_frame_index = source_frame_index
             self._latest_debug_source_frame_index = source_frame_index
-            self._store_debug_pose_frame(source_frame_index, base_pos.copy(), base_quat.copy(), body_q.copy())
             self._enqueue_debug_source_frame(source_frame_index)
-            # Keep the translucent reference visible using deploy's target pose
-            # even if the exact raw frame for metrics has not arrived yet.
-            self._set_latest_pose(base_pos, base_quat, body_q, synchronized=True)
             return True
         self._set_latest_pose(base_pos, base_quat, body_q, synchronized=source_frame_index is not None and source_frame_index >= 0)
         return True
@@ -402,9 +417,13 @@ class ReferenceMotionVisualizer:
             if matched_pose is not None:
                 self._current_applied_source_frame_index = int(self._latest_debug_source_frame_index)
                 self._current_exact_pose = tuple(np.asarray(x, dtype=np.float64).copy() for x in matched_pose)
+                self._set_latest_pose(*matched_pose, synchronized=True)
                 return True
 
-        self._set_latest_pose(body_pos[-1], body_quat[-1], body_q[-1], synchronized=False)
+        # Keep the reference visible using the latest raw streamed pose while we
+        # wait for an exact source-frame match. This is display-only: strict GT
+        # remains gated by _current_exact_pose/_current_applied_source_frame_index.
+        self._set_latest_pose(body_pos[-1], body_quat[-1], body_q[-1], synchronized=True)
         return True
 
     def _enqueue_debug_source_frame(self, source_frame_index: int):
@@ -419,13 +438,12 @@ class ReferenceMotionVisualizer:
         while self._pending_debug_source_frames:
             source_frame_index = int(self._pending_debug_source_frames[0])
             exact_pose = self._get_exact_pose_for_frame(source_frame_index)
-            debug_pose = self._get_debug_pose_for_frame(source_frame_index)
-            if exact_pose is None or debug_pose is None:
+            if exact_pose is None:
                 break
             self._pending_debug_source_frames.popleft()
             self._current_applied_source_frame_index = source_frame_index
             self._current_exact_pose = tuple(np.asarray(x, dtype=np.float64).copy() for x in exact_pose)
-            self._set_latest_pose(*debug_pose, synchronized=True)
+            self._set_latest_pose(*exact_pose, synchronized=True)
             return True
         return False
 
@@ -440,18 +458,6 @@ class ReferenceMotionVisualizer:
         self._pose_frame_buffer.move_to_end(frame_index)
         while len(self._pose_frame_buffer) > self._max_pose_frame_buffer:
             self._pose_frame_buffer.popitem(last=False)
-
-    def _store_debug_pose_frame(
-        self,
-        frame_index: int,
-        base_pos: np.ndarray,
-        base_quat: np.ndarray,
-        body_q: np.ndarray,
-    ):
-        self._debug_pose_buffer[frame_index] = (base_pos, base_quat, body_q)
-        self._debug_pose_buffer.move_to_end(frame_index)
-        while len(self._debug_pose_buffer) > self._max_debug_pose_buffer:
-            self._debug_pose_buffer.popitem(last=False)
 
     def _get_latest_buffered_pose(self):
         if not self._pose_frame_buffer:
@@ -477,11 +483,6 @@ class ReferenceMotionVisualizer:
             return None
         return self._pose_frame_buffer.get(frame_index)
 
-    def _get_debug_pose_for_frame(self, frame_index: int):
-        if not self._debug_pose_buffer:
-            return None
-        return self._debug_pose_buffer.get(frame_index)
-
     def _set_latest_pose(
         self,
         base_pos: np.ndarray,
@@ -490,6 +491,9 @@ class ReferenceMotionVisualizer:
         synchronized: bool = False,
     ):
         self._latest_pose = (base_pos, base_quat, body_q)
+        self._current_display_pose = tuple(
+            np.asarray(x, dtype=np.float64).copy() for x in (base_pos, base_quat, body_q)
+        )
         if not synchronized:
             self._current_applied_source_frame_index = None
             self._current_exact_pose = None
@@ -502,6 +506,20 @@ class ReferenceMotionVisualizer:
                 f"at actual x={self._actual_anchor_base_pos[0]:.3f} "
                 f"y={self._actual_anchor_base_pos[1]:.3f} "
                 f"z={self._actual_anchor_base_pos[2]:.3f}"
+            )
+        if synchronized and self.translation_mode == "start_aligned_xy" and self._start_aligned_gt_base_pos is None:
+            self._start_aligned_gt_base_pos = base_pos.copy()
+            self._start_aligned_actual_base_pos = self._get_actual_robot_root_pos()
+            self._start_aligned_gt_yaw = self._quat_to_yaw(base_quat)
+            self._start_aligned_actual_yaw = self._get_actual_robot_root_yaw()
+            self._start_aligned_yaw_delta = self._wrap_to_pi(
+                self._start_aligned_actual_yaw - self._start_aligned_gt_yaw
+            )
+            print(
+                "[ReferenceMotionVisualizer] locked start-aligned XY origin "
+                f"gt=({self._start_aligned_gt_base_pos[0]:.3f}, {self._start_aligned_gt_base_pos[1]:.3f}) "
+                f"actual=({self._start_aligned_actual_base_pos[0]:.3f}, {self._start_aligned_actual_base_pos[1]:.3f}) "
+                f"yaw_delta_deg={np.degrees(self._start_aligned_yaw_delta):.2f}"
             )
         if self.translation_mode != "delta_aligned" or self._translation_anchor_ready:
             self._maybe_refresh_translation_anchor(base_pos)
@@ -518,17 +536,13 @@ class ReferenceMotionVisualizer:
             print("[ReferenceMotionVisualizer] reference pose stream detected")
 
     def apply(self):
-        if self._latest_pose is None or not self.enabled:
+        if self._current_display_pose is None or not self.enabled:
             return False
 
-        base_pos, base_quat, body_q = self._latest_pose
-        if self.translation_mode == "delta_aligned":
-            if not self._translation_anchor_ready:
-                return False
-            if self._target_anchor_base_pos is None or self._actual_anchor_base_pos is None:
-                self._target_anchor_base_pos = base_pos.copy()
-                self._actual_anchor_base_pos = self._get_actual_robot_root_pos()
-            base_pos = self._actual_anchor_base_pos + (base_pos - self._target_anchor_base_pos)
+        base_pos, base_quat, body_q = self._current_display_pose
+        base_pos, base_quat = self._transform_reference_root_pose(base_pos, base_quat)
+        if base_pos is None:
+            return False
         self.mj_data.qpos[self.root_qpos_adr : self.root_qpos_adr + 3] = base_pos
         self.mj_data.qpos[self.root_qpos_adr + 3 : self.root_qpos_adr + 7] = base_quat
         self.mj_data.qvel[self.root_qvel_adr : self.root_qvel_adr + 6] = 0.0
@@ -536,6 +550,7 @@ class ReferenceMotionVisualizer:
         if self.ref_hand_qpos_adrs.size > 0 and self.actual_hand_qpos_adrs.size > 0:
             self.mj_data.qpos[self.ref_hand_qpos_adrs] = self.mj_data.qpos[self.actual_hand_qpos_adrs]
         self.mj_data.qvel[self.body_qvel_adrs] = 0.0
+        self._log_reference_debug_state(base_pos)
         return True
 
     def compute_exact_reference_body_pos(
@@ -546,6 +561,9 @@ class ReferenceMotionVisualizer:
             return None, None
 
         base_pos, base_quat, body_q = self._current_exact_pose
+        transformed_base_pos, transformed_base_quat = self._transform_reference_root_pose(base_pos, base_quat)
+        if transformed_base_pos is None:
+            return None, None
         saved_root_qpos = self.mj_data.qpos[self.root_qpos_adr : self.root_qpos_adr + 7].copy()
         saved_root_qvel = self.mj_data.qvel[self.root_qvel_adr : self.root_qvel_adr + 6].copy()
         saved_body_qpos = self.mj_data.qpos[self.body_qpos_adrs].copy()
@@ -555,8 +573,8 @@ class ReferenceMotionVisualizer:
             saved_hand_qpos = self.mj_data.qpos[self.ref_hand_qpos_adrs].copy()
 
         try:
-            self.mj_data.qpos[self.root_qpos_adr : self.root_qpos_adr + 3] = base_pos
-            self.mj_data.qpos[self.root_qpos_adr + 3 : self.root_qpos_adr + 7] = base_quat
+            self.mj_data.qpos[self.root_qpos_adr : self.root_qpos_adr + 3] = transformed_base_pos
+            self.mj_data.qpos[self.root_qpos_adr + 3 : self.root_qpos_adr + 7] = transformed_base_quat
             self.mj_data.qvel[self.root_qvel_adr : self.root_qvel_adr + 6] = 0.0
             self.mj_data.qpos[self.body_qpos_adrs] = body_q
             self.mj_data.qvel[self.body_qvel_adrs] = 0.0
@@ -577,6 +595,30 @@ class ReferenceMotionVisualizer:
 
     def _get_actual_robot_root_pos(self) -> np.ndarray:
         return self.mj_data.qpos[:3].copy()
+
+    def _get_actual_robot_root_yaw(self) -> float:
+        return self._quat_to_yaw(np.asarray(self.mj_data.qpos[3:7], dtype=np.float64))
+
+    @staticmethod
+    def _wrap_to_pi(angle: float) -> float:
+        return float(np.arctan2(np.sin(angle), np.cos(angle)))
+
+    @staticmethod
+    def _quat_to_yaw(quat_wxyz: np.ndarray) -> float:
+        quat = np.asarray(quat_wxyz, dtype=np.float64)
+        rot = Rotation.from_quat(quat, scalar_first=True)
+        return float(rot.as_euler("zyx")[0])
+
+    @staticmethod
+    def _yaw_to_quat(yaw: float) -> np.ndarray:
+        return Rotation.from_euler("z", yaw).as_quat(scalar_first=True).astype(np.float64)
+
+    def _apply_start_aligned_yaw_to_quat(self, quat_wxyz: np.ndarray) -> np.ndarray:
+        if self._start_aligned_yaw_delta is None:
+            return np.asarray(quat_wxyz, dtype=np.float64).copy()
+        rot_delta = Rotation.from_euler("z", self._start_aligned_yaw_delta)
+        rot_in = Rotation.from_quat(np.asarray(quat_wxyz, dtype=np.float64), scalar_first=True)
+        return (rot_delta * rot_in).as_quat(scalar_first=True).astype(np.float64)
 
     def _maybe_refresh_translation_anchor(self, target_base_pos: np.ndarray):
         if self.translation_mode != "delta_aligned":
@@ -602,6 +644,79 @@ class ReferenceMotionVisualizer:
                 self._actual_anchor_base_pos = self._get_actual_robot_root_pos()
                 print("[ReferenceMotionVisualizer] re-anchored reference root translation")
         self._prev_target_base_pos = target_base_pos.copy()
+
+    def _transform_reference_root_pose(
+        self,
+        base_pos: np.ndarray,
+        base_quat: np.ndarray,
+    ) -> tuple[np.ndarray | None, np.ndarray]:
+        out_pos = base_pos.copy()
+        out_quat = np.asarray(base_quat, dtype=np.float64).copy()
+        if self.translation_mode == "delta_aligned":
+            if not self._translation_anchor_ready:
+                return None, out_quat
+            if self._target_anchor_base_pos is None or self._actual_anchor_base_pos is None:
+                self._target_anchor_base_pos = base_pos.copy()
+                self._actual_anchor_base_pos = self._get_actual_robot_root_pos()
+            return self._actual_anchor_base_pos + (base_pos - self._target_anchor_base_pos), out_quat
+        if self.translation_mode == "start_aligned_xy":
+            if (
+                self._start_aligned_gt_base_pos is None
+                or self._start_aligned_actual_base_pos is None
+                or self._start_aligned_yaw_delta is None
+            ):
+                return None, out_quat
+            rel_xy = out_pos[:2] - self._start_aligned_gt_base_pos[:2]
+            c = float(np.cos(self._start_aligned_yaw_delta))
+            s = float(np.sin(self._start_aligned_yaw_delta))
+            rot_rel_xy = np.array(
+                [
+                    c * rel_xy[0] - s * rel_xy[1],
+                    s * rel_xy[0] + c * rel_xy[1],
+                ],
+                dtype=np.float64,
+            )
+            out_pos[:2] = self._start_aligned_actual_base_pos[:2] + rot_rel_xy
+            out_quat = self._apply_start_aligned_yaw_to_quat(out_quat)
+            return out_pos, out_quat
+        return out_pos, out_quat
+
+    def _transform_reference_base_pos(self, base_pos: np.ndarray) -> np.ndarray | None:
+        out = base_pos.copy()
+        if self.translation_mode == "delta_aligned":
+            if not self._translation_anchor_ready:
+                return None
+            if self._target_anchor_base_pos is None or self._actual_anchor_base_pos is None:
+                self._target_anchor_base_pos = base_pos.copy()
+                self._actual_anchor_base_pos = self._get_actual_robot_root_pos()
+            return self._actual_anchor_base_pos + (base_pos - self._target_anchor_base_pos)
+        if self.translation_mode == "start_aligned_xy":
+            if self._start_aligned_gt_base_pos is None or self._start_aligned_actual_base_pos is None:
+                return None
+            offset_xy = self._start_aligned_actual_base_pos[:2] - self._start_aligned_gt_base_pos[:2]
+            out[:2] = out[:2] + offset_xy
+            return out
+        return out
+
+    def _log_reference_debug_state(self, applied_base_pos: np.ndarray):
+        now = time.monotonic()
+        if now - self._last_debug_visibility_log_time < 1.0:
+            return
+        self._last_debug_visibility_log_time = now
+
+        actual_root_pos = np.asarray(self.mj_data.xpos[self.actual_root_body_id], dtype=np.float64).copy()
+        ref_root_pos_scene = np.asarray(self.mj_data.xpos[self.ref_root_body_id], dtype=np.float64).copy()
+        dist = float(np.linalg.norm(ref_root_pos_scene - actual_root_pos))
+        alpha_mean = float(np.mean(self.mj_model.geom_rgba[self.ref_geom_ids, 3])) if self.ref_geom_ids.size > 0 else 0.0
+        print(
+            "[ReferenceMotionVisualizer] debug "
+            f"visible={self.visible} alpha_mean={alpha_mean:.3f} "
+            f"source_frame={self._current_applied_source_frame_index} "
+            f"actual_root=({actual_root_pos[0]:.3f}, {actual_root_pos[1]:.3f}, {actual_root_pos[2]:.3f}) "
+            f"ref_root_scene=({ref_root_pos_scene[0]:.3f}, {ref_root_pos_scene[1]:.3f}, {ref_root_pos_scene[2]:.3f}) "
+            f"ref_root_applied=({applied_base_pos[0]:.3f}, {applied_base_pos[1]:.3f}, {applied_base_pos[2]:.3f}) "
+            f"root_dist={dist:.4f}"
+        )
 
 
 class DefaultEnv:
@@ -917,10 +1032,10 @@ class DefaultEnv:
             else:
                 rgba = np.fromstring(rgba_str, sep=" ", dtype=np.float64)
                 rgb = rgba[:3] if rgba.size >= 3 else np.array([0.7, 0.7, 0.7], dtype=np.float64)
-            lightened_rgb = np.clip(0.45 + 0.55 * rgb, 0.0, 1.0)
+            ref_rgb = np.array([1.0, 0.15, 0.15], dtype=np.float64)
             element.set(
                 "rgba",
-                f"{lightened_rgb[0]:.6f} {lightened_rgb[1]:.6f} {lightened_rgb[2]:.6f} {alpha:.6f}",
+                f"{ref_rgb[0]:.6f} {ref_rgb[1]:.6f} {ref_rgb[2]:.6f} {alpha:.6f}",
             )
 
     def _init_reference_visualizer(self):
@@ -943,7 +1058,7 @@ class DefaultEnv:
                     self.config.get("REFERENCE_MOTION_ALLOW_MIDRUN_REALIGN", False)
                 ),
                 translation_mode=self.config.get(
-                    "REFERENCE_MOTION_TRANSLATION_MODE", "delta_aligned"
+                    "REFERENCE_MOTION_TRANSLATION_MODE", "start_aligned_xy"
                 ),
             )
         except Exception as exc:

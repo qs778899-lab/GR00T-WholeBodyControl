@@ -8,8 +8,8 @@ set -euo pipefail
 # You must prepare matching running A/B pipelines per worker (port-isolated).
 #
 # Example worker ports:
-#   worker0 -> 5556
-#   worker1 -> 5566
+#   worker0 -> 5616
+#   worker1 -> 5626
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
@@ -17,7 +17,7 @@ cd "$REPO_ROOT"
 MOTION_LIST=""
 MOTION_DIR=""
 WORKERS=2
-PORT_BASE=5556
+PORT_BASE=5616
 PORT_STEP=10
 LOGS_ROOT_BASE="/tmp/sonic_logs/batch_parallel"
 RESULTS_ROOT="/tmp/sonic_batch_parallel"

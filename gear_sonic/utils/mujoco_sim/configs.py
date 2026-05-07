@@ -318,7 +318,7 @@ class BaseConfig(ArgsConfigTemplate):
     reference_motion_alpha: float = 0.35
     """Alpha value used for the reference robot mesh."""
 
-    reference_motion_translation_mode: Literal["delta_aligned", "raw_global"] = "delta_aligned"
+    reference_motion_translation_mode: Literal["delta_aligned", "raw_global", "start_aligned_xy"] = "start_aligned_xy"
     """How reference root translation is visualized in MuJoCo."""
 
     reference_motion_allow_midrun_realign: bool = False
