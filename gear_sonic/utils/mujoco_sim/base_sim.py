@@ -240,6 +240,12 @@ class ReferenceMotionVisualizer:
         self._pending_debug_source_frames = deque()
         self._translation_anchor_ready = False
         self._raw_pose_stream_seen = False
+        self._actual_root_pos_history = deque(maxlen=10)
+        self._actual_root_history_dt = 1.0 / 50.0
+        self._actual_root_history_last_sim_time = None
+        self._anchor_actual_speed_threshold = 0.05
+        self._anchor_actual_min_history = 10
+        self._anchor_wait_logged = False
         self.set_visible(False)
 
         self.debug_subscriber = ZMQStateSubscriber(host=host, port=port, topic=topic, conflate=False)
@@ -290,6 +296,9 @@ class ReferenceMotionVisualizer:
         self._pending_debug_source_frames.clear()
         self._translation_anchor_ready = False
         self._raw_pose_stream_seen = False
+        self._actual_root_pos_history.clear()
+        self._actual_root_history_last_sim_time = None
+        self._anchor_wait_logged = False
         self._shown_once = False
         self.set_visible(False)
 
@@ -557,19 +566,39 @@ class ReferenceMotionVisualizer:
                 f"z={self._actual_anchor_base_pos[2]:.3f}"
             )
         if synchronized and self.translation_mode == "start_aligned_xy" and self._start_aligned_gt_base_pos is None:
-            self._start_aligned_gt_base_pos = base_pos.copy()
-            self._start_aligned_actual_base_pos = self._get_actual_robot_root_pos()
-            self._start_aligned_gt_yaw = self._quat_to_yaw(base_quat)
-            self._start_aligned_actual_yaw = self._get_actual_robot_root_yaw()
-            self._start_aligned_yaw_delta = self._wrap_to_pi(
-                self._start_aligned_actual_yaw - self._start_aligned_gt_yaw
-            )
-            print(
-                "[ReferenceMotionVisualizer] locked start-aligned XY origin "
-                f"gt=({self._start_aligned_gt_base_pos[0]:.3f}, {self._start_aligned_gt_base_pos[1]:.3f}) "
-                f"actual=({self._start_aligned_actual_base_pos[0]:.3f}, {self._start_aligned_actual_base_pos[1]:.3f}) "
-                f"yaw_delta_deg={np.degrees(self._start_aligned_yaw_delta):.2f}"
-            )
+            actual_root_pos_now = self._get_actual_robot_root_pos()
+            sim_time_now = float(self.mj_data.time)
+            min_gap = 0.5 * self._actual_root_history_dt
+            if (
+                self._actual_root_history_last_sim_time is None
+                or sim_time_now - self._actual_root_history_last_sim_time >= min_gap
+            ):
+                self._actual_root_pos_history.append(actual_root_pos_now.copy())
+                self._actual_root_history_last_sim_time = sim_time_now
+            if not self._is_actual_root_static():
+                if not self._anchor_wait_logged:
+                    self._anchor_wait_logged = True
+                    print(
+                        "[ReferenceMotionVisualizer] waiting for actual root to stabilize "
+                        f"before locking start-aligned anchor "
+                        f"(history={len(self._actual_root_pos_history)}/"
+                        f"{self._anchor_actual_min_history}, "
+                        f"thresh={self._anchor_actual_speed_threshold:.3f} m/s)"
+                    )
+            else:
+                self._start_aligned_gt_base_pos = base_pos.copy()
+                self._start_aligned_actual_base_pos = actual_root_pos_now.copy()
+                self._start_aligned_gt_yaw = self._quat_to_yaw(base_quat)
+                self._start_aligned_actual_yaw = self._get_actual_robot_root_yaw()
+                self._start_aligned_yaw_delta = self._wrap_to_pi(
+                    self._start_aligned_actual_yaw - self._start_aligned_gt_yaw
+                )
+                print(
+                    "[ReferenceMotionVisualizer] locked start-aligned XY origin "
+                    f"gt=({self._start_aligned_gt_base_pos[0]:.3f}, {self._start_aligned_gt_base_pos[1]:.3f}) "
+                    f"actual=({self._start_aligned_actual_base_pos[0]:.3f}, {self._start_aligned_actual_base_pos[1]:.3f}) "
+                    f"yaw_delta_deg={np.degrees(self._start_aligned_yaw_delta):.2f}"
+                )
         if self.translation_mode != "delta_aligned" or self._translation_anchor_ready:
             self._maybe_refresh_translation_anchor(base_pos)
         now = time.monotonic()
@@ -579,7 +608,7 @@ class ReferenceMotionVisualizer:
                 "[ReferenceMotionVisualizer] root pose "
                 f"x={base_pos[0]:.3f} y={base_pos[1]:.3f} z={base_pos[2]:.3f}"
             )
-        if not self._shown_once and (self.translation_mode != "delta_aligned" or self._translation_anchor_ready):
+        if not self._shown_once and self._is_anchor_ready():
             self._shown_once = True
             self.set_visible(True)
             print("[ReferenceMotionVisualizer] reference pose stream detected")
@@ -709,6 +738,21 @@ class ReferenceMotionVisualizer:
 
     def _get_actual_robot_root_pos(self) -> np.ndarray:
         return self.mj_data.qpos[:3].copy()
+
+    def _is_actual_root_static(self) -> bool:
+        if len(self._actual_root_pos_history) < self._anchor_actual_min_history:
+            return False
+        history = np.asarray(self._actual_root_pos_history, dtype=np.float64)
+        diffs = np.linalg.norm(np.diff(history, axis=0), axis=1)
+        max_speed = float(np.max(diffs)) / max(self._actual_root_history_dt, 1e-6)
+        return max_speed < self._anchor_actual_speed_threshold
+
+    def _is_anchor_ready(self) -> bool:
+        if self.translation_mode == "delta_aligned":
+            return bool(self._translation_anchor_ready)
+        if self.translation_mode == "start_aligned_xy":
+            return self._start_aligned_gt_base_pos is not None
+        return True
 
     def _get_actual_robot_root_yaw(self) -> float:
         return self._quat_to_yaw(np.asarray(self.mj_data.qpos[3:7], dtype=np.float64))
