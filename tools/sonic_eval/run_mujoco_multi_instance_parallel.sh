@@ -288,6 +288,8 @@ echo "[INFO] launching ${WORKERS} MuJoCo sim workers"
 for ((i=0; i<WORKERS; i++)); do
   domain=$((DOMAIN_BASE + i))
   sim_log="${RUN_ROOT}/sim_worker_${i}.log"
+  sim_eval_logs="${LOGS_ROOT_BASE}/worker_${i}"
+  mkdir -p "$sim_eval_logs"
   if [[ "$SIM_LAUNCHER" == "venv" ]]; then
     (
       cd "$REPO_ROOT"
@@ -297,6 +299,7 @@ for ((i=0; i<WORKERS; i++)); do
         --simulator mujoco \
         --env-name default \
         --domain-id "$domain" \
+        --sim2sim-eval-logs-dir "$sim_eval_logs" \
         --no-enable-onscreen \
         --no-enable-offscreen
     ) >"$sim_log" 2>&1 &
@@ -310,12 +313,13 @@ for ((i=0; i<WORKERS; i++)); do
         --simulator mujoco \
         --env-name default \
         --domain-id "$domain" \
+        --sim2sim-eval-logs-dir "$sim_eval_logs" \
         --no-enable-onscreen \
         --no-enable-offscreen
     ) >"$sim_log" 2>&1 &
   fi
   SIM_PIDS+=("$!")
-  echo "[INFO] sim worker=${i} domain=${domain} log=${sim_log}"
+  echo "[INFO] sim worker=${i} domain=${domain} sim_eval_logs=${sim_eval_logs} log=${sim_log}"
 done
 
 if [[ "$DEPLOY_AUTO_BUILD" == "true" ]]; then

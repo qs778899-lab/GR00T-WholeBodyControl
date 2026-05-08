@@ -148,7 +148,238 @@ motionlib的作用：
     --host 127.0.0.1 \
     --port 5596 \
     --target-fps 50 \
-    --chunk-size 20 \
+    --initial-burst-frames 20 \
+    --chunk-size 30 \
+    --realtime \
+    --send-command \
+    --use-isaacsim-app
+
+   #### eval_benchmark/robot — 终端C 指令
+
+   python tools/sonic_eval/stream_motionlib_to_deploy.py \
+    --motion-file eval_benchmark/robot/reach-1-001_chr00.pkl \
+    --motion-name reach-1-001_chr00 \
+    --host 127.0.0.1 \
+    --port 5596 \
+    --target-fps 50 \
+    --initial-burst-frames 20 \
+    --chunk-size 30 \
+    --realtime \
+    --send-command \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/stream_motionlib_to_deploy.py \
+    --motion-file eval_benchmark/robot/reach-1-002_chr00.pkl \
+    --motion-name reach-1-002_chr00 \
+    --host 127.0.0.1 \
+    --port 5596 \
+    --target-fps 50 \
+    --initial-burst-frames 20 \
+    --chunk-size 30 \
+    --realtime \
+    --send-command \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/stream_motionlib_to_deploy.py \
+    --motion-file eval_benchmark/robot/reach-1-005_chr00.pkl \
+    --motion-name reach-1-005_chr00 \
+    --host 127.0.0.1 \
+    --port 5596 \
+    --target-fps 50 \
+    --initial-burst-frames 20 \
+    --chunk-size 30 \
+    --realtime \
+    --send-command \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/stream_motionlib_to_deploy.py \
+    --motion-file eval_benchmark/robot/reach-2-001_chr00.pkl \
+    --motion-name reach-2-001_chr00 \
+    --host 127.0.0.1 \
+    --port 5596 \
+    --target-fps 50 \
+    --initial-burst-frames 20 \
+    --chunk-size 30 \
+    --realtime \
+    --send-command \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/stream_motionlib_to_deploy.py \
+    --motion-file eval_benchmark/robot/reach-2-002_chr00.pkl \
+    --motion-name reach-2-002_chr00 \
+    --host 127.0.0.1 \
+    --port 5596 \
+    --target-fps 50 \
+    --initial-burst-frames 20 \
+    --chunk-size 30 \
+    --realtime \
+    --send-command \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/stream_motionlib_to_deploy.py \
+    --motion-file eval_benchmark/robot/reach-2-003_chr00.pkl \
+    --motion-name reach-2-003_chr00 \
+    --host 127.0.0.1 \
+    --port 5596 \
+    --target-fps 50 \
+    --initial-burst-frames 20 \
+    --chunk-size 30 \
+    --realtime \
+    --send-command \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/stream_motionlib_to_deploy.py \
+    --motion-file eval_benchmark/robot/reach-2-004_chr00.pkl \
+    --motion-name reach-2-004_chr00 \
+    --host 127.0.0.1 \
+    --port 5596 \
+    --target-fps 50 \
+    --initial-burst-frames 20 \
+    --chunk-size 30 \
+    --realtime \
+    --send-command \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/stream_motionlib_to_deploy.py \
+    --motion-file eval_benchmark/robot/reach-2-005_chr00.pkl \
+    --motion-name reach-2-005_chr00 \
+    --host 127.0.0.1 \
+    --port 5596 \
+    --target-fps 50 \
+    --initial-burst-frames 20 \
+    --chunk-size 30 \
+    --realtime \
+    --send-command \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/stream_motionlib_to_deploy.py \
+    --motion-file eval_benchmark/robot/reach-2-006_chr00.pkl \
+    --motion-name reach-2-006_chr00 \
+    --host 127.0.0.1 \
+    --port 5596 \
+    --target-fps 50 \
+    --initial-burst-frames 20 \
+    --chunk-size 30 \
+    --realtime \
+    --send-command \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/stream_motionlib_to_deploy.py \
+    --motion-file eval_benchmark/robot/reach-2-007_chr00.pkl \
+    --motion-name reach-2-007_chr00 \
+    --host 127.0.0.1 \
+    --port 5596 \
+    --target-fps 50 \
+    --initial-burst-frames 20 \
+    --chunk-size 30 \
+    --realtime \
+    --send-command \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/stream_motionlib_to_deploy.py \
+    --motion-file eval_benchmark/robot/reach-2-008_chr00.pkl \
+    --motion-name reach-2-008_chr00 \
+    --host 127.0.0.1 \
+    --port 5596 \
+    --target-fps 50 \
+    --initial-burst-frames 20 \
+    --chunk-size 30 \
+    --realtime \
+    --send-command \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/stream_motionlib_to_deploy.py \
+    --motion-file eval_benchmark/robot/reach-3-001_chr00.pkl \
+    --motion-name reach-3-001_chr00 \
+    --host 127.0.0.1 \
+    --port 5596 \
+    --target-fps 50 \
+    --initial-burst-frames 20 \
+    --chunk-size 30 \
+    --realtime \
+    --send-command \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/stream_motionlib_to_deploy.py \
+    --motion-file eval_benchmark/robot/reach-3-002_chr00.pkl \
+    --motion-name reach-3-002_chr00 \
+    --host 127.0.0.1 \
+    --port 5596 \
+    --target-fps 50 \
+    --initial-burst-frames 20 \
+    --chunk-size 30 \
+    --realtime \
+    --send-command \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/stream_motionlib_to_deploy.py \
+    --motion-file eval_benchmark/robot/reach-3-003_chr00.pkl \
+    --motion-name reach-3-003_chr00 \
+    --host 127.0.0.1 \
+    --port 5596 \
+    --target-fps 50 \
+    --initial-burst-frames 20 \
+    --chunk-size 30 \
+    --realtime \
+    --send-command \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/stream_motionlib_to_deploy.py \
+    --motion-file eval_benchmark/robot/reach-3-004_chr00.pkl \
+    --motion-name reach-3-004_chr00 \
+    --host 127.0.0.1 \
+    --port 5596 \
+    --target-fps 50 \
+    --initial-burst-frames 20 \
+    --chunk-size 30 \
+    --realtime \
+    --send-command \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/stream_motionlib_to_deploy.py \
+    --motion-file eval_benchmark/robot/reach-4-001_chr00.pkl \
+    --motion-name reach-4-001_chr00 \
+    --host 127.0.0.1 \
+    --port 5596 \
+    --target-fps 50 \
+    --initial-burst-frames 20 \
+    --chunk-size 30 \
+    --realtime \
+    --send-command \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/stream_motionlib_to_deploy.py \
+    --motion-file eval_benchmark/robot/reach-4-002_chr00.pkl \
+    --motion-name reach-4-002_chr00 \
+    --host 127.0.0.1 \
+    --port 5596 \
+    --target-fps 50 \
+    --initial-burst-frames 20 \
+    --chunk-size 30 \
+    --realtime \
+    --send-command \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/stream_motionlib_to_deploy.py \
+    --motion-file eval_benchmark/robot/reach-4-003_chr00.pkl \
+    --motion-name reach-4-003_chr00 \
+    --host 127.0.0.1 \
+    --port 5596 \
+    --target-fps 50 \
+    --initial-burst-frames 20 \
+    --chunk-size 30 \
+    --realtime \
+    --send-command \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/stream_motionlib_to_deploy.py \
+    --motion-file eval_benchmark/robot/reach-4-004_chr00.pkl \
+    --motion-name reach-4-004_chr00 \
+    --host 127.0.0.1 \
+    --port 5596 \
+    --target-fps 50 \
+    --initial-burst-frames 20 \
+    --chunk-size 30 \
     --realtime \
     --send-command \
     --use-isaacsim-app
@@ -196,6 +427,277 @@ motionlib的作用：
     --actual-source step_sync_body_pos_w_14 \
     --sim-valid-only \
     --use-isaacsim-app
+
+
+   #### eval_benchmark/robot — 终端D 指令
+
+   python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
+    --gt-format motionlib \
+    --motion-file eval_benchmark/robot/reach-1-001_chr00.pkl \
+    --motion-name reach-1-001_chr00 \
+    --logs-dir /tmp/sonic_logs/official_walk_zmq01 \
+    --out-json /tmp/reach-1-001_chr00.json \
+    --no-motionlib-robot \
+    --ignore-motion-playing-mask \
+    --streamed-only \
+    --align-mode source_frame_index \
+    --actual-source step_sync_body_pos_w_14 \
+    --sim-valid-only \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
+    --gt-format motionlib \
+    --motion-file eval_benchmark/robot/reach-1-002_chr00.pkl \
+    --motion-name reach-1-002_chr00 \
+    --logs-dir /tmp/sonic_logs/official_walk_zmq01 \
+    --out-json /tmp/reach-1-002_chr00.json \
+    --no-motionlib-robot \
+    --ignore-motion-playing-mask \
+    --streamed-only \
+    --align-mode source_frame_index \
+    --actual-source step_sync_body_pos_w_14 \
+    --sim-valid-only \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
+    --gt-format motionlib \
+    --motion-file eval_benchmark/robot/reach-1-005_chr00.pkl \
+    --motion-name reach-1-005_chr00 \
+    --logs-dir /tmp/sonic_logs/official_walk_zmq01 \
+    --out-json /tmp/reach-1-005_chr00.json \
+    --no-motionlib-robot \
+    --ignore-motion-playing-mask \
+    --streamed-only \
+    --align-mode source_frame_index \
+    --actual-source step_sync_body_pos_w_14 \
+    --sim-valid-only \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
+    --gt-format motionlib \
+    --motion-file eval_benchmark/robot/reach-2-001_chr00.pkl \
+    --motion-name reach-2-001_chr00 \
+    --logs-dir /tmp/sonic_logs/official_walk_zmq01 \
+    --out-json /tmp/reach-2-001_chr00.json \
+    --no-motionlib-robot \
+    --ignore-motion-playing-mask \
+    --streamed-only \
+    --align-mode source_frame_index \
+    --actual-source step_sync_body_pos_w_14 \
+    --sim-valid-only \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
+    --gt-format motionlib \
+    --motion-file eval_benchmark/robot/reach-2-002_chr00.pkl \
+    --motion-name reach-2-002_chr00 \
+    --logs-dir /tmp/sonic_logs/official_walk_zmq01 \
+    --out-json /tmp/reach-2-002_chr00.json \
+    --no-motionlib-robot \
+    --ignore-motion-playing-mask \
+    --streamed-only \
+    --align-mode source_frame_index \
+    --actual-source step_sync_body_pos_w_14 \
+    --sim-valid-only \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
+    --gt-format motionlib \
+    --motion-file eval_benchmark/robot/reach-2-003_chr00.pkl \
+    --motion-name reach-2-003_chr00 \
+    --logs-dir /tmp/sonic_logs/official_walk_zmq01 \
+    --out-json /tmp/reach-2-003_chr00.json \
+    --no-motionlib-robot \
+    --ignore-motion-playing-mask \
+    --streamed-only \
+    --align-mode source_frame_index \
+    --actual-source step_sync_body_pos_w_14 \
+    --sim-valid-only \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
+    --gt-format motionlib \
+    --motion-file eval_benchmark/robot/reach-2-004_chr00.pkl \
+    --motion-name reach-2-004_chr00 \
+    --logs-dir /tmp/sonic_logs/official_walk_zmq01 \
+    --out-json /tmp/reach-2-004_chr00.json \
+    --no-motionlib-robot \
+    --ignore-motion-playing-mask \
+    --streamed-only \
+    --align-mode source_frame_index \
+    --actual-source step_sync_body_pos_w_14 \
+    --sim-valid-only \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
+    --gt-format motionlib \
+    --motion-file eval_benchmark/robot/reach-2-005_chr00.pkl \
+    --motion-name reach-2-005_chr00 \
+    --logs-dir /tmp/sonic_logs/official_walk_zmq01 \
+    --out-json /tmp/reach-2-005_chr00.json \
+    --no-motionlib-robot \
+    --ignore-motion-playing-mask \
+    --streamed-only \
+    --align-mode source_frame_index \
+    --actual-source step_sync_body_pos_w_14 \
+    --sim-valid-only \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
+    --gt-format motionlib \
+    --motion-file eval_benchmark/robot/reach-2-006_chr00.pkl \
+    --motion-name reach-2-006_chr00 \
+    --logs-dir /tmp/sonic_logs/official_walk_zmq01 \
+    --out-json /tmp/reach-2-006_chr00.json \
+    --no-motionlib-robot \
+    --ignore-motion-playing-mask \
+    --streamed-only \
+    --align-mode source_frame_index \
+    --actual-source step_sync_body_pos_w_14 \
+    --sim-valid-only \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
+    --gt-format motionlib \
+    --motion-file eval_benchmark/robot/reach-2-007_chr00.pkl \
+    --motion-name reach-2-007_chr00 \
+    --logs-dir /tmp/sonic_logs/official_walk_zmq01 \
+    --out-json /tmp/reach-2-007_chr00.json \
+    --no-motionlib-robot \
+    --ignore-motion-playing-mask \
+    --streamed-only \
+    --align-mode source_frame_index \
+    --actual-source step_sync_body_pos_w_14 \
+    --sim-valid-only \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
+    --gt-format motionlib \
+    --motion-file eval_benchmark/robot/reach-2-008_chr00.pkl \
+    --motion-name reach-2-008_chr00 \
+    --logs-dir /tmp/sonic_logs/official_walk_zmq01 \
+    --out-json /tmp/reach-2-008_chr00.json \
+    --no-motionlib-robot \
+    --ignore-motion-playing-mask \
+    --streamed-only \
+    --align-mode source_frame_index \
+    --actual-source step_sync_body_pos_w_14 \
+    --sim-valid-only \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
+    --gt-format motionlib \
+    --motion-file eval_benchmark/robot/reach-3-001_chr00.pkl \
+    --motion-name reach-3-001_chr00 \
+    --logs-dir /tmp/sonic_logs/official_walk_zmq01 \
+    --out-json /tmp/reach-3-001_chr00.json \
+    --no-motionlib-robot \
+    --ignore-motion-playing-mask \
+    --streamed-only \
+    --align-mode source_frame_index \
+    --actual-source step_sync_body_pos_w_14 \
+    --sim-valid-only \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
+    --gt-format motionlib \
+    --motion-file eval_benchmark/robot/reach-3-002_chr00.pkl \
+    --motion-name reach-3-002_chr00 \
+    --logs-dir /tmp/sonic_logs/official_walk_zmq01 \
+    --out-json /tmp/reach-3-002_chr00.json \
+    --no-motionlib-robot \
+    --ignore-motion-playing-mask \
+    --streamed-only \
+    --align-mode source_frame_index \
+    --actual-source step_sync_body_pos_w_14 \
+    --sim-valid-only \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
+    --gt-format motionlib \
+    --motion-file eval_benchmark/robot/reach-3-003_chr00.pkl \
+    --motion-name reach-3-003_chr00 \
+    --logs-dir /tmp/sonic_logs/official_walk_zmq01 \
+    --out-json /tmp/reach-3-003_chr00.json \
+    --no-motionlib-robot \
+    --ignore-motion-playing-mask \
+    --streamed-only \
+    --align-mode source_frame_index \
+    --actual-source step_sync_body_pos_w_14 \
+    --sim-valid-only \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
+    --gt-format motionlib \
+    --motion-file eval_benchmark/robot/reach-3-004_chr00.pkl \
+    --motion-name reach-3-004_chr00 \
+    --logs-dir /tmp/sonic_logs/official_walk_zmq01 \
+    --out-json /tmp/reach-3-004_chr00.json \
+    --no-motionlib-robot \
+    --ignore-motion-playing-mask \
+    --streamed-only \
+    --align-mode source_frame_index \
+    --actual-source step_sync_body_pos_w_14 \
+    --sim-valid-only \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
+    --gt-format motionlib \
+    --motion-file eval_benchmark/robot/reach-4-001_chr00.pkl \
+    --motion-name reach-4-001_chr00 \
+    --logs-dir /tmp/sonic_logs/official_walk_zmq01 \
+    --out-json /tmp/reach-4-001_chr00.json \
+    --no-motionlib-robot \
+    --ignore-motion-playing-mask \
+    --streamed-only \
+    --align-mode source_frame_index \
+    --actual-source step_sync_body_pos_w_14 \
+    --sim-valid-only \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
+    --gt-format motionlib \
+    --motion-file eval_benchmark/robot/reach-4-002_chr00.pkl \
+    --motion-name reach-4-002_chr00 \
+    --logs-dir /tmp/sonic_logs/official_walk_zmq01 \
+    --out-json /tmp/reach-4-002_chr00.json \
+    --no-motionlib-robot \
+    --ignore-motion-playing-mask \
+    --streamed-only \
+    --align-mode source_frame_index \
+    --actual-source step_sync_body_pos_w_14 \
+    --sim-valid-only \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
+    --gt-format motionlib \
+    --motion-file eval_benchmark/robot/reach-4-003_chr00.pkl \
+    --motion-name reach-4-003_chr00 \
+    --logs-dir /tmp/sonic_logs/official_walk_zmq01 \
+    --out-json /tmp/reach-4-003_chr00.json \
+    --no-motionlib-robot \
+    --ignore-motion-playing-mask \
+    --streamed-only \
+    --align-mode source_frame_index \
+    --actual-source step_sync_body_pos_w_14 \
+    --sim-valid-only \
+    --use-isaacsim-app
+
+   python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
+    --gt-format motionlib \
+    --motion-file eval_benchmark/robot/reach-4-004_chr00.pkl \
+    --motion-name reach-4-004_chr00 \
+    --logs-dir /tmp/sonic_logs/official_walk_zmq01 \
+    --out-json /tmp/reach-4-004_chr00.json \
+    --no-motionlib-robot \
+    --ignore-motion-playing-mask \
+    --streamed-only \
+    --align-mode source_frame_index \
+    --actual-source step_sync_body_pos_w_14 \
+    --sim-valid-only \
+    --use-isaacsim-app
+
+    
 
 
 说明：

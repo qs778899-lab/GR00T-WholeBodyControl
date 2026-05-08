@@ -23,6 +23,7 @@ LOGS_ROOT_BASE="/tmp/sonic_logs/batch_parallel"
 RESULTS_ROOT="/tmp/sonic_batch_parallel"
 HOST="127.0.0.1"
 DEPLOY_LOGS_DIR_BASE=""
+SIM_LOGS_DIR_BASE=""
 
 # passthrough args for worker script
 TARGET_FPS="50"
@@ -60,6 +61,8 @@ Optional:
   --logs-root-base DIR                 Default: ${LOGS_ROOT_BASE}
   --results-root DIR                   Default: ${RESULTS_ROOT}
   --deploy-logs-dir-base DIR           Optional base dir for running deploy logs.
+  --sim-logs-dir-base DIR              Base dir for sim-side CSV logs (sim2sim_step_sync etc.);
+                                       usually same as --logs-root-base in the top-level script.
                                        If set, worker i uses: DIR/worker_i
   --target-fps N                       Default: ${TARGET_FPS}
   --chunk-size N                       Default: ${CHUNK_SIZE}
@@ -90,6 +93,7 @@ while [[ $# -gt 0 ]]; do
     --logs-root-base) LOGS_ROOT_BASE="$2"; shift 2 ;;
     --results-root) RESULTS_ROOT="$2"; shift 2 ;;
     --deploy-logs-dir-base) DEPLOY_LOGS_DIR_BASE="$2"; shift 2 ;;
+    --sim-logs-dir-base) SIM_LOGS_DIR_BASE="$2"; shift 2 ;;
     --target-fps) TARGET_FPS="$2"; shift 2 ;;
     --chunk-size) CHUNK_SIZE="$2"; shift 2 ;;
     --start-frame) START_FRAME="$2"; shift 2 ;;
@@ -285,6 +289,13 @@ for ((i=0; i<WORKERS; i++)); do
   )
   if [[ -n "$DEPLOY_LOGS_DIR_BASE" ]]; then
     cmd+=(--deploy-logs-dir "${DEPLOY_LOGS_DIR_BASE}/worker_${i}")
+  fi
+  # Pass sim-side logs dir so worker can copy step_sync CSV files.
+  # Default to LOGS_ROOT_BASE/worker_i (where run_sim_loop writes via --sim2sim-eval-logs-dir).
+  if [[ -n "$SIM_LOGS_DIR_BASE" ]]; then
+    cmd+=(--sim-logs-dir "${SIM_LOGS_DIR_BASE}/worker_${i}")
+  elif [[ -n "$LOGS_ROOT_BASE" ]]; then
+    cmd+=(--sim-logs-dir "${LOGS_ROOT_BASE}/worker_${i}")
   fi
   if [[ "$USE_ISAACSIM_APP" == "true" ]]; then
     cmd+=(--use-isaacsim-app)

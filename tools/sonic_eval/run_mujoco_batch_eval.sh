@@ -28,6 +28,7 @@ LOGS_ROOT="/tmp/sonic_logs/batch_zmq"
 RESULTS_JSON="/tmp/sonic_batch_metrics_summary.json"
 RESULTS_CSV="/tmp/sonic_batch_metrics_summary.csv"
 DEPLOY_LOGS_DIR=""
+SIM_LOGS_DIR=""
 
 # Stream args (C)
 HOST="127.0.0.1"
@@ -64,6 +65,8 @@ Optional:
   --results-csv PATH                     Summary csv (default: ${RESULTS_CSV})
   --deploy-logs-dir DIR                  If set, copy CSV logs from this running deploy dir
                                          (useful when Terminal B has fixed --logs-dir)
+  --sim-logs-dir DIR                     If set, copy sim-side CSVs (sim2sim_step_sync_body_pos_w_14.csv etc.)
+                                         from this dir; usually same as --logs-root-base/worker_i
   --host HOST                            ZMQ host (default: ${HOST})
   --port PORT                            ZMQ port (default: ${PORT})
   --target-fps N                         Stream target fps (default: ${TARGET_FPS})
@@ -93,6 +96,7 @@ while [[ $# -gt 0 ]]; do
     --results-json) RESULTS_JSON="$2"; shift 2 ;;
     --results-csv) RESULTS_CSV="$2"; shift 2 ;;
     --deploy-logs-dir) DEPLOY_LOGS_DIR="$2"; shift 2 ;;
+    --sim-logs-dir) SIM_LOGS_DIR="$2"; shift 2 ;;
     --host) HOST="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
     --target-fps) TARGET_FPS="$2"; shift 2 ;;
@@ -199,6 +203,9 @@ echo "[INFO] metrics_conda_env=${METRICS_CONDA_ENV}"
 if [[ -n "$DEPLOY_LOGS_DIR" ]]; then
   echo "[INFO] deploy_logs_dir=${DEPLOY_LOGS_DIR}"
 fi
+if [[ -n "$SIM_LOGS_DIR" ]]; then
+  echo "[INFO] sim_logs_dir=${SIM_LOGS_DIR}"
+fi
 
 while IFS=, read -r motion_file motion_name _rest; do
   motion_file="$(echo "${motion_file:-}" | xargs)"
@@ -260,8 +267,22 @@ while IFS=, read -r motion_file motion_name _rest; do
       echo "[HINT] start deploy with --enable-csv-logs --logs-dir $DEPLOY_LOGS_DIR"
       exit 1
     fi
-    # Copy current deploy CSV logs snapshot to per-motion folder for stable per-motion metrics.
+    # Copy deploy-side CSV logs snapshot to per-motion folder.
     find "$DEPLOY_LOGS_DIR" -maxdepth 1 -type f -name "*.csv" -exec cp {} "$logs_dir/" \;
+  fi
+
+  # Copy sim-side CSVs (step_sync, sim_source_frame_index, body_pos_w_14).
+  # These are written by run_sim_loop to sim_logs_dir, which equals logs_root_base/worker_i.
+  if [[ -n "$SIM_LOGS_DIR" ]]; then
+    if [[ ! -d "$SIM_LOGS_DIR" ]]; then
+      echo "[WARN] sim_logs_dir not found: $SIM_LOGS_DIR — sim-side CSVs will be missing"
+    else
+      for sim_csv in sim2sim_step_sync_body_pos_w_14.csv sim_source_frame_index.csv body_pos_w_14.csv; do
+        if [[ -f "${SIM_LOGS_DIR}/${sim_csv}" ]]; then
+          cp "${SIM_LOGS_DIR}/${sim_csv}" "$logs_dir/"
+        fi
+      done
+    fi
   fi
 
   echo "[INFO] compute metrics: ${out_json}"
@@ -274,6 +295,8 @@ while IFS=, read -r motion_file motion_name _rest; do
     --no-motionlib-robot
     --ignore-motion-playing-mask
     --streamed-only
+    --sim-valid-only
+    --actual-source step_sync_body_pos_w_14
     --stream-start-frame "$START_FRAME"
     --stream-prepend-stand-frames "$PREPEND_STAND_FRAMES"
     --stream-blend-from-stand-frames "$BLEND_FROM_STAND_FRAMES"
