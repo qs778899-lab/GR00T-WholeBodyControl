@@ -98,6 +98,7 @@ def override_wbc_config(
         "REFERENCE_MOTION_POSE_ZMQ_TOPIC": config.reference_motion_pose_zmq_topic,
         "REFERENCE_MOTION_ALPHA": config.reference_motion_alpha,
         "REFERENCE_MOTION_TRANSLATION_MODE": config.reference_motion_translation_mode,
+        "REFERENCE_MOTION_ALIGN_DELAY_FRAMES": config.reference_motion_align_delay_frames,
         "REFERENCE_MOTION_ALLOW_MIDRUN_REALIGN": config.reference_motion_allow_midrun_realign,
         "ENABLE_SIM2SIM_EVAL_LOGGING": config.enable_sim2sim_eval_logging,
         "SIM2SIM_EVAL_LOGS_DIR": config.sim2sim_eval_logs_dir,
@@ -318,8 +319,11 @@ class BaseConfig(ArgsConfigTemplate):
     reference_motion_alpha: float = 0.35
     """Alpha value used for the reference robot mesh."""
 
-    reference_motion_translation_mode: Literal["delta_aligned", "raw_global", "start_aligned_xy"] = "start_aligned_xy"
+    reference_motion_translation_mode: Literal["delta_aligned", "raw_global", "start_aligned_xy", "delayed_align"] = "delayed_align"
     """How reference root translation is visualized in MuJoCo."""
+
+    reference_motion_align_delay_frames: int = 50
+    """For delayed_align mode: number of pose-stream frames to wait before locking the anchor."""
 
     reference_motion_allow_midrun_realign: bool = False
     """Whether reference root anchor can be re-aligned during a running clip."""

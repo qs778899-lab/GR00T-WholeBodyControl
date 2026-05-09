@@ -20,7 +20,9 @@ S1 的做法等价于："既然不能让 actual 出生在 pkl 第 0 帧，那就
 reference 可视化和metrics GT： 先对原始 pkl 做一次固定的初始刚体变换，这个变换只由起始帧决定，之后整段动作都不再变化，reference 可视化 和 metrics GT 可以对应上，也同时满足reference可视化的作用和metrics计算的实际意义(对标isaacsim eval对metrics的含义的定义)。
 
 GT源和refer源的问题：总结这个问题
+refer为了不卡顿，会有一些类似插值之类的，那GT源呢？
 
+起始时，机器人不是处于一个静止的状态，而是一直在起立摔倒。
 
 
 
@@ -66,7 +68,7 @@ robot encoder是否有指定？
 
   cd /home/lab/Desktop/GR00T-WholeBodyControl
   source .venv_sim/bin/activate
-  python gear_sonic/scripts/run_sim_loop.py --interface sim --simulator mujoco --env-name default
+  python gear_sonic/scripts/run_sim_loop.py --interface sim --simulator mujoco --env-name default --reference-motion-align-delay-frames 100
 
   点击mujoco窗口，按一次9,让机器人落地
 
@@ -163,6 +165,7 @@ motionlib的作用：
     --port 5596 \
     --target-fps 50 \
     --initial-burst-frames 20 \
+    --blend-from-stand-frames 200 \
     --chunk-size 30 \
     --realtime \
     --send-command \
@@ -235,6 +238,7 @@ motionlib的作用：
     --port 5596 \
     --target-fps 50 \
     --initial-burst-frames 20 \
+    --blend-from-stand-frames 200 \
     --chunk-size 30 \
     --realtime \
     --send-command \
@@ -247,6 +251,7 @@ motionlib的作用：
     --port 5596 \
     --target-fps 50 \
     --initial-burst-frames 20 \
+    --blend-from-stand-frames 200 \
     --chunk-size 30 \
     --realtime \
     --send-command \
@@ -259,6 +264,7 @@ motionlib的作用：
     --port 5596 \
     --target-fps 50 \
     --initial-burst-frames 20 \
+    --blend-from-stand-frames 200 \
     --chunk-size 30 \
     --realtime \
     --send-command \
@@ -271,6 +277,7 @@ motionlib的作用：
     --port 5596 \
     --target-fps 50 \
     --initial-burst-frames 20 \
+    --blend-from-stand-frames 200 \
     --chunk-size 30 \
     --realtime \
     --send-command \
@@ -283,6 +290,7 @@ motionlib的作用：
     --port 5596 \
     --target-fps 50 \
     --initial-burst-frames 20 \
+    --blend-from-stand-frames 200 \
     --chunk-size 30 \
     --realtime \
     --send-command \

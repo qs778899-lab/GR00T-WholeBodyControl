@@ -163,6 +163,7 @@ class ReferenceMotionVisualizer:
         pose_port: int | None = None,
         pose_topic: str = "pose",
         allow_midrun_realign: bool = False,
+        align_delay_frames: int = 50,
     ):
         self.mj_model = mj_model
         self.mj_data = mj_data
@@ -171,6 +172,7 @@ class ReferenceMotionVisualizer:
         self.enabled = True
         self._latest_pose = None
         self.translation_mode = translation_mode
+        self._align_delay_frames = max(1, int(align_delay_frames))
         self.allow_midrun_realign = bool(allow_midrun_realign)
         self._target_anchor_base_pos = None
         self._actual_anchor_base_pos = None
@@ -246,6 +248,7 @@ class ReferenceMotionVisualizer:
         self._anchor_actual_speed_threshold = 0.05
         self._anchor_actual_min_history = 10
         self._anchor_wait_logged = False
+        self._delayed_align_frame_count = 0
         self.set_visible(False)
 
         self.debug_subscriber = ZMQStateSubscriber(host=host, port=port, topic=topic, conflate=False)
@@ -299,6 +302,7 @@ class ReferenceMotionVisualizer:
         self._actual_root_pos_history.clear()
         self._actual_root_history_last_sim_time = None
         self._anchor_wait_logged = False
+        self._delayed_align_frame_count = 0
         self._shown_once = False
         self.set_visible(False)
 
@@ -599,6 +603,31 @@ class ReferenceMotionVisualizer:
                     f"actual=({self._start_aligned_actual_base_pos[0]:.3f}, {self._start_aligned_actual_base_pos[1]:.3f}) "
                     f"yaw_delta_deg={np.degrees(self._start_aligned_yaw_delta):.2f}"
                 )
+        if synchronized and self.translation_mode == "delayed_align" and self._start_aligned_gt_base_pos is None:
+            self._delayed_align_frame_count += 1
+            delay = int(self._align_delay_frames)
+            if self._delayed_align_frame_count <= delay:
+                if self._delayed_align_frame_count == 1:
+                    print(
+                        f"[ReferenceMotionVisualizer] delayed_align: waiting {delay} frames "
+                        f"before locking anchor"
+                    )
+            if self._delayed_align_frame_count >= delay:
+                actual_root_pos_now = self._get_actual_robot_root_pos()
+                self._start_aligned_gt_base_pos = base_pos.copy()
+                self._start_aligned_actual_base_pos = actual_root_pos_now.copy()
+                self._start_aligned_gt_yaw = self._quat_to_yaw(base_quat)
+                self._start_aligned_actual_yaw = self._get_actual_robot_root_yaw()
+                self._start_aligned_yaw_delta = self._wrap_to_pi(
+                    self._start_aligned_actual_yaw - self._start_aligned_gt_yaw
+                )
+                print(
+                    f"[ReferenceMotionVisualizer] locked delayed_align anchor "
+                    f"at frame={self._delayed_align_frame_count} "
+                    f"gt=({self._start_aligned_gt_base_pos[0]:.3f}, {self._start_aligned_gt_base_pos[1]:.3f}) "
+                    f"actual=({self._start_aligned_actual_base_pos[0]:.3f}, {self._start_aligned_actual_base_pos[1]:.3f}) "
+                    f"yaw_delta_deg={np.degrees(self._start_aligned_yaw_delta):.2f}"
+                )
         if self.translation_mode != "delta_aligned" or self._translation_anchor_ready:
             self._maybe_refresh_translation_anchor(base_pos)
         now = time.monotonic()
@@ -750,7 +779,7 @@ class ReferenceMotionVisualizer:
     def _is_anchor_ready(self) -> bool:
         if self.translation_mode == "delta_aligned":
             return bool(self._translation_anchor_ready)
-        if self.translation_mode == "start_aligned_xy":
+        if self.translation_mode in ("start_aligned_xy", "delayed_align"):
             return self._start_aligned_gt_base_pos is not None
         return True
 
@@ -817,7 +846,7 @@ class ReferenceMotionVisualizer:
                 self._target_anchor_base_pos = base_pos.copy()
                 self._actual_anchor_base_pos = self._get_actual_robot_root_pos()
             return self._actual_anchor_base_pos + (base_pos - self._target_anchor_base_pos), out_quat
-        if self.translation_mode == "start_aligned_xy":
+        if self.translation_mode in ("start_aligned_xy", "delayed_align"):
             if (
                 self._start_aligned_gt_base_pos is None
                 or self._start_aligned_actual_base_pos is None
@@ -848,7 +877,7 @@ class ReferenceMotionVisualizer:
                 self._target_anchor_base_pos = base_pos.copy()
                 self._actual_anchor_base_pos = self._get_actual_robot_root_pos()
             return self._actual_anchor_base_pos + (base_pos - self._target_anchor_base_pos)
-        if self.translation_mode == "start_aligned_xy":
+        if self.translation_mode in ("start_aligned_xy", "delayed_align"):
             if self._start_aligned_gt_base_pos is None or self._start_aligned_actual_base_pos is None:
                 return None
             offset_xy = self._start_aligned_actual_base_pos[:2] - self._start_aligned_gt_base_pos[:2]
@@ -1224,8 +1253,11 @@ class DefaultEnv:
                     self.config.get("REFERENCE_MOTION_ALLOW_MIDRUN_REALIGN", False)
                 ),
                 translation_mode=self.config.get(
-                    "REFERENCE_MOTION_TRANSLATION_MODE", "start_aligned_xy"
+                    "REFERENCE_MOTION_TRANSLATION_MODE", "delayed_align"
                 ),
+                align_delay_frames=int(self.config.get(
+                    "REFERENCE_MOTION_ALIGN_DELAY_FRAMES", 50
+                )),
             )
         except Exception as exc:
             self.reference_visualizer = None
