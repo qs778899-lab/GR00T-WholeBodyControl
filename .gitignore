@@ -5,6 +5,9 @@ __pycache__/
 
 # C extensions
 
+*.mp4
+docs/source/_static/pico_setup/picoSetUp.mp4
+docs/source/_static/pico_setup/Keyboard_Guidance.mp4
 
 # Distribution / packaging
 .Python
@@ -230,6 +233,10 @@ gear_sonic_deploy/reference/**/streamed_*/
 *.npy
 *.parquet
 *.feather
+
+# Large media files
+docs/source/_static/pico_setup/picoSetUp.mp4
+media/pico_setup/picoSetUp.mp4
 
 # Local runtime artifacts
 tmp/

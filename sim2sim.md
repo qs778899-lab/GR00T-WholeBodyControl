@@ -1328,7 +1328,48 @@ python gear_sonic/eval_agent_trl.py +checkpoint=/home/lab/Desktop/GR00T-WholeBod
 
   这样改完之后，数值才会回到你期待的几十到上百毫米区间。
 
+-----------------------------------------------------------------------------------------
 
+### 问题：Reference G1 与 Actual G1 初始位置不对齐 / metrics GT 污染
+
+#### 背景
+
+在 MuJoCo sim2sim 评估中，需要对比 actual 机器人（WBC 策略驱动）和 reference 机器人（pkl GT 驱动）的身体链接位置，计算 MPJPE_g/l/pa 等指标。Reference G1 同时用于：
+1. **可视化**：在 MuJoCo 视图中渲染半透明参考机器人
+2. **Metrics GT**：作为 `compute_mujoco_tracking_metrics.py` 的 ground truth
+
+#### Bug 1：GT 污染（Body IDs 混用）
+
+**原因**：`Sim2SimEvalLogger._resolve_body_ids` 用裸名（如 `pelvis`）解析 body id，这些 id 对应 actual 机器人的 body。后续 `compute_exact_reference_body_pos` 在调用 `mj_forward`（设置了 ref qpos）之后，用这些 id 去读 `xpos`，读到的却是 actual 机器人的位置，而非 reference 机器人的位置。
+
+**现象**：metrics ref_x 与 actual_x 的 Pearson 相关系数高达 0.999999，两者轨迹几乎完全一致，MPJPE_g 约 2.5mm（不合理的小）。
+
+**修复**：在 `base_sim.py` 中新增 `_ref_body_ids`，用 `ref_` 前缀的 body 名（如 `ref_pelvis`）解析，确保 `mj_forward` 后读取的是 reference 机器人自己的 xpos。修复后误差从 2.5mm 跳到 437mm（说明 GT 之前完全是 actual 自身数据）。
+
+#### Bug 2：初始对齐时机错误（premature anchor lock）
+
+**原因**：anchor（参考坐标系的固定平移）在第一帧 pose stream 到达时立刻锁定，而此时 actual 机器人还在运动中（从初始化位置向目标走，actual_x 在 0.5 秒内从 0.04m 到 0.31m）。anchor 锁定了一个与 actual 初始位置相差约 0.27m 的偏移，导致整条轨迹有固定偏移，MPJPE_g 约 437mm。
+
+**现象**：MuJoCo 视图中，reference G1 和 actual G1 在起始时刻明显不重合，reference G1 悬在 actual G1 旁边约 0.4m 处。整条误差曲线有一个接近恒定的大偏置。
+
+**修复方案 S1（static-wait anchor）**：
+- 在 actual 机器人满足"静止条件"后再锁定 anchor
+- 静止条件：连续 10 个物理步（间隔 20ms）root 位置变化 < 0.05 m/s
+- 为避免多次 `_set_latest_pose` 调用在同一 sim_time 产生假静止（diff≈0），用 `_actual_root_history_last_sim_time` 做时间门控
+- 修复后 MPJPE_g 进入合理量级（数十到数百毫米）
+
+**补充方案（delayed_align）**：
+- 针对"动作一开始就运动、actual 永远不静止"的情况
+- 参数 `--reference-motion-align-delay-frames N`（默认 50）
+- pose stream 收到 N 帧后强制锁定 anchor，不再等待静止
+- 通过 tyro CLI 传入：`--reference-motion-align-delay-frames 100`
+
+#### 原则总结
+
+1. **Reference 必须来自原始 pkl GT**，不能用 deploy 二次加工后的 `base_trans_target / body_q_target`（g1_debug topic）作为 GT。
+2. **Body ID 必须有前缀区分**：actual 用裸名，reference 用 `ref_` 前缀，两套 id 绝对不能混用。
+3. **Anchor 是一次性固定刚体变换**：只在初始对齐时设置一次，之后全程不变。可视化和 metrics 共用同一个 anchor，保证两者含义一致。
+4. **对齐时机**：S1（等 actual 静止）或 delayed_align（等 N 帧）二选一，默认用 `delayed_align`；S1 适合动作起始有站立静止阶段的场景。
 
 
 
