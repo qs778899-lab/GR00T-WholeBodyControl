@@ -19,12 +19,8 @@ S1 的做法等价于："既然不能让 actual 出生在 pkl 第 0 帧，那就
 
 reference 可视化和metrics GT： 先对原始 pkl 做一次固定的初始刚体变换，这个变换只由起始帧决定，之后整段动作都不再变化，reference 可视化 和 metrics GT 可以对应上，也同时满足reference可视化的作用和metrics计算的实际意义(对标isaacsim eval对metrics的含义的定义)。
 
-GT源和refer源的问题：总结这个问题
-refer为了不卡顿，会有一些类似插值之类的，那GT源呢？
 
 起始时，机器人不是处于一个静止的状态，而是一直在起立摔倒。
-
-
 
 
 
@@ -1079,7 +1075,7 @@ python gear_sonic/eval_agent_trl.py +checkpoint=/home/lab/Desktop/GR00T-WholeBod
 
 ## 经验教训
 
-------------------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------------------
 
 
   至于“为什么 IsaacSim eval 这么容易，而 sim2sim 这么难”，核心不是算法难，而是系统边
@@ -1144,7 +1140,7 @@ python gear_sonic/eval_agent_trl.py +checkpoint=/home/lab/Desktop/GR00T-WholeBod
   IsaacSim 里的对齐是“天然存在的”，sim2sim 里的对齐是“后天重建的”。
 
 
-----------------------------------------------------------------------
+---------------------------------------------------------------------------------------------------------
 
 
 • 卡顿的根因不是 sender 的 50Hz 本身不够，而是我们之前把 reference G1 的显示也绑到了 strict
@@ -1225,7 +1221,7 @@ python gear_sonic/eval_agent_trl.py +checkpoint=/home/lab/Desktop/GR00T-WholeBod
 
 
 
-----------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------
 
 当前 MuJoCo/metrics 用的 ref_body_pos，不是“原始 pkl 的 world-frame GT”，而是
     deploy 内部已经做过 heading/root 对齐后的 target。
@@ -1372,7 +1368,47 @@ python gear_sonic/eval_agent_trl.py +checkpoint=/home/lab/Desktop/GR00T-WholeBod
 4. **对齐时机**：S1（等 actual 静止）或 delayed_align（等 N 帧）二选一，默认用 `delayed_align`；S1 适合动作起始有站立静止阶段的场景。
 
 
+----------------------------------------------------------------------------------------------------------------
 
+### GT 源和 Refer 源的关系，以及"插值"问题                                                                     
+                                                                                                             
+  这是两条完全独立的数据流，但最终在 metrics 里对比的是 同一个 source_frame_index 对应的帧。                 
+                                                                                                             
+  ---                                                                                                        
+  Refer（可视化/step_sync 中的 ref_body_pos）                                                                
+                                                                                                             
+  来源：reference_visualizer._current_exact_pose，即 deploy 通过 pose ZMQ 推来的 packed pose               
+  stream（joint_pos, joint_vel, body_quat_w 等）。                                                           
+                                                                                                           
+  这里有"平滑/过渡"：                                                                                        
+  - stream_motionlib_to_deploy.py 在发送前做了 _prepend_stand_transition（stand 帧 + blend 帧的线性插值）  
+  - reference visualizer 收到 pose 后，直接 mj_forward 得到 ref robot 的 body 世界坐标                       
+                                                                                                           
+  所以 refer 的 joint 是经过了插值处理的（stand→pkl blend 段），不是原始 pkl。                               
+                                                                                                             
+  ---                                                                                                        
+  GT（metrics 里对比用的 ground truth）                                                                      
+                                                                                                             
+  来源：load_gt_motionlib 直接读 pkl → motionlib → seq.q29_mujoco()，然后同样做了完全一样的                
+  _prepend_stand_transition（stand_frames, blend_frames 参数和 stream 时完全对应）。                         
+                                                                                                           
+  关键代码（compute_mujoco_tracking_metrics.py:531）：                                                       
+  q29 = _prepend_stand_transition_q29(                                                                     
+      q29_mujoco=q29,                                                                                        
+      stand_frames=max(0, stream_prepend_stand_frames),                                                      
+      blend_frames=max(0, stream_blend_from_stand_frames),                                                 
+  )                                                                                                          
+                                                                                                             
+  GT 里也有同样的插值，而且 --stream-prepend-stand-frames / --stream-blend-from-stand-frames 这两个参数必须和
+   stream 时传的值完全一致，否则 GT 和 refer 就错位了。                                                      
+                                                                                                           
+  ---                                                                                                        
+  两者对比时的帧对齐                                                                                       
+                                                                                                             
+  step_sync 模式下（--actual-source step_sync_body_pos_w_14），CSV 里的 ref_body_pos 就是每个 mj_step 时
+  compute_exact_reference_body_pos 计算的结果，同时记录了 source_frame_index（deploy 当前在播放哪一帧）。    
+                                                                                                           
+  metrics 里用 source_frame_index 从 GT array（已含插值）里取对应帧，做比较。
 
 
 
@@ -1889,156 +1925,4 @@ tools/sonic_eval/run_mujoco_batch_eval.sh \
       --ignore-motion-playing-mask
 
 
-
-
-
 -----------------------------------------------------------------------------------------------
-
-
-
-
-
-
-在mujoco中把universal control policy推理跑通，policy的robot encoder的输入来源于/home/lab/Desktop/data/data中的一条数据文件里的action.*(这个应该就是在收集数据时robot control decoder输出, 现在把它转换成robot motion的格式，作为policy的robot encoder的输入）
-
-
-
-### 0) 先把 parquet 转成 deploy motion（一次即可）
-
-  cd /home/lab/Desktop/GR00T-WholeBodyControl
-  source /home/lab/miniconda3/etc/profile.d/conda.sh
-  conda activate sonic
-  python tools/sonic_eval/parquet_to_mujoco_motion.py \
-    --parquet /home/lab/Desktop/data/data/chunk-000/episode_000000.parquet \
-    --meta-info-json /home/lab/Desktop/data/meta/info.json \
-    --output-root /tmp/sonic_motion_action_only \
-    --motion-name episode_000000_action \
-    --joint-source action.wbc \
-    --joint-vel-source finite_diff
-
-   python tools/sonic_eval/parquet_to_mujoco_motion.py \
-    --parquet /home/lab/Desktop/train_0424/data/chunk-000/episode_000001.parquet \
-    --meta-info-json /home/lab/Desktop/train_0424/meta/info.json \
-    --output-root /tmp/sonic_motion_action_only \
-    --motion-name episode_000001_action \
-    --joint-source action.wbc \
-    --joint-vel-source finite_diff
-
-
-
-### 2) 终端B：启动 policy 推理（deploy）
-
-  cd /home/lab/Desktop/GR00T-WholeBodyControl/gear_sonic_deploy
-  bash deploy.sh \
-    --motion-data /tmp/sonic_motion_action_only \
-    --motion-name episode_000000_action \
-    --obs-config policy/release/observation_config.yaml \
-    --input-type manager \
-    --output-type all \
-    --zmq-host localhost \
-    --enable-csv-logs \
-    --logs-dir /tmp/sonic_logs/episode_000000 \
-    sim
-
-   在 deploy 终端按 ] 启动控制，再按 t 播放 motion
-
-   不要按 Enter（Enter 会切 planner），怎么理解这里的planner
-
-bash deploy.sh \
-    --motion-data /tmp/sonic_motion_action_only \
-    --motion-name episode_000001_action \
-    --obs-config policy/release/observation_config.yaml \
-    --input-type manager \
-    --output-type all \
-    --zmq-host localhost \
-    --enable-csv-logs \
-    --logs-dir /tmp/sonic_logs/episode_000001 \
-    sim
-
-### 3) 终端C：实时error可视化
-
-  source /home/lab/miniconda3/etc/profile.d/conda.sh
-  conda activate sonic
-  python tools/sonic_eval/visualize_realtime_error.py \
-    --mode live_zmq \
-    --parquet /home/lab/Desktop/data/data/chunk-000/episode_000000.parquet \
-    --gt-source action.wbc \
-    --eef-gt-source from_gt_q43 \
-    --gt-motion-dir /tmp/sonic_motion_action_only/episode_000000_action \
-    --zmq-host 127.0.0.1 --zmq-port 5557 --zmq-topic g1_debug \
-    --print-every 10 \
-    --out-json /tmp/sonic_error_metrics_zmq.json
-    
-  - joint_measured_error_rad: body_q_measured - gt_body_q（29关节）
-  - joint_control_error_rad: last_action - gt_body_q（29关节）
-  - joint_measured_overshoot_rad: max(0, sign(gt_t-gt_{t-1})*(pred-gt)) 每关节后再聚合
-  - eef_pos_error_m / eef_rot_error_rad: 
-
-python tools/sonic_eval/visualize_realtime_error.py \
-    --mode live_zmq \
-    --parquet /home/lab/Desktop/train_0424/data/chunk-000/episode_000001.parquet \
-    --gt-source action.wbc \
-    --eef-gt-source from_gt_q43 \
-    --gt-motion-dir /tmp/sonic_motion_action_only/episode_000001_action \
-    --zmq-host 127.0.0.1 --zmq-port 5557 --zmq-topic g1_debug \
-    --print-every 10 \
-    --out-json /tmp/sonic_error_metrics_zmq01.json
-
-### 4) 终端D：Isaac-style metric统计
-
- python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
-    --parquet /home/lab/Desktop/data/data/chunk-000/episode_000000.parquet \
-    --logs-dir /tmp/sonic_logs/episode_000000 \
-    --gt-source action.wbc \
-    --gt-motion-dir /tmp/sonic_motion_action_only/episode_000000_action \
-    --out-json /tmp/sonic_mujoco_tracking_metrics.json
-
-  - mpjpe_g: 全局关节点位置误差（mm）。
-  - mpjpe_l: 去除 pelvis 平移后的局部误差（mm）。
-  - mpjpe_pa: Procrustes 对齐后的误差（mm）。
-  - *_legs / *_vr_3points / *_other_upper_bodies / *_foot: 上述指标在对应身体子集
-    上的版本。
-  - success_rate: 以阈值判定“未失败”的帧比例（默认阈值：l<30mm, g<200mm,
-    pa<30mm）。
-  - progress_rate: 当前按 1.0 记录（在线日志模式下无 episode 提前终止语义时的占位
-    定义）
-
-python tools/sonic_eval/compute_mujoco_tracking_metrics.py \
-    --parquet /home/lab/Desktop/train_0424/data/chunk-000/episode_000001.parquet \
-    --logs-dir /tmp/sonic_logs/episode_000001 \
-    --gt-source action.wbc \
-    --gt-motion-dir /tmp/sonic_motion_action_only/episode_000001_action \
-    --out-json /tmp/sonic_mujoco_tracking_metrics01.json
-
-    
-
- 14 个点 是 14 个 robot body frame 的三维位置点:
-  1. pelvis
-  2. left_hip_roll_link
-  3. left_knee_link
-  4. left_ankle_roll_link
-  5. right_hip_roll_link
-  6. right_knee_link
-  7. right_ankle_roll_link
-  8. torso_link
-  9. left_shoulder_roll_link
-  10. left_elbow_link
-  11. left_wrist_yaw_link
-  12. right_shoulder_roll_link
-  13. right_elbow_link
-  14. right_wrist_yaw_link
-
-具体比较两边是：robot encoder的输入，和mujoco中进行推理的真机输出：
-  1. pred
-      - 来自 MuJoCo 实际运行日志里的 q.csv
-      - 取其中 29 个 body joint 角
-      - 再通过 URDF 做 FK，算出上面这 14 个点的位置
-      - 代码在 tools/sonic_eval/compute_mujoco_tracking_metrics.py:430
-  2. gt
-      - 来自你的 GT 运动
-      - 你现在的命令是 --gt-source action.wbc --gt-motion-dir ...
-      - 所以最终 GT 的 29 个 body joint 是 parquet action.wbc ->
-        parquet_to_mujoco_motion.py -> joint_pos.csv
-      - 再通过同一个 URDF 做 FK，算同样这 14 个点的位置
-      - 代码在 tools/sonic_eval/compute_mujoco_tracking_metrics.py:281 和 tools/
-        sonic_eval/compute_mujoco_tracking_metrics.py:432
