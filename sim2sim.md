@@ -392,6 +392,7 @@ motionlib的作用：
     --send-command \
     --use-isaacsim-app
 
+111
 
    换 pkl 就改这两个参数：
     --motion-file sample_data/robot_filtered/210531/walk_forward_amateur_001__A001_M.pkl
