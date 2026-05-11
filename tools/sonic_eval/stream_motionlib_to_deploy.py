@@ -23,10 +23,11 @@ HEADER_SIZE = 1280
 
 
 class PackedPublisher:
-    def __init__(self, host: str, port: int, verbose: bool = False):
+    def __init__(self, host: str, port: int, verbose: bool = False, motion_start_frame: int = 0):
         import zmq
 
         self.verbose = verbose
+        self.motion_start_frame = int(motion_start_frame)
         self.context = zmq.Context()
         self.publisher = self.context.socket(zmq.PUB)
         self.endpoint = f"tcp://{host}:{port}"
@@ -90,6 +91,7 @@ class PackedPublisher:
             "v": 1,
             "endian": "le",
             "count": n,
+            "motion_start_frame": self.motion_start_frame,
             "fields": [
                 {"name": "joint_pos", "dtype": "f32", "shape": [n, num_joints]},
                 {"name": "joint_vel", "dtype": "f32", "shape": [n, num_joints]},
@@ -298,7 +300,8 @@ def main() -> None:
     end = sent_frames
     start = 0
 
-    pub = PackedPublisher(args.host, args.port, verbose=args.verbose)
+    motion_start_frame = max(0, args.prepend_stand_frames) + max(0, args.blend_from_stand_frames)
+    pub = PackedPublisher(args.host, args.port, verbose=args.verbose, motion_start_frame=motion_start_frame)
     print(
         f"[motionlib] {seq.motion_name} source={seq.source} source_frames={seq.num_frames} "
         f"stream={start}:{end} sent_frames={sent_frames} fps={seq.fps} endpoint={pub.endpoint}"

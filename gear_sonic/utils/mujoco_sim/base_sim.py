@@ -104,6 +104,8 @@ class PackedZMQSubscriber:
 
         header = json.loads(header_bytes.decode("utf-8"))
         result = {"version": header.get("v", 0), "endian": header.get("endian", "le")}
+        if "motion_start_frame" in header:
+            result["motion_start_frame"] = int(header["motion_start_frame"])
         current_offset = offset + PACKED_ZMQ_HEADER_SIZE
 
         for field in header.get("fields", []):
@@ -173,7 +175,9 @@ class ReferenceMotionVisualizer:
         self.enabled = True
         self._latest_pose = None
         self.translation_mode = translation_mode
-        self._align_delay_frames = max(1, int(align_delay_frames))
+        self._align_delay_frames = int(align_delay_frames)  # 0 = auto-detect from stream
+        self._align_delay_frames_auto = (self._align_delay_frames <= 0)
+        self._motion_start_frame_received = False
         self.allow_midrun_realign = bool(allow_midrun_realign)
         self._target_anchor_base_pos = None
         self._actual_anchor_base_pos = None
@@ -304,6 +308,9 @@ class ReferenceMotionVisualizer:
         self._actual_root_history_last_sim_time = None
         self._anchor_wait_logged = False
         self._delayed_align_frame_count = 0
+        self._motion_start_frame_received = False
+        if self._align_delay_frames_auto:
+            self._align_delay_frames = 0
         self._shown_once = False
         self.set_visible(False)
 
@@ -430,6 +437,19 @@ class ReferenceMotionVisualizer:
             return False
         self._raw_pose_stream_seen = True
         body_q = body_q[:, G1_ISAACLAB_TO_MUJOCO_DOF]
+
+        if (
+            self._align_delay_frames_auto
+            and not self._motion_start_frame_received
+            and "motion_start_frame" in msg
+        ):
+            self._motion_start_frame_received = True
+            msf = int(msg["motion_start_frame"])
+            self._align_delay_frames = max(1, msf) if msf > 0 else 50
+            print(
+                f"[ReferenceMotionVisualizer] auto align_delay_frames={self._align_delay_frames}"
+                f" (motion_start_frame={msf} from stream)"
+            )
 
         frame_index_arr = None
         if "frame_index" in msg:
@@ -606,7 +626,7 @@ class ReferenceMotionVisualizer:
                 )
         if synchronized and self.translation_mode == "delayed_align" and self._start_aligned_gt_base_pos is None:
             self._delayed_align_frame_count += 1
-            delay = int(self._align_delay_frames)
+            delay = int(self._align_delay_frames) if self._align_delay_frames > 0 else 50
             if self._delayed_align_frame_count <= delay:
                 if self._delayed_align_frame_count == 1:
                     print(

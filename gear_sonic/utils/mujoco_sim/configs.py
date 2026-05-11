@@ -326,8 +326,10 @@ class BaseConfig(ArgsConfigTemplate):
     reference_motion_translation_mode: Literal["delta_aligned", "raw_global", "start_aligned_xy", "delayed_align"] = "delayed_align"
     """How reference root translation is visualized in MuJoCo."""
 
-    reference_motion_align_delay_frames: int = 50
-    """For delayed_align mode: number of pose-stream frames to wait before locking the anchor."""
+    reference_motion_align_delay_frames: int = 0
+    """For delayed_align mode: frames to wait before locking the anchor.
+    0 = auto-detect from stream (uses motion_start_frame sent by stream_motionlib_to_deploy.py,
+    i.e. prepend_stand_frames + blend_from_stand_frames). Pass a positive value to override."""
 
     reference_motion_allow_midrun_realign: bool = False
     """Whether reference root anchor can be re-aligned during a running clip."""
