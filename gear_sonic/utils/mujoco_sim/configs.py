@@ -102,6 +102,10 @@ def override_wbc_config(
         "REFERENCE_MOTION_ALLOW_MIDRUN_REALIGN": config.reference_motion_allow_midrun_realign,
         "ENABLE_SIM2SIM_EVAL_LOGGING": config.enable_sim2sim_eval_logging,
         "SIM2SIM_EVAL_LOGS_DIR": config.sim2sim_eval_logs_dir,
+        "ENABLE_SIM2SIM_ERROR_PLOT": config.enable_sim2sim_error_plot,
+        "SIM2SIM_ERROR_PLOT_LINKS": config.sim2sim_error_plot_links or [],
+        "SIM2SIM_ERROR_PLOT_REFRESH_HZ": config.sim2sim_error_plot_refresh_hz,
+        "SIM2SIM_ERROR_PLOT_YMAX_MM": config.sim2sim_error_plot_ymax_mm,
     }
 
     if missed_keys_only:
@@ -333,6 +337,22 @@ class BaseConfig(ArgsConfigTemplate):
 
     sim2sim_eval_logs_dir: str = "/tmp/sonic_logs/official_walk_zmq01"
     """Directory for MuJoCo sim2sim evaluation CSV logs."""
+
+    enable_sim2sim_error_plot: bool = False
+    """Show a real-time per-link tracking error plot window (matplotlib subprocess)."""
+
+    sim2sim_error_plot_links: Optional[list[str]] = None
+    """Which links to plot. Pass as space-separated names on the CLI.
+    Valid names: pelvis, left_hip_roll_link, left_knee_link, left_ankle_roll_link,
+    right_hip_roll_link, right_knee_link, right_ankle_roll_link, torso_link,
+    left_shoulder_roll_link, left_elbow_link, left_wrist_yaw_link,
+    right_shoulder_roll_link, right_elbow_link, right_wrist_yaw_link"""
+
+    sim2sim_error_plot_refresh_hz: float = 20.0
+    """Refresh rate of the error plot window (Hz)."""
+
+    sim2sim_error_plot_ymax_mm: float = 300.0
+    """Y-axis upper limit of the error plot (mm)."""
 
     commit_id: str = ""
     """Commit ID for the current codebase"""

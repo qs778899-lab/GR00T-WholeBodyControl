@@ -25,6 +25,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize
 
+from gear_sonic.utils.mujoco_sim.link_error_plot import Sim2SimLinkErrorPlot
 from gear_sonic.utils.mujoco_sim.metric_utils import check_contact, check_height
 from gear_sonic.utils.mujoco_sim.sim_utils import get_subtree_body_names, get_subtree_geom_ids
 from gear_sonic.utils.mujoco_sim.unitree_sdk2py_bridge import ElasticBand, UnitreeSdk2Bridge
@@ -944,6 +945,9 @@ class DefaultEnv:
 
         self.init_scene()
         self._init_sim2sim_eval_logger()
+        self._link_error_plot: Sim2SimLinkErrorPlot | None = None
+        self._plot_link_indices: list[int] | None = None
+        self._init_link_error_plot()
         self.last_reward = 0
 
         self.offscreen = offscreen
@@ -975,6 +979,29 @@ class DefaultEnv:
             return
         logs_dir = Path(self.config.get("SIM2SIM_EVAL_LOGS_DIR", "/tmp/sonic_logs/official_walk_zmq01"))
         self._sim2sim_eval_logger = Sim2SimEvalLogger(logs_dir=logs_dir, body_names=SIM2SIM_BODY_FRAMES)
+
+    def _init_link_error_plot(self):
+        if not self.config.get("ENABLE_SIM2SIM_ERROR_PLOT", False):
+            return
+        plot_links: list[str] = self.config.get("SIM2SIM_ERROR_PLOT_LINKS") or []
+        if not plot_links:
+            return
+        valid_names = set(SIM2SIM_BODY_FRAMES)
+        unknown = [ln for ln in plot_links if ln not in valid_names]
+        if unknown:
+            print(f"[LinkErrorPlot] Warning: unknown link names ignored: {unknown}")
+        indices = [SIM2SIM_BODY_FRAMES.index(ln) for ln in plot_links if ln in valid_names]
+        valid_links = [SIM2SIM_BODY_FRAMES[i] for i in indices]
+        if not valid_links:
+            return
+        self._plot_link_indices = indices
+        self._link_error_plot = Sim2SimLinkErrorPlot(
+            link_names=valid_links,
+            ymax_mm=float(self.config.get("SIM2SIM_ERROR_PLOT_YMAX_MM", 300.0)),
+            refresh_hz=float(self.config.get("SIM2SIM_ERROR_PLOT_REFRESH_HZ", 20.0)),
+        )
+        self._link_error_plot.start()
+        print(f"[LinkErrorPlot] Started for links: {valid_links}")
 
     def _get_dof_indices_by_class(self):
         with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".xml") as f:
@@ -1528,6 +1555,17 @@ class DefaultEnv:
                 source_frame_index=source_frame_index,
             )
 
+        if (
+            self._link_error_plot is not None
+            and actual_body_pos is not None
+            and ref_body_pos is not None
+            and source_frame_index is not None
+            and int(source_frame_index) >= 0
+        ):
+            full_err_mm = np.linalg.norm(actual_body_pos - ref_body_pos, axis=1) * 1000.0
+            selected_err = full_err_mm[self._plot_link_indices]
+            self._link_error_plot.push(int(source_frame_index), selected_err)
+
         if self._sim2sim_eval_logger is None:
             return
         self._sim2sim_eval_logger.log(
@@ -1650,6 +1688,9 @@ class DefaultEnv:
         if self._sim2sim_eval_logger is not None:
             self._sim2sim_eval_logger.close()
             self._sim2sim_eval_logger = None
+        if self._link_error_plot is not None:
+            self._link_error_plot.close()
+            self._link_error_plot = None
         if self.reference_visualizer is not None:
             self.reference_visualizer.close()
             self.reference_visualizer = None
