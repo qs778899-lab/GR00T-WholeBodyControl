@@ -118,37 +118,51 @@ G1_MUJOCO_TO_ISAACLAB_BODY = [
     29,
 ]
 
+# IsaacLab DOF ordering (joint-type grouping, NOT body-part order):
+# [0] left_hip_pitch, [1] right_hip_pitch, [2] waist_yaw,
+# [3] left_hip_roll,  [4] right_hip_roll,  [5] waist_roll,
+# [6] left_hip_yaw,   [7] right_hip_yaw,   [8] waist_pitch,
+# [9] left_knee,      [10] right_knee,
+# [11] left_shoulder_pitch,  [12] right_shoulder_pitch,
+# [13] left_ankle_pitch,     [14] right_ankle_pitch,
+# [15] left_shoulder_roll,   [16] right_shoulder_roll,
+# [17] left_ankle_roll,      [18] right_ankle_roll,
+# [19] left_shoulder_yaw,    [20] right_shoulder_yaw,
+# [21] left_elbow,           [22] right_elbow,
+# [23] left_wrist_roll,      [24] right_wrist_roll,
+# [25] left_wrist_pitch,     [26] right_wrist_pitch,
+# [27] left_wrist_yaw,       [28] right_wrist_yaw
 G1_DEFAULT_ANGLES_ISAACLAB = torch.tensor(
     [
-        -0.312,
-        0.0,
-        0.0,
-        0.669,
-        -0.363,
-        0.0,
-        -0.312,
-        0.0,
-        0.0,
-        0.669,
-        -0.363,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.2,
-        0.2,
-        0.0,
-        0.6,
-        0.0,
-        0.0,
-        0.0,
-        0.2,
-        -0.2,
-        0.0,
-        0.6,
-        0.0,
-        0.0,
-        0.0,
+        -0.312,  # [0]  left_hip_pitch
+        -0.312,  # [1]  right_hip_pitch
+        0.0,     # [2]  waist_yaw
+        0.0,     # [3]  left_hip_roll
+        0.0,     # [4]  right_hip_roll
+        0.0,     # [5]  waist_roll
+        0.0,     # [6]  left_hip_yaw
+        0.0,     # [7]  right_hip_yaw
+        0.0,     # [8]  waist_pitch
+        0.669,   # [9]  left_knee
+        0.669,   # [10] right_knee
+        0.2,     # [11] left_shoulder_pitch
+        0.2,     # [12] right_shoulder_pitch
+        -0.363,  # [13] left_ankle_pitch
+        -0.363,  # [14] right_ankle_pitch
+        0.2,     # [15] left_shoulder_roll
+        -0.2,    # [16] right_shoulder_roll
+        0.0,     # [17] left_ankle_roll
+        0.0,     # [18] right_ankle_roll
+        0.0,     # [19] left_shoulder_yaw
+        0.0,     # [20] right_shoulder_yaw
+        0.6,     # [21] left_elbow
+        0.6,     # [22] right_elbow
+        0.0,     # [23] left_wrist_roll
+        0.0,     # [24] right_wrist_roll
+        0.0,     # [25] left_wrist_pitch
+        0.0,     # [26] right_wrist_pitch
+        0.0,     # [27] left_wrist_yaw
+        0.0,     # [28] right_wrist_yaw
     ],
     dtype=torch.float32,
 )
