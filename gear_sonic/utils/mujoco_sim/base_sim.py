@@ -1584,7 +1584,13 @@ class DefaultEnv:
         ):
             full_err_mm = np.linalg.norm(actual_body_pos - ref_body_pos, axis=1) * 1000.0
             selected_err = full_err_mm[self._plot_link_indices]
-            self._link_error_plot.push(int(source_frame_index), selected_err)
+            motion_start = (
+                self.reference_visualizer._align_delay_frames
+                if self.reference_visualizer is not None
+                else 0
+            )
+            plot_frame = int(source_frame_index) - max(0, motion_start)
+            self._link_error_plot.push(plot_frame, selected_err)
 
         if self._sim2sim_eval_logger is None:
             return
