@@ -77,6 +77,12 @@ data_0424/
 data_0424
 data_0506/
 
+eval_benchmark/
+
+.CLAUDE.md
+.codex
+.claude/
+.agents/
 
 # PyBuilder
 .pybuilder/
