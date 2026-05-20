@@ -71,6 +71,12 @@ instance/
 
 # Sphinx documentation
 data/
+data_*
+data_0418/
+data_0424/
+data_0424
+data_0506/
+
 
 # PyBuilder
 .pybuilder/

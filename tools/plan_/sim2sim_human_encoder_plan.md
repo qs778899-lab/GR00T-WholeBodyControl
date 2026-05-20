@@ -17,6 +17,47 @@
 
 ---
 
+## 0. 关键澄清（2026-05-18 补充）：两条互斥链路，retarget 不是 deploy 推理的依赖
+
+本文档原 4.5/5.0.B 节主张 "parquet → human motion encoder 必须经过 SMPL→G1 retargeting 生成 robot pkl"。经代码验证，这一主张混淆了两条**解耦**的链路。读后续章节前必须区分清楚：
+
+### 0.1 Deploy 推理链路（ZMQ 流式，本任务的核心）
+
+```
+SMPL 数据源（pico 真机 / parquet 重放）
+  → 拼 ZMQ Protocol v3 包
+  → deploy SMPL encoder (mode_id=2)
+  → policy → MuJoCo / 真机执行
+```
+
+**不经过 motion_lib，不需要 pkl，不需要 retargeter**。
+
+代码证据：[gear_sonic/scripts/pico_manager_thread_server.py:1346-1403](gear_sonic/scripts/pico_manager_thread_server.py#L1346-L1403) 在 sender 端**内联做 6 个 G1 wrist DOF 的解析式 retargeting**（swing/twist 分解 + Euler，**非** `Humanoid_Batch.fk_batch`），把结果直接写入 `joint_pos[23..28]` 通过 ZMQ pose 消息发 deploy。
+
+parquet 是这条 ZMQ 流的**镜像落盘**：[run_data_exporter.py:410-447](gear_sonic/scripts/run_data_exporter.py#L410-L447) 把 pico 发的 `joint_pos[23,25,27]` 切成 `teleop.left_wrist_joints (3,)`、`joint_pos[24,26,28]` 切成 `teleop.right_wrist_joints (3,)`。这意味着 parquet 已经**完整包含**了 deploy SMPL encoder 推理所需的全部输入字段。
+
+### 0.2 IsaacSim eval 链路（仅当需要算 14-link MPJPE GT 时）
+
+```
+SMPL pkl + robot pkl
+  → motion_lib.load() + Humanoid_Batch.fk_batch()
+  → IsaacSim env: encoder 观测 + 14-link GT → MPJPE
+```
+
+**这条路径才必须 retarget + pkl**，因为 motion_lib 只读 pkl，且 14-link GT 需要 G1 完整 FK。
+
+### 0.3 实操推论
+
+| 任务 | 链路 | 需要 retarget？ | 需要 pkl？ |
+|---|---|---|---|
+| parquet 重放 → deploy SMPL encoder 推理（本任务） | 0.1 | **否** | **否** |
+| 算 MPJPE 配 GT 做 sim2sim error 分析 | 0.2 | 是（GMR 或 fk_batch） | 是 |
+| IsaacSim eval (`+use_encoder=smpl`) | 0.2 | 是 | 是 |
+
+**本文档后续 4.5 节和 5.0.B 节的 GMR 集成讨论，仅对 0.2 路径有效。如果你只关心让 deploy SMPL encoder 跑起来（推理链路），直接跳到 5.1 看新 streamer 设计。**
+
+---
+
 ## 1. parquet里有什么（已确认）
 
 `data_0424/`是LeRobot格式的TorchRL dataset，50 Hz采样，每个episode一个parquet（约500行），目录结构：
@@ -162,7 +203,13 @@ streamer发ZMQ v3的字段映射：
 
 ---
 
-## 4.5 关键依赖：外部SMPL→G1 retargeter
+## 4.5 外部 retargeter（**仅 IsaacSim eval / metrics GT 路径需要**）
+
+> **重要前置**（见第 0 节）：retargeter 不是 deploy 推理链路（ZMQ → encoder → policy）的依赖。pico sender 已经在 ZMQ 字节流里把 6 个 G1 wrist DOF 解析式算好了，parquet 是这条 ZMQ 流的镜像落盘，可直接重放给 deploy。
+>
+> 本节的 GMR 讨论**只在以下场景才相关**：需要算 14-link MPJPE 的 motion_lib GT、或者要跑 IsaacSim `eval_agent_trl.py +use_encoder=smpl`（这两个都通过 motion_lib 加载 pkl，必须有完整 G1 29-DOF retargeted motion）。
+>
+> 如果你只想跑 deploy SMPL encoder 推理（本任务），跳到 5.1。
 
 ### 4.5.1 本repo官方立场（已确认）
 
@@ -210,9 +257,36 @@ parquet里已经有现成的SMPL pose_aa（`teleop.smpl_pose` 21×3），不是B
 
 ---
 
-## 5. 实现方案（未来实现，分两阶段）
+## 5. 实现方案
 
-### 阶段1：准备**两个pkl**（严格IsaacSim eval语义）
+> **路径选择**（见第 0 节）：
+>
+> - **5.0.deploy-only（推荐，最小路径）**：parquet → 直接拼 ZMQ v3 包 → deploy。零 retargeter 依赖，零 pkl 中转。**对应 5.1 节新建的 `stream_parquet_smpl_to_deploy.py`**。
+> - **5.0.eval-also（可选，需 GMR）**：parquet → GMR retarget → robot pkl + smpl pkl → 既可走 IsaacSim eval、也可走 metrics GT。**对应原 5.0.A/5.0.B/5.2/5.3 节**。
+>
+> 两条路径互斥地满足不同任务。本任务（让 deploy human motion encoder 跑起来）只走 deploy-only 路径就够了。
+
+### 5.0.deploy-only 字段映射表（推荐路径，零 retarget）
+
+新 streamer 直接从 parquet 拼 ZMQ Protocol v3 包，字段映射：
+
+| ZMQ v3 字段 | 来源（parquet 字段） | 处理 |
+|---|---|---|
+| `smpl_joints[T,24,3]` | `teleop.smpl_joints` reshape | 直接用；按 `--smpl-joints-mode canonicalized` 做 frame 变换（复用第 10 节修复） |
+| `smpl_pose[T,21,3]` | `teleop.smpl_pose` reshape `(T,63) → (T,21,3)` | 直接用 |
+| `body_quat_w[T,4]` | `teleop.body_quat_w` | 按 `--smpl-anchor-mode` 做 frame 变换（复用第 10、11 节修复） |
+| `joint_pos[T,29]` indices `{23,25,27}` | `teleop.left_wrist_joints[:,0:3]` | 拷贝（pico sender 已 retarget） |
+| `joint_pos[T,29]` indices `{24,26,28}` | `teleop.right_wrist_joints[:,0:3]` | 拷贝（pico sender 已 retarget） |
+| `joint_pos[T,29]` 其他 indices | 填 0 | deploy SMPL encoder 不读，无影响 |
+| `joint_vel[T,29]` | `_finite_difference(joint_pos)` 或 0 | 复用 motionlib streamer 的 helper |
+| `body_pos_w[T,3]` | 填 0 或 `teleop.smpl_joints[:,0,:]`（pelvis） | deploy SMPL anchor obs 不读 body_pos_w |
+| `frame_index[T]` | streamer 内部 row index 或 `teleop.smpl_frame_index` | 跟 motionlib streamer 一致 |
+
+→ **零 GMR、零 fk_batch、零 motion_lib、零 pkl 中转**。
+
+---
+
+### 阶段1（仅 5.0.eval-also 路径需要）：准备**两个pkl**（严格IsaacSim eval语义）
 
 motion_lib只读pkl（`joblib.load`），所以parquet→eval必须经过pkl中转。按bones_seed的官方双文件配对：
 
@@ -265,11 +339,72 @@ parquet字段映射（无retarget）：
 
 ---
 
-### 阶段2：sim2sim评测链路
+### 5.1.deploy-only 新建 streamer：`tools/sonic_eval/stream_parquet_smpl_to_deploy.py`
 
-输入：阶段1产的两个pkl（`<name>_robot.pkl` + `<name>_smpl.pkl`）。后续完全复用现有robot encoder的sim2sim链路设计。
+**职责**：直接读 parquet → 按 5.0.deploy-only 字段映射表拼 ZMQ Protocol v3 包 → 发送给 deploy（触发 encoder_mode=2）。零 retarget、零 pkl。
 
-#### 5.1 新建 streamer：`tools/sonic_eval/stream_smpl_pkl_to_deploy.py`
+**对齐参考实现**：
+- pico 真机链路 [pico_manager_thread_server.py:1346-1403](gear_sonic/scripts/pico_manager_thread_server.py#L1346-L1403)（sender 内联 retarget + ZMQ pose 发送）
+- pkl-based SMPL streamer [tools/sonic_eval/stream_motionlib_smpl_to_deploy.py](tools/sonic_eval/stream_motionlib_smpl_to_deploy.py)（已实现，frame 变换、ZMQ v3 打包、blend prefix 都已经踩过坑）
+
+**零侵入式扩展原则**（用户要求）：本任务只新增文件，**不修改任何现有代码**。
+
+**复用契约**（import 不修改）：
+```python
+from tools.sonic_eval.stream_motionlib_to_deploy import (
+    HEADER_SIZE,           # ZMQ 头 padding
+    _finite_difference,    # dof_vel
+    _prepend_stand_transition,  # stand→motion blend
+)
+from tools.sonic_eval.stream_motionlib_smpl_to_deploy import (
+    _smpl_root_ytoz_up,
+    _remove_smpl_base_rot_wxyz,
+    _compute_smpl_root_quat_w,
+    _canonicalize_smpl_joints,
+    # 以及 PackedPublisherSMPL（ZMQ v3 header 打包）
+)
+```
+
+**CLI（拟）**：复用 motionlib smpl streamer 的全部 flags（host/port/target-fps/chunk-size/realtime/send-command/initial-burst-frames/blend-from-stand-frames/smpl-anchor-mode/smpl-joints-mode/...），改输入参数：
+- `--parquet <path>`（替代 `--motion-file` / `--smpl-motion-file`）
+- `--episode-index INT`（如果 parquet 是多 episode）
+
+**数据流（单 episode）**：
+```
+parquet (T 行)
+  ↓ pd.read_parquet + 字段抽取
+{
+  smpl_joints:   teleop.smpl_joints  → (T,24,3) float32
+  smpl_pose:     teleop.smpl_pose    → reshape (T,21,3) float32
+  body_quat_w:   teleop.body_quat_w  → (T,4) float32
+  joint_pos:     np.zeros((T,29)) → 写入 indices {23,25,27,24,26,28} from teleop.{left,right}_wrist_joints
+  joint_vel:     _finite_difference(joint_pos)
+  frame_index:   np.arange(T) 或 teleop.smpl_frame_index
+}
+  ↓ frame 变换（复用第 10/11 节的 helper）
+{
+  body_quat_w:   robot_root 或 smpl_processed（按 --smpl-anchor-mode）
+  smpl_joints:   canonicalized（按 --smpl-joints-mode）
+}
+  ↓ _prepend_stand_transition + chunk + ZMQ Protocol v3 header
+deploy
+```
+
+**关键工程细节**：
+- v3 要求所有 motion 字段帧数严格一致（`zmq_endpoint_interface.hpp:985-994`），所以从 parquet 抽出来的字段直接共享 T，不需要额外对齐
+- `body_quat_w` frame 变换：parquet 的 `teleop.body_quat_w` 是 SMPL world body quaternion（Y-up），处理方式与 `stream_motionlib_smpl_to_deploy.py` 完全一致
+- pico 链路里 `joint_pos[23..28]` 是**当前帧的瞬时值**，写入 parquet 后是 T 帧的连续序列，可直接用作 `joint_pos[T,29]`
+- 不需要走 IsaacSim app（无 fk_batch、无 motion_lib）
+
+**端到端验证（实跑时核对）**：
+1. 起 MuJoCo + deploy + 这个新 streamer
+2. deploy 日志确认 `active_protocol_version_=3` 和 `encoder_mode=2`
+3. MuJoCo G1 不摔倒、policy 输出合理（visually 跟 parquet 里的 SMPL 动作相似）
+4. 对照：同一段 parquet，跟 pico 真机重放该 episode 的 deploy log 对比 encoder 输入数值（数量级一致即可）
+
+---
+
+### 5.1.eval-also 新建 streamer：`tools/sonic_eval/stream_smpl_pkl_to_deploy.py`
 
 **职责**：读两个pkl → 构造ZMQ Protocol v3包 → 发送给deploy（触发encoder_mode=2）
 
@@ -669,3 +804,155 @@ python tools/sonic_eval/stream_motionlib_smpl_to_deploy.py \
 - 此方案代价：base_sim.py 加新代码分支（用户 OK，因为不改 robot encoder 默认）
 
 回滚命令：`--smpl-anchor-mode smpl_processed`（CLI 一键切回）。
+
+---
+
+## 12. 修订记录（2026-05-18）：澄清 deploy 推理链路无需 retarget
+
+### 12.1 动机
+
+用户在 review 4.5 / 5.0.B 节时指出：parquet 里 `teleop.smpl_*` 是 human motion 数据，重放走 human motion encoder 推理时是否真的必须先 retarget 成 G1 robot pkl？应当对齐 pico 真机摇操的处理方式。
+
+### 12.2 关键代码证据
+
+逐行追完 pico → deploy → parquet 三段链路后确认：
+
+1. **pico sender 内联做 wrist retarget**（[pico_manager_thread_server.py:1346-1403](gear_sonic/scripts/pico_manager_thread_server.py#L1346-L1403)）：
+   - 取 SMPL elbow(17,18) + wrist(19,20) axis-angle
+   - `decompose_rotation_aa()` 分解 swing/twist
+   - 合成 6 个 G1 wrist DOF（roll/pitch/yaw × 左右）
+   - 直接写入 `joint_pos[23..28]`
+   - 注意左右非对称的 sign 处理（左 pitch 二次翻转、右 roll 整体翻转）—— 是 G1 硬件 axis convention 镜像，已在 sender 端正确处理
+   - **不调 `Humanoid_Batch.fk_batch`，是解析式 Euler 合成**
+
+2. **ZMQ pose 消息发出 `joint_pos[29]`**（[pico_manager_thread_server.py:1442, 1468-1469](gear_sonic/scripts/pico_manager_thread_server.py#L1442)）
+
+3. **deploy 端 SMPL encoder 直接消费**：从 ZMQ `joint_pos` 切 indices `{23..28}` 作为 `motion_joint_positions_wrists_10frame_step1` 观测，**deploy 端无任何 retarget**
+
+4. **data_exporter 镜像落盘**（[run_data_exporter.py:410-447](gear_sonic/scripts/run_data_exporter.py#L410-L447)）：
+   - 从 pose_data["joint_pos"] 切 `[23,25,27]` → `teleop.left_wrist_joints (3,)`
+   - 从 pose_data["joint_pos"] 切 `[24,26,28]` → `teleop.right_wrist_joints (3,)`
+   - **parquet 里这两个字段就是 deploy 当时收到的 G1 wrist DOF**，零加工
+
+### 12.3 推论
+
+| 用途 | retarget 需求 | pkl 需求 |
+|---|---|---|
+| parquet → deploy SMPL encoder 推理（本任务） | 否（parquet 已含 G1 wrist DOF） | 否 |
+| Metrics 14-link GT | 是（除非用 `observation.state` 当 GT） | 是 |
+| IsaacSim eval `+use_encoder=smpl` | 是 | 是 |
+
+### 12.4 文档改动
+
+| 章节 | 改动 |
+|---|---|
+| 0（新增） | "关键澄清" 章节，明确两条互斥链路、本任务的最小路径 |
+| 4.5（修订标题 + 加 caveat） | 标题改为 "外部 retargeter（仅 IsaacSim eval / metrics GT 路径需要）"，开头加导引段 |
+| 5.0.deploy-only（新增小节） | 字段映射表：parquet 字段 → ZMQ v3 字段，零 retarget |
+| 5.1.deploy-only（新增小节） | 新 streamer `stream_parquet_smpl_to_deploy.py` 的设计 |
+| 阶段 1 / 5.1.eval-also / 5.2 / 5.3（加 caveat） | 标注 "仅 5.0.eval-also 路径适用"，保留原内容 |
+
+### 12.5 零侵入式扩展原则
+
+按用户要求，新增功能不动现有代码：
+
+| 资产 | 改动 |
+|---|---|
+| `tools/sonic_eval/stream_parquet_smpl_to_deploy.py` | **新建**（5.1.deploy-only 路径） |
+| `tools/sonic_eval/stream_motionlib_smpl_to_deploy.py` | **0 改动**（5.1.eval-also 路径继续走 pkl） |
+| `tools/sonic_eval/stream_motionlib_to_deploy.py` | **0 改动**（robot encoder 链路） |
+| `gear_sonic/scripts/pico_manager_thread_server.py` | **0 改动**（真机链路） |
+| `gear_sonic/scripts/run_data_exporter.py` | **0 改动**（数采链路） |
+| `gear_sonic_deploy/` | **0 改动** |
+| `gear_sonic/utils/mujoco_sim/base_sim.py` | **0 改动** |
+
+新 streamer 通过 import 复用现有 helper，不修改任何被 import 的源文件。
+
+---
+
+## 13. Bug 修复（2026-05-19）：parquet streamer 双重 canonicalization
+
+### 13.1 现象
+
+用户跑 `stream_parquet_smpl_to_deploy.py` 重放多条 motion（`episode_000003`、`episode_000192`、`episode_000041`），policy 跟踪行为扭曲：脚和手都怪异，跟原 SMPL 动作明显不像。
+
+### 13.2 根因：parquet 和 pkl 的 smpl_joints 语义**相反**
+
+追完 pico → parquet → streamer → deploy 的完整数据流，对照 IsaacSim 训练侧 [observations.py:smpl_joints_multi_future_local](gear_sonic/envs/manager_env/mdp/observations.py#L1716-L1745)：
+
+| 链路 | smpl_joints 内容 | pelvis 验证 |
+|---|---|---|
+| **pkl smpl_filtered** | FK 原始输出，**未** apply root rotation | pelvis 永远 = `J[0] = (0.003, -0.351, 0.012)`，std ≈ 0 |
+| **parquet teleop** | [pico_manager_thread_server.py:476-477](gear_sonic/scripts/pico_manager_thread_server.py#L476-L477) 已 apply `quat_apply(quat_inv(processed_root), FK_output)` | pelvis 随帧变化，std ~ 0.06 |
+
+empirical 验证（用 `data_0424/.../episode_000000.parquet` + `sample_data/smpl_filtered/walk_forward_amateur_001__A001.pkl`）：
+- pkl pelvis range: 跨 2002 帧静止于 `(0.003, -0.351, 0.012)`，std `[2e-8, 6e-6, 1e-7]`
+- parquet pelvis range: `(-0.314, -0.300, -0.111)` ~ `(0, 0, 0.016)`，std `[0.07, 0.06, 0.04]`
+
+进一步对照 `human_joints_info.pkl`：pkl pelvis 数值 = `J[0]` 完全一致，证实 pkl smpl_joints 就是 FK 不带 rotation 的输出。parquet pelvis 偏离且变化，证实 R^-1 已 apply。
+
+训练侧 `smpl_joints_multi_future_local` 做：
+```python
+ref_joints_root = quat_apply(quat_inv(ref_root_quat), ref_joints)  # ref_joints from motion_lib (= pkl smpl_joints)
+                = R^-1 * FK_output                                  # encoder 看到的分布
+```
+
+### 13.3 修复前的 streamer 默认行为（错）
+
+[stream_parquet_smpl_to_deploy.py 修复前 250-254 行](tools/sonic_eval/stream_parquet_smpl_to_deploy.py#L250-L254)：
+
+```python
+if args.smpl_joints_mode == "canonicalized":   # ← 默认 = canonicalized
+    smpl_joints = _canonicalize_smpl_joints(data["smpl_joints"], reference_root_quat)
+# 实际执行:
+#   = quat_apply(quat_inv(R_pico), parquet_smpl_joints)
+#   = quat_apply(quat_inv(R_pico), quat_apply(quat_inv(R_pico), FK_output))
+#   = R_pico^-2 * FK_output                            ← 双重旋转，错位 R_pico^-1
+```
+
+`_canonicalize_smpl_joints` 来自 [stream_motionlib_smpl_to_deploy.py](tools/sonic_eval/stream_motionlib_smpl_to_deploy.py)。pkl 链路那边数据**未** canonicalize，streamer 端补这步是对的；parquet 这边 pico 已经做了，再做就是 bug。
+
+### 13.4 修复
+
+[stream_parquet_smpl_to_deploy.py](tools/sonic_eval/stream_parquet_smpl_to_deploy.py)：
+- `--smpl-joints-mode` 选项从 `{canonicalized, raw}` 改成 `{passthrough, re_canonicalize}`
+- 默认从 `canonicalized` 改成 `passthrough`
+- `passthrough`：直接传 `teleop.smpl_joints`（已是 `R^-1 * FK_output`，匹配训练分布）
+- `re_canonicalize`：仅诊断/A-B 对照，复现 pre-fix bug 行为
+
+[sim2sim.md](sim2sim.md) 终端C 注释同步更新，明确两条链路 smpl_joints 处理方式相反的设计意图。
+
+### 13.5 零侵入
+
+| 资产 | 改动 |
+|---|---|
+| `tools/sonic_eval/stream_parquet_smpl_to_deploy.py` | 仅改 CLI choices + default + 一个分支 if 条件 |
+| `tools/sonic_eval/stream_motionlib_smpl_to_deploy.py` | **0 改动**（pkl 链路 canonicalize 是对的） |
+| `gear_sonic/scripts/pico_manager_thread_server.py` | **0 改动** |
+| 其余 deploy / data_exporter / motion_lib / sim 端 | **0 改动** |
+
+### 13.6 经验教训
+
+跟第 10 节 (pkl streamer feet-walking-sideways) 是一个镜像问题：
+
+| | pre-fix bug | 根因 |
+|---|---|---|
+| **第 10 节（pkl 链路）** | streamer 没做 canonicalize | pkl 数据是 FK_output，需要 streamer 补 quat_inv |
+| **第 13 节（parquet 链路）** | streamer 默认做了 canonicalize | parquet 数据 pico 已经 apply quat_inv，streamer 不能再做 |
+
+两个 bug 都源于"想当然地复用 helper 函数"，没有追到数据源头确认 frame 语义。下次新增 streamer：**先 dump 一帧数据**，对比训练侧 motion_lib 加载的 pkl 一帧，逐字段确认 frame 语义后再决定是否要 transform。
+
+empirical 验证用的脚本（仅 dump，不动数据）：
+```python
+import joblib, numpy as np, pandas as pd, torch
+J = torch.load('gear_sonic/data/human/human_joints_info.pkl', weights_only=False)['J']
+pkl = joblib.load('sample_data/smpl_filtered/walk_forward_amateur_001__A001.pkl')
+df = pd.read_parquet('data_0424/data/chunk-000/episode_000000.parquet')
+pkl_j = np.asarray(pkl['smpl_joints'])
+pq_j = np.stack([np.asarray(v) for v in df['teleop.smpl_joints'].to_numpy()]).reshape(-1,24,3)
+print('SMPL rest J[0]:', J[0].numpy())          # (0.003, -0.351, 0.012)
+print('pkl pelvis range:', pkl_j[:,0,:].std(0)) # [~0, ~0, ~0]  → 未 canonicalize
+print('parquet pelvis range:', pq_j[:,0,:].std(0)) # [0.07, 0.06, 0.04] → 已 canonicalize
+```
+
+
