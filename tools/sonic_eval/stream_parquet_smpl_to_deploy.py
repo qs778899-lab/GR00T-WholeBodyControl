@@ -67,6 +67,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--initial-burst-frames", type=int, default=0)
     parser.add_argument("--start-frame", type=int, default=0)
     parser.add_argument("--end-frame", type=int, default=None)
+    parser.add_argument(
+        "--smpl-stream-mode-filter",
+        type=str,
+        default="auto",
+        choices=["auto", "off"],
+        help=(
+            "Filter out rows where teleop.stream_mode != 1 (SMPL mode). "
+            "'auto' (default): trim to the longest contiguous SMPL-mode segment, abort if none exists. "
+            "Recommended because parquets collected in PLANNER mode (stream_mode=0) have all SMPL "
+            "fields stuck at identity / zero, which makes the policy see constant input across "
+            "episodes (symptom: robot does the same forward-step-then-stagger-back behavior). "
+            "'off': skip filtering; send ALL parquet rows verbatim (diagnostic only)."
+        ),
+    )
     parser.add_argument("--prepend-stand-frames", type=int, default=0)
     parser.add_argument("--blend-from-stand-frames", type=int, default=0)
     parser.add_argument("--realtime", action="store_true")
@@ -142,11 +156,103 @@ def _stack_column(df: pd.DataFrame, col: str, expected_shape: tuple[int, ...]) -
     return arr.astype(np.float32)
 
 
-def _load_parquet_episode(path: Path) -> dict:
+def _filter_and_fill_smpl_data(df: pd.DataFrame, path: Path) -> pd.DataFrame:
+    """Filter parquet to the longest segment with valid SMPL data, hold-last filling sparse glitches.
+
+    Two invalid signals:
+      (a) stream_mode != 1: episode collected in PLANNER mode; SMPL fields are placeholder zeros.
+          Cannot be recovered; trimmed out entirely.
+      (b) stream_mode == 1 but body_quat_w == identity (1,0,0,0): pico dropped a VR frame and
+          wrote a placeholder. Sparse and recoverable -- forward-fill from previous valid frame
+          (mirrors how live pico->deploy behaves when VR data hiccups for a few frames).
+
+    Strategy:
+      1. Find longest contiguous run of stream_mode == 1
+      2. Within that run, forward-fill identity-body_quat rows from prior valid neighbors
+      3. If the run starts with identity rows, back-fill from the first valid frame
+      4. Abort if no row has stream_mode == 1
+    """
+    if "teleop.stream_mode" not in df.columns:
+        print(f"[warn] parquet has no 'teleop.stream_mode' column; skipping filter for {path.name}")
+        return df
+
+    sm = np.asarray(df["teleop.stream_mode"].to_numpy()).astype(np.int64).reshape(-1)
+    bq = np.stack([np.asarray(v) for v in df["teleop.body_quat_w"].to_numpy()]).astype(np.float32)
+    is_identity = (np.abs(bq[:, 0] - 1.0) < 1e-3) & (np.linalg.norm(bq[:, 1:], axis=1) < 1e-3)
+    total = len(sm)
+
+    in_smpl_mode = sm == 1
+    if int(in_smpl_mode.sum()) == 0:
+        sm_unique = np.unique(sm).tolist()
+        raise ValueError(
+            f"parquet {path.name} has 0/{total} frames with stream_mode == 1. "
+            f"Found stream_mode values {sm_unique}. This parquet was collected in PLANNER mode "
+            f"and its SMPL fields are placeholder zeros. Cannot drive SMPL encoder from it. "
+            f"Either pick an SMPL-mode episode or pass --smpl-stream-mode-filter off "
+            f"(diagnostic only; policy will see constant input)."
+        )
+
+    # Step 1: longest contiguous run of stream_mode == 1
+    best_start, best_len, cur_start, cur_len = 0, 0, 0, 0
+    for i in range(total):
+        if in_smpl_mode[i]:
+            if cur_len == 0:
+                cur_start = i
+            cur_len += 1
+            if cur_len > best_len:
+                best_len, best_start = cur_len, cur_start
+        else:
+            cur_len = 0
+    seg_end = best_start + best_len
+    seg_id_count = int(is_identity[best_start:seg_end].sum())
+    seg_valid_count = best_len - seg_id_count
+
+    if seg_valid_count == 0:
+        raise ValueError(
+            f"parquet {path.name}: longest stream_mode==1 segment [{best_start},{seg_end}) "
+            f"contains {best_len} rows but ALL are identity body_quat. Effectively no SMPL data."
+        )
+
+    sm_dropped = total - best_len  # rows dropped due to stream_mode != 1
+    if sm_dropped == 0 and seg_id_count == 0:
+        print(f"[smpl-mode-filter] {path.name}: all {total} rows valid")
+        return df
+
+    # Step 2: forward-fill identity rows in the segment from prior valid neighbors
+    sub = df.iloc[best_start:seg_end].reset_index(drop=True).copy()
+    sub_id = is_identity[best_start:seg_end]
+
+    # Find the FIRST valid row in the segment for back-fill if needed
+    first_valid = int(np.where(~sub_id)[0][0])
+
+    fill_columns = [c for c in sub.columns if c.startswith("teleop.")]
+    for i in range(len(sub)):
+        if sub_id[i]:
+            donor = i - 1
+            while donor >= 0 and sub_id[donor]:
+                donor -= 1
+            if donor < 0:
+                donor = first_valid  # back-fill from first valid
+            for c in fill_columns:
+                sub.at[i, c] = sub.at[donor, c]
+
+    print(
+        f"[smpl-mode-filter] {path.name}: trimmed {total}->{best_len} rows "
+        f"(kept [{best_start},{seg_end})); "
+        f"dropped {sm_dropped} non-SMPL-mode rows; "
+        f"hold-last filled {seg_id_count} identity-body_quat glitches in segment"
+    )
+    return sub
+
+
+def _load_parquet_episode(path: Path, smpl_stream_mode_filter: str = "auto") -> dict:
     """Load a single parquet episode and produce the numpy arrays the streamer needs."""
     df = pd.read_parquet(path)
     if len(df) == 0:
         raise ValueError(f"empty parquet: {path}")
+
+    if smpl_stream_mode_filter == "auto":
+        df = _filter_and_fill_smpl_data(df, path)
 
     smpl_joints = _stack_column(df, "teleop.smpl_joints", (72,)).reshape(-1, SMPL_NUM_JOINTS, 3)
     smpl_pose_21 = _stack_column(df, "teleop.smpl_pose", (63,)).reshape(
@@ -239,7 +345,7 @@ def _compute_reference_root_quat(
 def main() -> None:
     args = parse_args()
 
-    data = _load_parquet_episode(args.parquet)
+    data = _load_parquet_episode(args.parquet, smpl_stream_mode_filter=args.smpl_stream_mode_filter)
     n = data["smpl_joints"].shape[0]
 
     # Build joint_pos from parquet's pre-retargeted G1 wrist DOFs.

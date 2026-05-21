@@ -883,6 +883,17 @@ motionlib的作用：
   # 诊断对照:
   #   --smpl-anchor-mode smpl_processed   (与 IsaacSim 训练严格匹配)
   #   --smpl-joints-mode re_canonicalize  (复现 pre-fix 双重 canonicalization bug)
+  #
+  # ⚠️  parquet 必须是 SMPL 模式采集的（teleop.stream_mode == 1）：
+  #   * stream_mode == 0 表示 PLANNER 模式采集，所有 SMPL 字段是占位零值
+  #     （body_quat_w = identity, smpl_joints/wrist 全零）
+  #   * 用 PLANNER 数据跑 SMPL encoder，policy 看到的输入是常量 → 不同 motion
+  #     都得到相同行为（典型症状：前进一步然后踉跄退回）
+  #   * streamer 默认 --smpl-stream-mode-filter auto 会:
+  #     - 自动 trim 到最长 stream_mode==1 段
+  #     - 段内 body_quat==identity 的 glitch 帧 (pico 偶发 VR 丢帧) 用 hold-last 填充
+  #     - 整条 episode 都是 stream_mode != 1 时直接 abort 报错
+  #   * --smpl-stream-mode-filter off 跳过过滤（仅诊断用）
 
 
 
