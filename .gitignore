@@ -255,6 +255,7 @@ temp/
 tmp/
 eval_benchmark/
 .CLAUDE.md
+.AGENTS.md
 .codex
 .claude/
 .agents/
