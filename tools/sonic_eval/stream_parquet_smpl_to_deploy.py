@@ -91,6 +91,37 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--command-heartbeat-interval", type=float, default=0.5)
     parser.add_argument("--startup-delay", type=float, default=0.5)
     parser.add_argument("--verbose", action="store_true")
+
+    # ------ optional: record deploy g1_debug output to an official-style parquet ------
+    parser.add_argument(
+        "--record",
+        action="store_true",
+        help=(
+            "Subscribe to deploy's g1_debug ZMQ topic in the background and write a single "
+            "parquet (schema mirrors gear_sonic.data.features_sonic_vla.get_features_sonic_vla, "
+            "minus image/video columns) when the streamer exits. Useful for sim2sim eval to "
+            "capture the deploy-side action.wbc + observation.state alongside the teleop.* inputs."
+        ),
+    )
+    parser.add_argument(
+        "--record-out",
+        type=Path,
+        default=None,
+        help=(
+            "Output parquet path. Defaults to /tmp/sonic_parquet_replays/{episode_stem}_{ts}.parquet"
+        ),
+    )
+    parser.add_argument("--record-zmq-host", type=str, default="localhost")
+    parser.add_argument(
+        "--record-zmq-port",
+        type=int,
+        default=5608,
+        help=(
+            "ZMQ port for deploy's g1_debug output. Default 5608 matches the g1_deploy_onnx_ref "
+            "binary default (deploy.sh does not pass --zmq-out-port through, so deploy uses 5608 "
+            "out of the box). Override to 5557 only if you explicitly modified deploy to publish there."
+        ),
+    )
     parser.add_argument(
         "--frame-index-source",
         type=str,
@@ -429,6 +460,36 @@ def main() -> None:
         f"endpoint={pub.endpoint}"
     )
 
+    # ------ optional: spin up the official-style parquet recorder ------
+    recorder = None
+    if args.record:
+        from tools.sonic_eval.parquet_recorder import DeployStateRecorder
+        recorder = DeployStateRecorder(
+            zmq_host=args.record_zmq_host,
+            zmq_port=args.record_zmq_port,
+            verbose=args.verbose,
+        )
+        recorder.start()
+
+    def _push_teleop_snapshot(idx: int) -> None:
+        """Hand the latest per-row teleop fields to the recorder (used as the 'reflection'
+        of what the deploy SMPL encoder just saw for this frame)."""
+        if recorder is None:
+            return
+        recorder.update_teleop_snapshot({
+            "teleop.smpl_joints": smpl_joints_full[idx].reshape(-1).astype(np.float32),
+            "teleop.smpl_pose": smpl_pose_full[idx, 1 : 1 + SMPL_BODY_JOINTS_IN_PARQUET, :]
+            .reshape(-1)
+            .astype(np.float32),
+            "teleop.body_quat_w": body_quat_full[idx].astype(np.float32),
+            "teleop.left_wrist_joints": joint_pos_full[idx, [G1_L_WRIST_ROLL_IDX, G1_L_WRIST_PITCH_IDX, G1_L_WRIST_YAW_IDX]].astype(np.float32),
+            "teleop.right_wrist_joints": joint_pos_full[idx, [G1_R_WRIST_ROLL_IDX, G1_R_WRIST_PITCH_IDX, G1_R_WRIST_YAW_IDX]].astype(np.float32),
+            "teleop.smpl_frame_index": np.array(
+                [int(_frame_indices(idx, idx + 1)[0])], dtype=np.int64
+            ),
+            "teleop.stream_mode": np.array([1], dtype=np.int32),
+        })
+
     def _frame_indices(i: int, j: int) -> np.ndarray:
         if args.frame_index_source == "smpl" and smpl_frame_idx_sliced is not None:
             # Map streamer row index back to parquet's smpl_frame_index; prefix frames
@@ -443,6 +504,9 @@ def main() -> None:
     def _send_range(istart: int, iend: int) -> None:
         for i in range(istart, iend, args.chunk_size):
             j = min(i + args.chunk_size, iend)
+            # Update recorder's teleop snapshot to the LAST frame of this chunk so the
+            # next proprio msg gets paired with what the encoder will most recently see.
+            _push_teleop_snapshot(min(j - 1, sent_frames - 1))
             pub.send_pose(
                 joint_pos=joint_pos_full[i:j],
                 joint_vel=joint_vel_full[i:j],
@@ -486,8 +550,22 @@ def main() -> None:
             if args.realtime:
                 time.sleep((j - i) * frame_period)
         print("[OK] parquet smpl stream complete")
+
+        if recorder is not None:
+            # Give deploy a brief drain window so the last action.wbc frames make it through ZMQ.
+            time.sleep(0.3)
     finally:
         pub.close()
+        if recorder is not None:
+            recorder.stop()
+            out_path = args.record_out
+            if out_path is None:
+                ts = time.strftime("%Y%m%d_%H%M%S")
+                out_path = Path(f"/tmp/sonic_parquet_replays/{args.parquet.stem}_{ts}.parquet")
+            try:
+                recorder.save(out_path)
+            except Exception as exc:
+                print(f"[recorder] save failed: {exc.__class__.__name__}: {exc}")
 
 
 if __name__ == "__main__":

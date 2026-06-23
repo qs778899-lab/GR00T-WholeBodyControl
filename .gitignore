@@ -72,17 +72,12 @@ instance/
 # Sphinx documentation
 data/
 data_*
-data_0418/
-data_0424/
-data_0424
-data_0506/
 
-eval_benchmark/
 
-.CLAUDE.md
-.codex
-.claude/
-.agents/
+
+
+
+
 
 # PyBuilder
 .pybuilder/
@@ -254,3 +249,24 @@ media/pico_setup/picoSetUp.mp4
 tmp/
 temp/
 *.tmp
+
+
+# test
+tmp/
+eval_benchmark/
+.CLAUDE.md
+.codex
+.claude/
+.agents/
+workspace/
+data_0418/
+data_0424/
+data_0424
+data_0506/
+data_0418/
+data_0424/
+data_0424
+data_0506/data_0418/
+data_0424/
+data_0424
+data_0506/
