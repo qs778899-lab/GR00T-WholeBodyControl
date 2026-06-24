@@ -29,6 +29,28 @@
 - `tasks/` 当前被 `.gitignore` 忽略；如需提交这些文档，必须使用 `git add -f tasks/sim2sim_structure_refactor/...`。
 - 旧路径 `workspace/plan_/sim2sim_structure_refactor_plan.md` 不再维护。
 
+## 2026-06-24 测试层级修正
+
+用户指出：
+
+- Phase 1 中的数据检测是数据 smoke，并没有实际对比数据结果。
+- `plan.md` 中第一层确定性链路验证需要大量实际数据运行测试和逐环节对比。
+- 当前文档容易让工作流误以为数据 smoke 已经覆盖完整确定性链路。
+
+修正：
+
+- 在 `status.md` 中明确 Phase 1 的数据 smoke 和单条端到端 smoke 不能等价于完整第一层确定性链路验证。
+- 在 `test_matrix.md` 中新增测试层级说明，区分数据 smoke、确定性链路验证、端到端统计验证。
+- 在 `test_matrix.md` 中列出 Phase 2 前必须补齐的 7 个确定性链路环节：
+  - streamer manifest
+  - packed ZMQ round-trip
+  - deploy 播放游标
+  - reference pose buffer
+  - step-sync logger
+  - metrics replay
+  - visualization/metrics 同源
+- 在 `plan.md` 的 Phase 1 和 Phase 1 门禁结论中补充边界说明：Phase 1 通过只适用于源码搬移范围，不代表完整 baseline/refactor 数据结果对比完成。
+
 ## 2026-06-24 Phase 1 已完成摘要
 
 提交：

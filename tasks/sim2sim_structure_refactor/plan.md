@@ -458,6 +458,13 @@ gear_sonic/sim2sim/
 
 目标：降低 base 已有文件差异，保持 CLI 和输出不变。
 
+测试边界说明：
+
+- Phase 1 主要是源码搬移和导入边界调整，因此最关键的确定性验证是“搬移前后类/常量源码一致”和局部 logger/ZMQ/overlay 行为一致。
+- Phase 1 的数据 smoke 只验证数据可加载、字段/shape/finite 合法，不等价于实际 sim2sim 结果对比。
+- Phase 1 的单条端到端 strict alignment smoke 只验证链路能运行、step-sync 日志可消费、`source_frame_index` 对齐为 0 lag；不等价于全量 baseline/refactor 数据运行对比。
+- 在 Phase 2 开始更深 hook 重构前，必须先补齐 `test_matrix.md` 中第一层确定性链路验证的完整命令和产物。
+
 优先处理：
 
 - `SIM2SIM_BODY_FRAMES`、`G1_ISAACLAB_TO_MUJOCO_DOF` -> `gear_sonic/sim2sim/constants.py`
@@ -1144,3 +1151,10 @@ Phase 1 门禁结论：
 - Python 结构隔离没有改变已搬移类/常量源码。
 - 入口、编译、数据读取、严格 frame 对齐、metrics 消费链路均通过。
 - 可以提交并 push 本阶段，但不能进入 Phase 2 前遗漏 commit/push 门禁。
+
+边界修正：
+
+- 上述“本阶段计划内测试”仅指 Phase 1 源码搬移范围内的测试。
+- 数据 smoke 不是实际结果对比。
+- Phase 1 没有完成 `plan.md` 第一层确定性链路验证中 7 个环节的完整 baseline/refactor 对比。
+- Phase 2 代码重构前必须先补齐并通过完整确定性链路验证，否则不能继续扩大结构优化范围。

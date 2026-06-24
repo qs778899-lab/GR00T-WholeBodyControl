@@ -33,9 +33,19 @@ git diff --name-only | rg '\.(cpp|hpp|cc|hh|h)$' || true
 - C++/header diff 必须为空，除非该 phase 明确是 C++ 默认关闭 hook 阶段并已单独评审。
 - 入口 help 中 sim2sim 参数仍可见且没有 import/runtime error。
 
+## 测试层级说明
+
+测试分为三层，不能互相替代：
+
+- 数据 smoke：只验证数据文件存在、可加载、字段/shape/finite 合法；不比较实际 sim2sim 结果。
+- 确定性链路验证：绕开 policy 随机性，固定输入/日志/manifest，对 streamer、ZMQ、reference pose、step-sync CSV、metrics alignment 做逐环节输出对比。
+- 端到端统计验证：承认 policy 随机性，跑 baseline/refactor 多次，比较 metrics 分布、有效帧覆盖和 per-link 异常。
+
+Phase 1 已完成的是“代码搬移一致性 + 数据 smoke + 单条端到端 strict alignment smoke”，不是完整的第一层确定性链路验证。
+
 ## 确定性验证
 
-Phase 1 已使用：
+Phase 1 已使用的最小确定性检查：
 
 ```bash
 python tmp/sim2sim_refactor/20260624_142140_phase1_validation/deterministic/phase1_moved_helpers_check.py
@@ -47,12 +57,29 @@ python tmp/sim2sim_refactor/20260624_142140_phase1_validation/deterministic/phas
 - packed ZMQ unpack、logger CSV、overlay error 计算通过。
 - `Sim2SimEvalLogger` 的 step-sync 写入规则不变。
 
-后续 Phase 2/3 应继续扩展：
+覆盖边界：
 
-- streamer manifest frame index / prefix / blend 边界一致。
-- packed message header/schema round-trip 一致。
-- metrics alignment manifest 中 `(metric_row, source_frame_index, actual_row, ref_row)` 一致。
-- reference visualizer exact pose 命中，不允许 fallback pose 参与 metrics GT。
+- 该检查只适用于 Phase 1 的“源码搬移不改变局部逻辑”判断。
+- 该检查不覆盖真实 motion 的 streamer manifest 对比、packed chunk 序列对比、reference pose buffer 命中对比、metrics replay 对比。
+
+Phase 2 代码重构前必须补齐的第一层确定性链路验证：
+
+| 环节 | 必需输入 | 必需输出 | 通过标准 |
+|---|---|---|---|
+| streamer manifest | 固定 `motion_file/motion_name/target_fps/start/end/prepend/blend/chunk` | `stream_manifest.csv/jsonl` | frame_index、prefix/blend/motion 边界、motion_start_frame、source frame 映射一致 |
+| packed ZMQ round-trip | streamer 输出 chunk | `packed_message_manifest.jsonl` | header 字段、shape、dtype、chunk 首尾 frame、frame_index 序列一致 |
+| deploy 播放游标 | 已录制 `source_frame_index.csv` / `applied_source_frame_index.csv` | source/applied frame 对比 summary | 有效区间、首尾、缺口、延迟/映射规则一致 |
+| reference pose buffer | raw pose messages + debug source frames | exact pose hit/miss report | 每个 metrics GT frame 必须命中 exact raw pose；fallback pose 不能参与 GT |
+| step-sync logger | actual/ref body pos、source_frame_index、is_new_control_frame | `step_sync_invariant_report.json` | 写入条件、去重规则、actual/ref 来源、行数和有效 source frame 一致 |
+| metrics replay | 固定 CSV 日志 | metrics JSON + alignment manifest | `(metric_row, source_frame_index, actual_row, ref_row)`、输入 shape、有效 frame 集合一致 |
+| visualization/metrics 同源 | 同一 source frame 的 viewer/ref/offline 输出 | per-frame ref body pos 对比 | 同一 translation/alignment mode 下 ref body positions 一致或差异有明确解释 |
+
+Phase 2 通过前至少要有：
+
+- 一条 `eval_benchmark/robot_test` motion 的完整确定性链路验证。
+- `eval_benchmark/robot/*.pkl` 全量 streamer/data manifest smoke。
+- `eval_benchmark/smpl/*.pkl` 全量 adapter/manifest smoke。
+- `data/smpl_filtered` 抽样 adapter/manifest smoke。
 
 ## 数据 smoke
 
@@ -78,6 +105,12 @@ env PYTHONPATH=/home/lab/Desktop/IsaacLab/source \
 
 - 所有样本加载/字段/shape/finite 检查通过。
 - 当前 Phase 1 结果为 `50/50` 通过。
+
+限制：
+
+- 数据 smoke 不运行 MuJoCo/deploy/policy。
+- 数据 smoke 不比较 baseline/refactor metrics。
+- 数据 smoke 不能替代确定性链路验证或端到端统计验证。
 
 ## 端到端 strict frame alignment smoke
 
