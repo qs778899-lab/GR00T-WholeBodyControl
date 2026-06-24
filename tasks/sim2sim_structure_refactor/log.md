@@ -356,3 +356,52 @@ Phase 3 进入代码修改前必须先完成：
 - 审查 streamer / metrics / adapter 当前重复点。
 - 判断是否确有必要做代码重构。
 - 若需要改代码，先明确具体文件和测试命令。
+
+## 2026-06-24 Phase 3 取消与 C++ Phase C0 计划更新
+
+用户要求：
+
+- 第三阶段不需要执行。
+- `tools/sonic_eval/*.py` 都是增量拓展文件，不修改。
+- 现在完善 C++ Phase 的计划。
+
+执行调整：
+
+- Phase 3 标记为 skipped，不做代码修改，不跑 Phase 3 数据清单。
+- 当前后续阶段切换为 C++ Phase C0。
+- C++ Phase C0 是审查和验证阶段，不直接修改 C++/header。
+
+C++ Phase C0 计划补充：
+
+- 导出 base 分支 16 个 C++/header 文件快照。
+- 生成 current vs base 原始 diff。
+- 逐文件、逐代码块分类：
+  - `drop_non_sim2sim`
+  - `python_side_replacement`
+  - `smpl_protocol_separate_review`
+  - `must_keep_default_off_debug_hook`
+- 输出：
+  - `tasks/sim2sim_structure_refactor/cpp_diff_review.md`
+  - `tasks/sim2sim_structure_refactor/cpp_phase_c0_test_report.md`
+  - `tmp/sim2sim_refactor/<run_id>/cpp_base_snapshot/`
+  - `tmp/sim2sim_refactor/<run_id>/cpp_diff_raw/`
+  - `tmp/sim2sim_refactor/<run_id>/cpp_diff_patches/`
+
+C0 数据覆盖：
+
+- `eval_benchmark/robot_test/*.pkl` 全部 1 条：deterministic replay、metrics replay、必要时真实 E2E strict alignment。
+- `eval_benchmark/robot/*.pkl` 全部 19 条：streamer/data manifest smoke。
+- `eval_benchmark/smpl/*.pkl` 全部 27 条：SMPL adapter/manifest smoke。
+- `data/smpl_filtered` 固定抽样 4 条：
+  - `Idle_Left_001__A017.pkl`
+  - `Jump_002__A017.pkl`
+  - `Loop_Forward_Walk_001__A017.pkl`
+  - `Neutral_stoop_down_001__A057.pkl`
+
+C0 退出标准：
+
+- 16 个同路径 C++/header diff 都有明确分类和证据。
+- C0 不产生 C++ 修改。
+- 默认 C++ build/help 通过。
+- 若 Python 旁路可覆盖 sim2sim 必需信息，最终迁移原则是 C++ 全部回退 base。
+- 若 Python 旁路不能覆盖，必须进入 C1 方案评审，不能直接修改 C++。

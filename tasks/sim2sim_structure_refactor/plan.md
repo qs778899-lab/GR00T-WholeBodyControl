@@ -276,30 +276,82 @@ gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/
 | `include/robot_parameters.hpp` | 删除 BMS/pause 字段 | 回退 base；真机部署相关，不可随 sim2sim 合入。 |
 | `tests/test_ros2.cpp` | 测试删除 | 回退 base；非 sim2sim 必需。 |
 
-#### C++ Phase C0：恢复/比对 base 主路径
+#### C++ Phase C0：差异审查与去侵入验证
 
-目标：建立“最终合入 base 时 C++ 文件可以不变”的可验证前提。
+目标：建立“最终合入 base 时 C++ 文件可以不变或只保留极小默认关闭 hook”的可验证前提。
+
+阶段性质：
+
+- C0 是审查和验证阶段，不直接修改 C++/header。
+- C0 结束前禁止进入 C++ 代码修改。
+- C0 重点不是把当前 C++ diff 整理得更漂亮，而是判断哪些 diff 不应该带入 base。
 
 任务：
 
-- 从 base commit 导出 16 个 C++ 文件的原始内容到 `tmp/sim2sim_refactor/<run_id>/cpp_base_snapshot/`。
+- 从 base commit 导出 16 个 C++/header 文件的原始内容到 `tmp/sim2sim_refactor/<run_id>/cpp_base_snapshot/`。
+- 生成 current vs base 的逐文件 diff：
+  - `tmp/sim2sim_refactor/<run_id>/cpp_diff_raw/*.patch`
 - 对 current C++ 差异生成 patch 分类：
   - `drop_non_sim2sim.patch`
-  - `candidate_sim2sim_debug.patch`
+  - `python_side_replacement.patch`
   - `smpl_protocol_separate_review.patch`
-- 在不修改 current C++ 的前提下，先判断 Python 旁路能否满足：
-  - streamer manifest 提供 sent `frame_index`
-  - MuJoCo visualizer exact raw pose buffer 提供 GT frame
-  - sim step-sync CSV 提供 actual/ref 同步行
+  - `must_keep_default_off_debug_hook.patch`
+- 输出逐文件审查表：
+  - `tasks/sim2sim_structure_refactor/cpp_diff_review.md`
+- 在不修改 current C++ 的前提下，判断 Python 旁路能否满足 sim2sim 必需信息：
+  - streamer manifest 提供 sent `frame_index`。
+  - packed pose stream 提供 raw pose / root / joint 数据。
+  - MuJoCo `ReferenceMotionVisualizer` exact raw pose buffer 提供 GT frame。
+  - sim step-sync CSV 提供 actual/ref 同步行。
+  - metrics replay 可以只依赖 fixed logs 和 Python reader 完成对齐验证。
 
-验收：
+C0 数据清单：
 
-- 如果 deterministic replay 能证明 metrics 不依赖 deploy-emitted `applied_source_frame_index`，最终迁移时 16 个 C++ 文件全部回退 base。
-- 如果不能证明，进入 C++ Phase C1。
+| 数据范围 | 数量 | 测试层级 | 目标 |
+|---|---:|---|---|
+| `eval_benchmark/robot_test/*.pkl` | 1 | deterministic replay、metrics replay、必要时真实 E2E strict alignment | 证明 Python logs/manifest 足够完成 strict alignment |
+| `eval_benchmark/robot/*.pkl` | 19 | 全量 streamer/data manifest smoke | 证明 robot 数据不依赖 C++ diff 才能生成 stream/manifest |
+| `eval_benchmark/smpl/*.pkl` | 27 | 全量 SMPL adapter/manifest smoke | 标记 SMPL/protocol C++ diff 是否应单独评审 |
+| `data/smpl_filtered` 抽样 | 4 | adapter/manifest smoke | 验证 filtered SMPL 数据边界 |
+
+`data/smpl_filtered` 固定抽样：
+
+- `Idle_Left_001__A017.pkl`
+- `Jump_002__A017.pkl`
+- `Loop_Forward_Walk_001__A017.pkl`
+- `Neutral_stoop_down_001__A057.pkl`
+
+C0 必须产出：
+
+- `tmp/sim2sim_refactor/<run_id>/cpp_base_snapshot/`
+- `tmp/sim2sim_refactor/<run_id>/cpp_diff_raw/`
+- `tmp/sim2sim_refactor/<run_id>/cpp_diff_patches/`
+- `tasks/sim2sim_structure_refactor/cpp_diff_review.md`
+- `tasks/sim2sim_structure_refactor/cpp_phase_c0_test_report.md`
+
+C0 验收：
+
+- 16 个 C++/header diff 都有明确分类：
+  - `drop_non_sim2sim`
+  - `python_side_replacement`
+  - `smpl_protocol_separate_review`
+  - `must_keep_default_off_debug_hook`
+- 每个 proposed drop 都必须说明替代证据。
+- 默认 C++ build/help 通过。
+- C++/header 工作区 diff 为空；C0 不产生 C++ 修改。
+- C0 报告明确是否需要 C1。
+- 如果 deterministic replay 能证明 metrics 不依赖 deploy-emitted `applied_source_frame_index`，最终迁移时原则上 16 个 C++ 文件全部回退 base。
+- 如果不能证明，进入 C++ Phase C1 方案评审。
 
 #### C++ Phase C1：最小默认关闭 source-frame debug hook
 
 只在 C0 证明 Python 旁路不足时执行。
+
+进入条件：
+
+- C0 报告明确指出某个 sim2sim 必需信息无法由 Python 旁路、fixed logs、stream manifest 或 MuJoCo step-sync 可靠获得。
+- 用户确认允许进入 C1。
+- C1 开始前必须列出具体要修改的 C++ 文件、默认关闭策略、性能测试命令和回滚方案。
 
 最小需求：
 
@@ -336,6 +388,21 @@ class Sim2SimSourceFrameTracker {
 - `enabled=true` 时记录频率随已有 debug/log 频率，不额外提高主循环 I/O 频率。
 - 需要在 base C++ 和开启 sim2sim debug 两种配置下记录控制循环耗时统计。
 
+C1 数据清单：
+
+- 继承 C0 数据清单。
+- 额外必须跑：
+  - 默认 debug 关闭路径：C++ build/help、部署默认命令 smoke、控制循环耗时统计。
+  - sim2sim debug 开启路径：至少 `robot_test` 1 条真实 E2E strict alignment。
+
+C1 退出标准：
+
+- `enabled=false` 默认路径无新增文件 I/O、无 ZMQ publish、无动态分配、无 schema 变化。
+- `enabled=false` 控制循环耗时与 base 同量级，差异有明确解释。
+- `enabled=true` 才产生 sim2sim debug 输出。
+- 所有输出字段、端口、schema 版本都有文档说明。
+- C1 修改必须单独 commit，不与 Python 工具或其他重构混合。
+
 #### C++ Phase C2：迁移到 base 前的验证
 
 必须通过：
@@ -349,6 +416,13 @@ class Sim2SimSourceFrameTracker {
   - MuJoCo `sim_source_frame_index`
   - `sim2sim_step_sync_body_pos_w_14.csv`
 - 性能报告写入 `tmp/sim2sim_refactor/<run_id>/cpp_perf_report.md`。
+
+C2 退出标准：
+
+- 明确最终合入 base 的 C++ 文件列表。
+- 明确最终不合入 base 的 C++ diff 列表和原因。
+- 若没有任何 C++ 文件需要合入，必须记录“C++ 全部回退 base”的最终结论。
+- 若存在 C++ 文件需要合入，必须有单独 PR/patch 方案，且默认关闭、性能和真机部署风险已评审。
 
 ### 2.2 base 已有 Python 核心文件过载
 
@@ -613,9 +687,13 @@ Phase 2 门禁结论：
 - 可以提交并 push Phase 2。
 - push 完成前不能进入 Phase 3。
 
-### Phase 3：streamer / metrics 内部模块化
+### Phase 3：跳过 streamer / metrics 内部模块化
 
-目标：只有在 Phase 1/2 发现纯新增工具内部重复过多或影响 base 已有文件时，再整理 `tools/sonic_eval/*.py`。保留命令不变。
+状态：取消执行。
+
+原因：用户明确要求 `tools/sonic_eval/*.py` 都是增量拓展文件，不修改。当前结构优化重点转入 C++ Phase C0。
+
+原目标：只有在 Phase 1/2 发现纯新增工具内部重复过多或影响 base 已有文件时，再整理 `tools/sonic_eval/*.py`。保留命令不变。
 
 建议拆分：
 
@@ -631,9 +709,9 @@ Phase 2 门禁结论：
 
 Phase 3 启动门禁：
 
-- Phase 3 不直接开始代码修改，必须先冻结数据清单和测试层级。
-- 本阶段如果只做模块抽取，不改变算法和输出格式，也必须对挑选数据清单全部完成计划内测试。
-- 如果本阶段实际没有发现值得抽取的重复逻辑，必须在 `log.md` 记录“不实施代码变更”的原因，不能为了进入下一阶段而做无意义重构。
+- Phase 3 不执行，不开始代码修改。
+- 不修改 `tools/sonic_eval/*.py`。
+- 不需要跑 Phase 3 数据清单；后续测试按 C++ Phase C0 清单执行。
 
 Phase 3 挑选测试数据清单：
 

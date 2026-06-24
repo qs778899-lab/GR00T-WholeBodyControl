@@ -200,6 +200,74 @@ Phase 1 通过结果：
 - `step_sync_rows=995`
 - `lag_frames_log_vs_gt=0`
 
+## C++ Phase 专项测试矩阵
+
+C++ Phase 的优先目标是证明默认真机/部署 C++ 主路径不受 sim2sim 影响。C++ Phase 不与 Python 工具重构混合提交。
+
+### C++ Phase C0：审查与验证，不改 C++
+
+必跑命令：
+
+```bash
+cmake --build gear_sonic_deploy/build --target g1_deploy_onnx_ref -j2
+cd gear_sonic_deploy && ./target/release/g1_deploy_onnx_ref --help
+git diff --name-only | rg '\.(cpp|hpp|cc|hh|h)$' || true
+```
+
+必需产物：
+
+- `tmp/sim2sim_refactor/<run_id>/cpp_base_snapshot/`
+- `tmp/sim2sim_refactor/<run_id>/cpp_diff_raw/`
+- `tmp/sim2sim_refactor/<run_id>/cpp_diff_patches/`
+- `tasks/sim2sim_structure_refactor/cpp_diff_review.md`
+- `tasks/sim2sim_structure_refactor/cpp_phase_c0_test_report.md`
+
+数据覆盖：
+
+- `eval_benchmark/robot_test/*.pkl` 全部 1 条：deterministic replay、metrics replay、必要时真实 E2E strict alignment。
+- `eval_benchmark/robot/*.pkl` 全部 19 条：streamer/data manifest smoke。
+- `eval_benchmark/smpl/*.pkl` 全部 27 条：SMPL adapter/manifest smoke。
+- `data/smpl_filtered` 固定抽样 4 条：adapter/manifest smoke。
+
+通过标准：
+
+- C0 不产生 C++/header 工作区修改。
+- 16 个同路径 C++/header diff 全部完成逐文件、逐代码块分类。
+- 每个 proposed drop 都有 Python 旁路、manifest 或 fixed-log replay 证据。
+- 如果任何 diff 无法分类或无法证明可丢弃，C0 不能标记为完成；必须报告问题并决定是否进入 C1。
+
+### C++ Phase C1：最小默认关闭 hook，仅在 C0 失败时执行
+
+进入条件：
+
+- C0 证明 Python 旁路不足。
+- 用户确认允许修改 C++。
+- C1 文档先列出具体文件、默认关闭策略、性能测试命令和回滚方案。
+
+必跑测试：
+
+- C++ 默认 debug 关闭路径 build/help。
+- C++ 默认 debug 关闭路径部署 smoke。
+- 控制循环耗时统计，与 base/default 路径对比。
+- sim2sim debug 开启路径至少 1 条 `robot_test` 真实 E2E strict alignment。
+- C0 数据清单全部重新按受影响层级执行。
+
+通过标准：
+
+- `enabled=false` 默认路径无新增文件 I/O、无 ZMQ publish、无动态分配、无 schema 变化。
+- `enabled=false` 控制循环耗时与 base/default 同量级，差异有明确解释。
+- `enabled=true` 才产生 sim2sim debug 输出。
+- C1 修改单独 commit，不能混入 Python 工具重构。
+
+### C++ Phase C2：迁移到 base 前验证
+
+必需结论：
+
+- 最终合入 base 的 C++ 文件列表。
+- 最终不合入 base 的 C++ diff 列表和原因。
+- 如果 C++ 全部回退 base，明确写出“不合入任何 C++ diff”的结论。
+- 如果存在 C++ diff 需要合入，必须有默认关闭、性能报告、真机部署风险说明和单独 patch/PR 方案。
+
 ## 测试数据清理规则
 
 每个 phase 的所有计划内测试都成功完成、确认没有问题、阶段文档更新并完成提交/push 后，可以清理该 phase 测试产生的大体积临时数据。

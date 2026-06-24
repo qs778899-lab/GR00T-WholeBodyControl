@@ -4,13 +4,14 @@
 
 ## 当前门禁
 
-- 当前阶段：Phase 3 已开始，当前只进入范围冻结和数据清单确认，不开始代码修改。
+- 当前阶段：C++ Phase C0 已开始，当前只做 C++ 差异审查和去侵入验证计划，不直接修改 C++。
 - Phase 1 代码提交：`3ce6143 Refactor sim2sim helpers out of mujoco base sim`
 - 已 push 远程：`origin main`
 - Phase 1 完整测试文档提交：`ce69a40 Record completed Phase 1 deterministic sim2sim validation`
 - Phase 2 提交：`26cac18 Isolate sim2sim MuJoCo hook from base simulator`
 - Phase 2 数据覆盖门禁补充提交：`ba53983 Clarify per-phase full data coverage gate`
-- 允许进入下一阶段：Phase 2 已完成并 push，可以进入 Phase 3；Phase 3 代码修改前必须先完成本阶段数据清单、测试层级和退出标准冻结。
+- Phase 3 状态：取消执行。`tools/sonic_eval/*.py` 均视为增量拓展文件，本轮不做结构优化、不修改。
+- 允许进入下一阶段：进入 C++ Phase C0；C0 完成前不允许修改 C++，不允许进入 C1。
 - C++/header 状态：Phase 2 未修改任何 C++/header 文件，C++ diff gate 无输出。
 - 未提交的无关工作区改动：`.gitignore` 中 `tasks/` ignore 规则，非 Phase 1 提交内容。
 
@@ -22,33 +23,49 @@
 - 任一挑选数据未运行、失败、结果不确定，或有效帧覆盖异常减少且无法解释，本 phase 不能标记为完成，不能进入下一阶段。
 - 该规则已写入 `plan.md` 和 `test_matrix.md`，后续 phase 必须按该规则执行。
 
-## Phase 3 启动门禁
+## Phase 3 取消记录
 
-Phase 3 目标：
+- Phase 3 原计划处理 `tools/sonic_eval/*.py` 内部模块化。
+- 用户明确要求：第三阶段不需要执行，`tools/sonic_eval/*.py` 都是增量拓展文件，不修改。
+- 因此 Phase 3 标记为 skipped，不做代码修改，不跑 Phase 3 数据清单，不进入 Phase 3 提交。
 
-- 仅在不改变 CLI 和输出格式的前提下，整理 `tools/sonic_eval/*.py` 内部的 streamer / metrics / adapter 重复逻辑。
-- 优先把可复用的 CSV reader、source frame filter、metrics replay、streamer manifest 逻辑收敛到 `gear_sonic/sim2sim/` 下的新模块。
-- 不修改 C++/header，不修改 deploy 主路径。
+## C++ Phase C0 启动门禁
 
-Phase 3 挑选测试数据清单：
+C0 目标：
 
-- `eval_benchmark/robot_test/*.pkl`：全部 1 条，执行完整 deterministic replay、metrics replay，至少 1 条执行真实 A/B/C/D strict alignment E2E。
-- `eval_benchmark/robot/*.pkl`：全部 19 条，执行全量 streamer/data manifest smoke；如 Phase 3 修改 robot streamer 或 motionlib adapter，必须对全部 19 条执行 refactor 前后 manifest 对比。
-- `eval_benchmark/smpl_test/*.pkl`：全部 1 条，执行 SMPL adapter/manifest smoke；如 Phase 3 修改 SMPL streamer，必须执行对应 streamer manifest 对比。
-- `eval_benchmark/smpl/*.pkl`：全部 27 条，执行全量 SMPL adapter/manifest smoke；如 Phase 3 修改 SMPL adapter，必须对全部 27 条执行 refactor 前后 manifest 对比。
-- `data/smpl_filtered/` 抽样 4 条：
+- 针对相对 base 仓库不同的 16 个 C++/header 同路径文件，做逐文件、逐代码块去侵入审查。
+- 优先证明最终合入 base 时可以不携带这些 C++ diff。
+- C0 不直接修改 C++；只生成审查报告、patch 分类和验证证据。
+
+C0 必须产出：
+
+- `tmp/sim2sim_refactor/<run_id>/cpp_base_snapshot/`：base 分支 16 个 C++/header 文件快照。
+- `tmp/sim2sim_refactor/<run_id>/cpp_diff_patches/`：
+  - `drop_non_sim2sim.patch`
+  - `python_side_replacement.patch`
+  - `smpl_protocol_separate_review.patch`
+  - `must_keep_default_off_debug_hook.patch`
+- `tasks/sim2sim_structure_refactor/cpp_diff_review.md`：逐文件、逐代码块分类表和结论。
+- `tasks/sim2sim_structure_refactor/cpp_phase_c0_test_report.md`：C0 测试命令、环境、结果。
+
+C0 数据清单：
+
+- `eval_benchmark/robot_test/*.pkl`：全部 1 条，用于 deterministic replay、metrics replay、必要时真实 E2E strict alignment。
+- `eval_benchmark/robot/*.pkl`：全部 19 条，用于 streamer/data manifest smoke，证明 Python 旁路可覆盖 robot 数据。
+- `eval_benchmark/smpl/*.pkl`：全部 27 条，用于 SMPL adapter/manifest smoke，标记 SMPL/protocol 相关 C++ diff 是否属于单独评审。
+- `data/smpl_filtered` 固定抽样 4 条，用于 SMPL filtered adapter/manifest smoke：
   - `Idle_Left_001__A017.pkl`
   - `Jump_002__A017.pkl`
   - `Loop_Forward_Walk_001__A017.pkl`
   - `Neutral_stoop_down_001__A057.pkl`
-  对这 4 条全部执行 adapter/manifest smoke；如修改 filtered loader/adapter，必须扩大抽样范围并记录原因。
 
-Phase 3 不能完成的情况：
+C0 通过标准：
 
-- 上述清单任一条未运行或失败。
-- 只跑单条 smoke 后声称覆盖全数据。
-- 修改 streamer/metrics/adapter 后没有做 refactor 前后 manifest 或 metrics replay 对比。
-- C++/header diff 非空且没有单独评审。
+- 16 个 C++/header diff 都有明确分类：drop / python-side replacement / SMPL separate review / must-keep default-off debug hook。
+- 对于每个 proposed drop 的 C++ diff，都必须说明 sim2sim 当前由哪个 Python 旁路、manifest 或 fixed log replay 覆盖。
+- 默认 C++ build/help 通过。
+- C++ 默认运行路径性能风险结论明确：C0 不修改 C++，因此默认路径无新增开销。
+- 如果无法证明某个 C++ diff 可丢弃，必须进入 C1 方案评审，不能直接修改代码。
 
 ## Phase 1 结论
 
