@@ -41,7 +41,7 @@ git diff --name-only | rg '\.(cpp|hpp|cc|hh|h)$' || true
 - 确定性链路验证：绕开 policy 随机性，固定输入/日志/manifest，对 streamer、ZMQ、reference pose、step-sync CSV、metrics alignment 做逐环节输出对比。
 - 端到端统计验证：承认 policy 随机性，跑 baseline/refactor 多次，比较 metrics 分布、有效帧覆盖和 per-link 异常。
 
-Phase 1 已完成的是“代码搬移一致性 + 数据 smoke + 单条端到端 strict alignment smoke”，不是完整的第一层确定性链路验证。
+Phase 1 已补齐并通过第一层确定性链路验证。该验证使用固定 motion、固定已录制端到端日志和 pre-refactor/current old-new 对比，绕开 policy 随机性；它不能替代后续 phase 自己的随机端到端统计验证。
 
 ## 确定性验证
 
@@ -60,9 +60,35 @@ python tmp/sim2sim_refactor/20260624_142140_phase1_validation/deterministic/phas
 覆盖边界：
 
 - 该检查只适用于 Phase 1 的“源码搬移不改变局部逻辑”判断。
-- 该检查不覆盖真实 motion 的 streamer manifest 对比、packed chunk 序列对比、reference pose buffer 命中对比、metrics replay 对比。
+- 真实 motion 的 streamer manifest、packed chunk 序列、reference pose buffer 命中、metrics replay 对比由 Phase 1 完整确定性链路补测覆盖。
 
-Phase 2 代码重构前必须补齐的第一层确定性链路验证：
+Phase 1 完整确定性链路补测：
+
+```bash
+env PYTHONPATH=/home/lab/Desktop/IsaacLab/source \
+  /home/lab/miniconda3/envs/sonic_eval/bin/python \
+  tmp/sim2sim_refactor/20260624_142140_phase1_validation/deterministic_full/phase1_full_deterministic_validation.py
+```
+
+产物：
+
+- `tmp/sim2sim_refactor/20260624_142140_phase1_validation/deterministic_full/phase1_full_deterministic_validation_summary.json`
+- `tmp/sim2sim_refactor/20260624_142140_phase1_validation/deterministic_full/stream_manifest.csv`
+- `tmp/sim2sim_refactor/20260624_142140_phase1_validation/deterministic_full/packed_message_manifest.jsonl`
+- `tmp/sim2sim_refactor/20260624_142140_phase1_validation/deterministic_full/alignment_manifest.csv`
+- `tmp/sim2sim_refactor/20260624_142140_phase1_validation/deterministic_full/dataset_manifest_smoke.json`
+
+通过结果：
+
+- streamer manifest：`sent_frames=1130`，`source_frames=930`，`blend_frames=200`，`motion_start_frame=200`。
+- packed ZMQ round-trip：`chunks=38`，old/current unpack 输出完全一致。
+- deploy cursor：source/applied frame 均为 streamer manifest 子集，valid rows `1670`，frame range `30..1083`，单调。
+- reference pose buffer：`buffer_frames=1130`，step-sync exact pose hits `995`，misses `0`，old/current 抽样 buffer 一致。
+- step-sync alignment：`raw_rows=995`，`filtered_rows=995`，source range `41..1083`，unique source frames `995`，无相邻重复。
+- metrics replay：固定日志重算后 `num_frames=995`、`lag_frames_log_vs_gt=0`、`step_sync_rows=995`，`mpjpe_g/l/pa` 与原 JSON 一致。
+- 数据集 manifest smoke：robot `19/19`，smpl `27/27`，smpl_filtered sampled `4/4`。
+
+每个 phase 都必须覆盖的第一层确定性链路验证：
 
 | 环节 | 必需输入 | 必需输出 | 通过标准 |
 |---|---|---|---|
@@ -74,7 +100,7 @@ Phase 2 代码重构前必须补齐的第一层确定性链路验证：
 | metrics replay | 固定 CSV 日志 | metrics JSON + alignment manifest | `(metric_row, source_frame_index, actual_row, ref_row)`、输入 shape、有效 frame 集合一致 |
 | visualization/metrics 同源 | 同一 source frame 的 viewer/ref/offline 输出 | per-frame ref body pos 对比 | 同一 translation/alignment mode 下 ref body positions 一致或差异有明确解释 |
 
-Phase 2 通过前至少要有：
+后续 phase 通过前至少要有：
 
 - 一条 `eval_benchmark/robot_test` motion 的完整确定性链路验证。
 - `eval_benchmark/robot/*.pkl` 全量 streamer/data manifest smoke。

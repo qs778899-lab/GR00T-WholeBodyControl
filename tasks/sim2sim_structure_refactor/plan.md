@@ -460,10 +460,10 @@ gear_sonic/sim2sim/
 
 测试边界说明：
 
-- Phase 1 主要是源码搬移和导入边界调整，因此最关键的确定性验证是“搬移前后类/常量源码一致”和局部 logger/ZMQ/overlay 行为一致。
-- Phase 1 的数据 smoke 只验证数据可加载、字段/shape/finite 合法，不等价于实际 sim2sim 结果对比。
-- Phase 1 的单条端到端 strict alignment smoke 只验证链路能运行、step-sync 日志可消费、`source_frame_index` 对齐为 0 lag；不等价于全量 baseline/refactor 数据运行对比。
-- 在 Phase 2 开始更深 hook 重构前，必须先补齐 `test_matrix.md` 中第一层确定性链路验证的完整命令和产物。
+- Phase 1 主要是源码搬移和导入边界调整，因此最关键的验证包括“搬移前后类/常量源码一致”和真实 motion 固定日志下的确定性链路 replay。
+- Phase 1 已补齐第一层确定性链路验证，覆盖 streamer manifest、packed ZMQ round-trip、deploy cursor、reference pose buffer、step-sync alignment、metrics replay、数据集 manifest smoke。
+- Phase 1 的数据 smoke 只验证数据可加载、字段/shape/finite 合法；数据 smoke 本身不能替代完整链路对比。
+- Phase 1 的单条端到端 strict alignment smoke 验证链路能运行、step-sync 日志可消费、`source_frame_index` 对齐为 0 lag；随机 policy 端到端多次统计分布验证仍由后续 phase 根据改动风险决定。
 
 优先处理：
 
@@ -1154,7 +1154,86 @@ Phase 1 门禁结论：
 
 边界修正：
 
-- 上述“本阶段计划内测试”仅指 Phase 1 源码搬移范围内的测试。
-- 数据 smoke 不是实际结果对比。
-- Phase 1 没有完成 `plan.md` 第一层确定性链路验证中 7 个环节的完整 baseline/refactor 对比。
-- Phase 2 代码重构前必须先补齐并通过完整确定性链路验证，否则不能继续扩大结构优化范围。
+- 上述“本阶段计划内测试”指 Phase 1 源码搬移范围内的测试和本次补齐的完整确定性链路补测。
+- 数据 smoke 本身不是实际结果对比；本阶段通过结论依赖完整确定性链路补测和固定日志 metrics replay。
+- Phase 1 没有做随机 policy 多次端到端统计分布验证；该项不是本次源码搬移的必要门禁，但后续 phase 如扩大 hook 或 C++ 边界，必须按该 phase 风险重新评估是否加入。
+- Phase 2 代码重构前必须重新明确 Phase 2 自身的完整测试命令、数据范围和退出标准，不能直接复用 Phase 1 结论替代 Phase 2 验证。
+
+### 2026-06-24 Phase 1 完整确定性链路补测记录
+
+补测 run：
+
+- `tmp/sim2sim_refactor/20260624_142140_phase1_validation/`
+- 固定 motion：`eval_benchmark/robot_test/reach-2-003_chr00.pkl`
+- `motion_name=reach-2-003_chr00`
+- pre-refactor 对比 commit：`63301c530353fd7ef68b27c915990a4ada30f06d`
+
+完整确定性链路脚本：
+
+```bash
+env PYTHONPATH=/home/lab/Desktop/IsaacLab/source \
+  /home/lab/miniconda3/envs/sonic_eval/bin/python \
+  tmp/sim2sim_refactor/20260624_142140_phase1_validation/deterministic_full/phase1_full_deterministic_validation.py
+```
+
+产物：
+
+- `tmp/sim2sim_refactor/20260624_142140_phase1_validation/deterministic_full/phase1_full_deterministic_validation_summary.json`
+- `tmp/sim2sim_refactor/20260624_142140_phase1_validation/deterministic_full/stream_manifest.csv`
+- `tmp/sim2sim_refactor/20260624_142140_phase1_validation/deterministic_full/packed_message_manifest.jsonl`
+- `tmp/sim2sim_refactor/20260624_142140_phase1_validation/deterministic_full/alignment_manifest.csv`
+- `tmp/sim2sim_refactor/20260624_142140_phase1_validation/deterministic_full/dataset_manifest_smoke.json`
+
+关键结果：
+
+- streamer manifest：`sent_frames=1130`，`source_frames=930`，`blend_frames=200`，`motion_start_frame=200`，frame range `0..1129`。
+- packed ZMQ round-trip：`chunks=38`，old/current unpack 输出完全一致。
+- deploy cursor：source/applied valid rows 均为 `1670`，frame range `30..1083`，均为 streamer manifest 子集且单调。
+- reference pose buffer：`buffer_frames=1130`，step-sync exact pose hits `995`，misses `0`，old/current 抽样 frame buffer 一致。
+- step-sync alignment：`raw_rows=995`，`filtered_rows=995`，source range `41..1083`，unique source frames `995`，无相邻重复。
+- 数据集 manifest smoke：`eval_benchmark/robot/*.pkl` 19 条、`eval_benchmark/smpl/*.pkl` 27 条、`data/smpl_filtered` 抽样 4 条全部通过。
+
+metrics replay：
+
+```bash
+env PYTHONPATH=/home/lab/Desktop/IsaacLab/source \
+  /home/lab/miniconda3/envs/sonic_eval/bin/python \
+  tools/sonic_eval/compute_mujoco_tracking_metrics.py \
+  --gt-format motionlib \
+  --motion-file eval_benchmark/robot_test/reach-2-003_chr00.pkl \
+  --motion-name reach-2-003_chr00 \
+  --logs-dir "$ROOT/tmp/sim2sim_refactor/$RUN_ID/manual_e2e_sync_combined_logs" \
+  --out-json "$ROOT/tmp/sim2sim_refactor/$RUN_ID/deterministic_full/metrics_replay_from_fixed_logs.json" \
+  --no-motionlib-robot \
+  --ignore-motion-playing-mask \
+  --streamed-only \
+  --align-mode source_frame_index \
+  --actual-source step_sync_body_pos_w_14 \
+  --sim-valid-only \
+  --stream-blend-from-stand-frames 200
+```
+
+metrics replay 结果：
+
+- `num_frames=995`
+- `alignment.lag_frames_log_vs_gt=0`
+- `alignment.source_frame_valid_rows=995`
+- `alignment.step_sync_rows=995`
+- `metrics_all.mpjpe_g=179.1855428355443`
+- `metrics_all.mpjpe_l=87.76796772732865`
+- `metrics_all.mpjpe_pa=43.50997555797189`
+- 上述字段与原 `manual_e2e_sync_results/reach-2-003_chr00_metrics.json` 一致。
+
+通用门禁复跑结果：
+
+- Python compileall：通过。
+- sim2sim Python/shell entrypoint help：全部通过。
+- `git diff --check`：通过。
+- C++ 默认 deploy target build/help：通过。
+- C++/header diff 检查：无输出。
+
+补测结论：
+
+- Phase 1 完整确定性链路补测全部通过。
+- 本次补测确认 Phase 1 的 Python 结构搬移没有改变真实 motion 下的 stream frame、packed message、reference pose buffer、step-sync frame alignment 和 metrics replay 逻辑。
+- 可以完成 Phase 1 文档提交/push；后续进入 Phase 2 前必须重新定义 Phase 2 的测试矩阵。
