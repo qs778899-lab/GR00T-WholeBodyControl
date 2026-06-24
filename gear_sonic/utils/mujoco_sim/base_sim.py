@@ -9,7 +9,6 @@ import os
 import pathlib
 from pathlib import Path
 import pickle
-from copy import deepcopy
 import tempfile
 from threading import Lock, Thread
 import time
@@ -22,11 +21,8 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize
 
-from gear_sonic.sim2sim.constants import REFERENCE_NAME_PREFIX, SIM2SIM_BODY_FRAMES
-from gear_sonic.sim2sim.logging.eval_logger import Sim2SimEvalLogger
-from gear_sonic.sim2sim.visualization.overlay import Sim2SimTrackingOverlay
-from gear_sonic.sim2sim.visualization.reference_motion import ReferenceMotionVisualizer
-from gear_sonic.utils.mujoco_sim.link_error_plot import Sim2SimLinkErrorPlot
+from gear_sonic.sim2sim.constants import REFERENCE_NAME_PREFIX
+from gear_sonic.sim2sim.mujoco_hook import Sim2SimMujocoHook, maybe_create_reference_visualization_scene
 from gear_sonic.utils.mujoco_sim.metric_utils import check_contact, check_height
 from gear_sonic.utils.mujoco_sim.sim_utils import get_subtree_body_names
 from gear_sonic.utils.mujoco_sim.unitree_sdk2py_bridge import ElasticBand, UnitreeSdk2Bridge
@@ -67,14 +63,10 @@ class DefaultEnv:
         self.onscreen = onscreen
         self.reference_visualizer = None
         self.generated_scene_path = None
-        self._sim2sim_eval_logger = None
+        self._sim2sim_hook = None
         self._last_sim_step_perf_log_time = 0.0
 
         self.init_scene()
-        self._init_sim2sim_eval_logger()
-        self._link_error_plot: Sim2SimLinkErrorPlot | None = None
-        self._plot_link_indices: list[int] | None = None
-        self._init_link_error_plot()
         self.last_reward = 0
 
         self.offscreen = offscreen
@@ -100,35 +92,6 @@ class DefaultEnv:
             verbose=self.config.get("verbose", False),
         )
         self.image_publish_process.start_process()
-
-    def _init_sim2sim_eval_logger(self):
-        if not self.config.get("ENABLE_SIM2SIM_EVAL_LOGGING", False):
-            return
-        logs_dir = Path(self.config.get("SIM2SIM_EVAL_LOGS_DIR", "/tmp/sonic_logs/official_walk_zmq01"))
-        self._sim2sim_eval_logger = Sim2SimEvalLogger(logs_dir=logs_dir, body_names=SIM2SIM_BODY_FRAMES)
-
-    def _init_link_error_plot(self):
-        if not self.config.get("ENABLE_SIM2SIM_ERROR_PLOT", False):
-            return
-        plot_links: list[str] = self.config.get("SIM2SIM_ERROR_PLOT_LINKS") or []
-        if not plot_links:
-            return
-        valid_names = set(SIM2SIM_BODY_FRAMES)
-        unknown = [ln for ln in plot_links if ln not in valid_names]
-        if unknown:
-            print(f"[LinkErrorPlot] Warning: unknown link names ignored: {unknown}")
-        indices = [SIM2SIM_BODY_FRAMES.index(ln) for ln in plot_links if ln in valid_names]
-        valid_links = [SIM2SIM_BODY_FRAMES[i] for i in indices]
-        if not valid_links:
-            return
-        self._plot_link_indices = indices
-        self._link_error_plot = Sim2SimLinkErrorPlot(
-            link_names=valid_links,
-            ymax_mm=float(self.config.get("SIM2SIM_ERROR_PLOT_YMAX_MM", 300.0)),
-            refresh_hz=float(self.config.get("SIM2SIM_ERROR_PLOT_REFRESH_HZ", 20.0)),
-        )
-        self._link_error_plot.start()
-        print(f"[LinkErrorPlot] Started for links: {valid_links}")
 
     def _get_dof_indices_by_class(self):
         with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".xml") as f:
@@ -189,7 +152,7 @@ class DefaultEnv:
     def init_scene(self):
         """Initialize the default robot scene"""
         xml_path = pathlib.Path(GEAR_SONIC_ROOT) / self.config["ROBOT_SCENE"]
-        xml_path = self._maybe_create_reference_visualization_scene(xml_path)
+        xml_path, self.generated_scene_path = maybe_create_reference_visualization_scene(self.config, xml_path)
         self.mj_model = mujoco.MjModel.from_xml_path(xml_path)
         self.mj_data = mujoco.MjData(self.mj_model)
         self.mj_model.opt.timestep = self.sim_dt
@@ -304,118 +267,17 @@ class DefaultEnv:
         self.left_hand_index = np.array(self.left_hand_index)
         self.right_hand_index = np.array(self.right_hand_index)
 
-        self._init_reference_visualizer()
-        self._tracking_overlay = (
-            Sim2SimTrackingOverlay(self.viewer, SIM2SIM_BODY_FRAMES) if self.viewer is not None else None
+        self._sim2sim_hook = Sim2SimMujocoHook(
+            config=self.config,
+            mj_model=self.mj_model,
+            mj_data=self.mj_data,
+            body_joint_names=self.body_joint_names,
+            left_hand_joint_names=self.left_hand_joint_names,
+            right_hand_joint_names=self.right_hand_joint_names,
+            viewer=self.viewer,
+            generated_scene_path=self.generated_scene_path,
         )
-
-    def _maybe_create_reference_visualization_scene(self, xml_path: pathlib.Path) -> str:
-        if not self.config.get("ENABLE_REFERENCE_MOTION_VISUALIZATION", False):
-            return str(xml_path)
-
-        scene_tree = ET.parse(xml_path)
-        scene_root = scene_tree.getroot()
-        scene_dir = xml_path.parent
-
-        include_elements = scene_root.findall("include")
-        if not include_elements:
-            print(
-                "[ReferenceMotionVisualizer] no <include> found in scene XML; "
-                "reference visualization disabled"
-            )
-            return str(xml_path)
-
-        include_path = None
-        for include_element in include_elements:
-            include_file = include_element.get("file")
-            if include_file is None:
-                continue
-            resolved = (scene_dir / include_file).resolve()
-            include_element.set("file", str(resolved))
-            if include_path is None:
-                include_path = resolved
-
-        if include_path is None:
-            print(
-                "[ReferenceMotionVisualizer] failed to resolve robot include; "
-                "reference visualization disabled"
-            )
-            return str(xml_path)
-
-        robot_tree = ET.parse(include_path)
-        robot_body = robot_tree.getroot().find("./worldbody/body")
-        scene_worldbody = scene_root.find("./worldbody")
-        if robot_body is None or scene_worldbody is None:
-            print(
-                "[ReferenceMotionVisualizer] robot/worldbody missing from XML; "
-                "reference visualization disabled"
-            )
-            return str(xml_path)
-
-        ref_body = deepcopy(robot_body)
-        self._prefix_reference_subtree(ref_body)
-        scene_worldbody.append(ref_body)
-
-        fd, temp_path = tempfile.mkstemp(
-            prefix="mujoco_reference_scene_",
-            suffix=".xml",
-            dir=scene_dir,
-        )
-        os.close(fd)
-        scene_tree.write(temp_path, encoding="utf-8", xml_declaration=False)
-        self.generated_scene_path = temp_path
-        return temp_path
-
-    def _prefix_reference_subtree(self, root: ET.Element):
-        alpha = float(np.clip(self.config.get("REFERENCE_MOTION_ALPHA", 0.35), 0.0, 1.0))
-        for element in root.iter():
-            if "name" in element.attrib:
-                element.set("name", f"{REFERENCE_NAME_PREFIX}{element.get('name')}")
-            if element.tag != "geom":
-                continue
-            element.set("contype", "0")
-            element.set("conaffinity", "0")
-            rgba_str = element.get("rgba")
-            if rgba_str is None:
-                rgb = np.array([0.88, 0.88, 0.88], dtype=np.float64)
-            else:
-                rgba = np.fromstring(rgba_str, sep=" ", dtype=np.float64)
-                rgb = rgba[:3] if rgba.size >= 3 else np.array([0.7, 0.7, 0.7], dtype=np.float64)
-            ref_rgb = np.array([1.0, 0.15, 0.15], dtype=np.float64)
-            element.set(
-                "rgba",
-                f"{ref_rgb[0]:.6f} {ref_rgb[1]:.6f} {ref_rgb[2]:.6f} {alpha:.6f}",
-            )
-
-    def _init_reference_visualizer(self):
-        if not self.config.get("ENABLE_REFERENCE_MOTION_VISUALIZATION", False):
-            return
-        try:
-            self.reference_visualizer = ReferenceMotionVisualizer(
-                mj_model=self.mj_model,
-                mj_data=self.mj_data,
-                body_joint_names=self.body_joint_names,
-                left_hand_joint_names=self.left_hand_joint_names,
-                right_hand_joint_names=self.right_hand_joint_names,
-                alpha=self.config.get("REFERENCE_MOTION_ALPHA", 0.35),
-                host=self.config.get("REFERENCE_MOTION_ZMQ_HOST", "127.0.0.1"),
-                port=int(self.config.get("REFERENCE_MOTION_ZMQ_PORT", 5608)),
-                topic=self.config.get("REFERENCE_MOTION_ZMQ_TOPIC", "g1_debug"),
-                pose_port=int(self.config.get("REFERENCE_MOTION_POSE_ZMQ_PORT", 5596)),
-                pose_topic=self.config.get("REFERENCE_MOTION_POSE_ZMQ_TOPIC", "pose"),
-                allow_midrun_realign=bool(
-                    self.config.get("REFERENCE_MOTION_ALLOW_MIDRUN_REALIGN", False)
-                ),
-                translation_mode=self.config.get(
-                    "REFERENCE_MOTION_TRANSLATION_MODE", "delayed_align"
-                ),
-                align_delay_frames=int(self.config.get(
-                    "REFERENCE_MOTION_ALIGN_DELAY_FRAMES", 50
-                )),
-            )
-        except Exception as exc:
-            self.reference_visualizer = None
-            print(f"[ReferenceMotionVisualizer] disabled: {exc}")
+        self.reference_visualizer = self._sim2sim_hook.reference_visualizer
 
     def init_renderers(self):
         self.renderers = {}
@@ -609,21 +471,20 @@ class DefaultEnv:
             self.mj_data.ctrl = self.torques
         mujoco.mj_step(self.mj_model, self.mj_data)
         t_after_mj_step = time.monotonic()
-        actual_body_pos_pre_ref = None
-        if self._sim2sim_eval_logger is not None:
-            self._sim2sim_eval_logger._resolve_body_ids(self.mj_model)
-            actual_body_pos_pre_ref = np.asarray(
-                self.mj_data.xpos[self._sim2sim_eval_logger.body_ids],
-                dtype=np.float64,
-            ).copy()
+        actual_body_pos_pre_ref = (
+            self._sim2sim_hook.capture_actual_body_pos_pre_ref()
+            if self._sim2sim_hook is not None
+            else None
+        )
         reference_pose_applied = self.update_reference_motion_visualization()
         if reference_pose_applied:
             mujoco.mj_forward(self.mj_model, self.mj_data)
 
-        self._log_sim2sim_eval_frame(
-            actual_body_pos=actual_body_pos_pre_ref,
-            write_step_sync=bool(is_new_control_frame),
-        )
+        if self._sim2sim_hook is not None:
+            self._sim2sim_hook.log_frame(
+                actual_body_pos=actual_body_pos_pre_ref,
+                write_step_sync=bool(is_new_control_frame),
+            )
         t_after_logging = time.monotonic()
 
         self.check_fall()
@@ -643,72 +504,6 @@ class DefaultEnv:
                 f"post_step_ms={(t_after_check_fall - t_after_mj_step) * 1e3:.2f} "
                 f"total_ms={(t_after_check_fall - step_wall_start) * 1e3:.2f}"
             )
-
-    def _log_sim2sim_eval_frame(
-        self,
-        actual_body_pos: np.ndarray | None = None,
-        write_step_sync: bool = True,
-    ):
-        if self._sim2sim_eval_logger is None and self._tracking_overlay is None:
-            return
-
-        body_ids = None
-        ref_body_ids = None
-        if self._sim2sim_eval_logger is not None:
-            self._sim2sim_eval_logger._resolve_body_ids(self.mj_model)
-            body_ids = self._sim2sim_eval_logger.body_ids
-            ref_body_ids = self._sim2sim_eval_logger.ref_body_ids
-        elif self._tracking_overlay is not None:
-            self._tracking_overlay._resolve_body_ids(self.mj_model)
-            body_ids = self._tracking_overlay._body_ids
-
-        if actual_body_pos is None and body_ids is not None:
-            actual_body_pos = np.asarray(
-                self.mj_data.xpos[body_ids],
-                dtype=np.float64,
-            ).copy()
-        source_frame_index = None
-        ref_body_pos = None
-        if self.reference_visualizer is not None and body_ids is not None:
-            source_frame_index, ref_body_pos = self.reference_visualizer.compute_exact_reference_body_pos(
-                body_ids, ref_body_ids=ref_body_ids
-            )
-
-        if self._tracking_overlay is not None:
-            self._tracking_overlay.update(
-                mj_model=self.mj_model,
-                actual_body_pos=actual_body_pos,
-                ref_body_pos=ref_body_pos,
-                source_frame_index=source_frame_index,
-            )
-
-        if (
-            self._link_error_plot is not None
-            and actual_body_pos is not None
-            and ref_body_pos is not None
-            and source_frame_index is not None
-            and int(source_frame_index) >= 0
-        ):
-            full_err_mm = np.linalg.norm(actual_body_pos - ref_body_pos, axis=1) * 1000.0
-            selected_err = full_err_mm[self._plot_link_indices]
-            motion_start = (
-                self.reference_visualizer._align_delay_frames
-                if self.reference_visualizer is not None
-                else 0
-            )
-            plot_frame = int(source_frame_index) - max(0, motion_start)
-            self._link_error_plot.push(plot_frame, selected_err)
-
-        if self._sim2sim_eval_logger is None:
-            return
-        self._sim2sim_eval_logger.log(
-            mj_model=self.mj_model,
-            mj_data=self.mj_data,
-            source_frame_index=source_frame_index,
-            actual_body_pos=actual_body_pos,
-            ref_body_pos=ref_body_pos,
-            write_step_sync=write_step_sync,
-        )
 
     def apply_perturbation(self, key):
         perturbation_x_body = 0.0
@@ -733,8 +528,8 @@ class DefaultEnv:
 
     def update_viewer(self):
         if self.viewer is not None:
-            if self._tracking_overlay is not None:
-                self._tracking_overlay.render()
+            if self._sim2sim_hook is not None:
+                self._sim2sim_hook.render_overlay()
             self.viewer.sync()
 
     def update_viewer_camera(self):
@@ -781,18 +576,17 @@ class DefaultEnv:
 
         if key == "backspace":
             self.reset()
-        if key == "r" and self.reference_visualizer is not None:
-            self.reference_visualizer.toggle()
+        if key == "r" and self._sim2sim_hook is not None:
+            self._sim2sim_hook.toggle_reference_visualization()
         if key == "v":
             self.update_viewer_camera()
         if key in ["up", "down", "left", "right"]:
             self.apply_perturbation(key)
 
     def update_reference_motion_visualization(self):
-        if self.reference_visualizer is None:
+        if self._sim2sim_hook is None:
             return False
-        self.reference_visualizer.poll()
-        return self.reference_visualizer.apply()
+        return self._sim2sim_hook.update_reference_visualization()
 
     def check_fall(self):
         self.fall = False
@@ -814,21 +608,14 @@ class DefaultEnv:
 
     def reset(self):
         mujoco.mj_resetData(self.mj_model, self.mj_data)
-        if self.reference_visualizer is not None:
-            self.reference_visualizer.reset_anchor()
+        if self._sim2sim_hook is not None:
+            self._sim2sim_hook.reset_anchor()
 
     def close(self):
-        if self._sim2sim_eval_logger is not None:
-            self._sim2sim_eval_logger.close()
-            self._sim2sim_eval_logger = None
-        if self._link_error_plot is not None:
-            self._link_error_plot.close()
-            self._link_error_plot = None
-        if self.reference_visualizer is not None:
-            self.reference_visualizer.close()
+        if self._sim2sim_hook is not None:
+            self._sim2sim_hook.close()
+            self._sim2sim_hook = None
             self.reference_visualizer = None
-        if self.generated_scene_path and os.path.exists(self.generated_scene_path):
-            os.remove(self.generated_scene_path)
             self.generated_scene_path = None
 
 

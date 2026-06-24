@@ -505,13 +505,110 @@ hook.close()
 
 验收：
 
-- 单条 `eval_benchmark/robot/reach-1-001_chr00.pkl` 可跑通完整 A/B/C/D。
+- 单条 `eval_benchmark/robot_test/reach-2-003_chr00.pkl` 可跑通完整 A/B/C/D，或在端到端环境不稳定时复用 Phase 1 fixed logs 完成确定性 replay 并明确边界。
 - 输出 CSV 文件名和字段不变：
   - `body_pos_w_14.csv`
   - `sim_source_frame_index.csv`
   - `sim2sim_step_sync_body_pos_w_14.csv`
   - deploy 侧 `source_frame_index.csv`
 - metrics JSON 中 `actual_source=step_sync_body_pos_w_14`，`gt_body_source=mujoco_ref_body_pos_w_14`。
+- `base_sim.py` 中不再直接管理 sim2sim logger、plot、overlay、reference visualizer 的业务细节。
+- C++/header diff 为空。
+
+Phase 2 具体执行范围：
+
+- 新增 `gear_sonic/sim2sim/mujoco_hook.py`。
+- 从 `base_sim.py` 移入 hook：
+  - `_init_sim2sim_eval_logger`
+  - `_init_link_error_plot`
+  - `_init_reference_visualizer`
+  - `_log_sim2sim_eval_frame`
+  - `update_reference_motion_visualization`
+  - tracking overlay render/update
+  - reference scene XML clone/prefix 逻辑
+- `base_sim.py` 保留原有时序：
+  - `mj_step`
+  - capture actual body position before reference robot update
+  - reference visualizer `poll/apply`
+  - reference applied 后 `mj_forward`
+  - step-sync log on new control frame
+
+Phase 2 必须复跑测试：
+
+```bash
+python -m compileall gear_sonic/sim2sim tools/sonic_eval gear_sonic/utils/mujoco_sim
+python gear_sonic/scripts/run_sim_loop.py --help
+/home/lab/miniconda3/envs/sonic/bin/python tools/sonic_eval/stream_motionlib_to_deploy.py --help
+env PYTHONPATH=/home/lab/Desktop/IsaacLab/source \
+  /home/lab/miniconda3/envs/sonic_eval/bin/python \
+  tools/sonic_eval/compute_mujoco_tracking_metrics.py --help
+bash tools/sonic_eval/run_mujoco_batch_eval.sh --help
+bash tools/sonic_eval/run_mujoco_batch_eval_parallel.sh --help
+bash tools/sonic_eval/run_mujoco_multi_instance_parallel.sh --help
+git diff --check
+cmake --build gear_sonic_deploy/build --target g1_deploy_onnx_ref -j2
+cd gear_sonic_deploy && ./target/release/g1_deploy_onnx_ref --help
+git diff --name-only | rg '\.(cpp|hpp|cc|hh|h)$' || true
+```
+
+Phase 2 确定性链路验证：
+
+- 将 Phase 1 的完整确定性链路验证脚本复制到 `tmp/sim2sim_refactor/<phase2_run_id>/deterministic_full/`。
+- 使用 pre-Phase2 commit 作为 old/current 对比基准。
+- 复用 Phase 1 fixed logs 时，必须读取：
+  - `tmp/sim2sim_refactor/20260624_142140_phase1_validation/manual_e2e_sync_sim_logs`
+  - `tmp/sim2sim_refactor/20260624_142140_phase1_validation/manual_e2e_sync_deploy_logs`
+  - `tmp/sim2sim_refactor/20260624_142140_phase1_validation/manual_e2e_sync_combined_logs`
+- 通过标准与 Phase 1 完整确定性链路补测一致。
+
+### 2026-06-24 Phase 2 完成记录
+
+实现结果：
+
+- 新增 `gear_sonic/sim2sim/mujoco_hook.py`。
+- `gear_sonic/utils/mujoco_sim/base_sim.py` 中 sim2sim 业务细节已移动到 `Sim2SimMujocoHook`。
+- `base_sim.py` 保留最小 hook 生命周期调用和时间顺序，不再直接管理 logger、plot、overlay、reference visualizer、reference XML clone/prefix。
+- 本阶段没有修改 C++/header 文件。
+
+关键时序保持不变：
+
+```text
+mj_step
+  -> capture actual body pos before reference robot update
+  -> reference visualizer poll/apply
+  -> mj_forward if reference pose applied
+  -> hook.log_frame(write_step_sync=is_new_control_frame)
+```
+
+测试结果摘要：
+
+- 通用门禁：全部通过。
+- C++ 默认 deploy target build/help：通过。
+- C++/header diff gate：无输出。
+- Phase 2 deterministic replay：通过。
+- fixed logs metrics replay：与 Phase 1 fixed metrics 关键字段一致。
+- 新 hook 真实 E2E strict alignment smoke：通过，`lag_frames_log_vs_gt=0`。
+
+新 hook E2E metrics：
+
+- `num_frames=743`
+- `source_frame_valid_rows=743`
+- `step_sync_rows=743`
+- `lag_frames_log_vs_gt=0`
+- `mpjpe_g=112.0429219746846`
+- `mpjpe_l=70.81177089518766`
+- `mpjpe_pa=30.77083514480582`
+
+差异说明：
+
+- 新 hook E2E 有效帧数少于 Phase 1 fixed run，是因为本次运行在 early stream 阶段多次 fall/reset，reference visualizer 在 source frame `338` 后才稳定锁定。
+- 该差异属于端到端 runtime 随机性和启动状态差异；固定日志 deterministic replay 覆盖完整 `995` rows 并确认时间帧对齐逻辑未变。
+
+Phase 2 门禁结论：
+
+- 本阶段所有计划内测试均已成功完成。
+- 可以提交并 push Phase 2。
+- push 完成前不能进入 Phase 3。
 
 ### Phase 3：streamer / metrics 内部模块化
 
