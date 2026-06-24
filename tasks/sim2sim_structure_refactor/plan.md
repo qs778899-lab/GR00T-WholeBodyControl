@@ -2,6 +2,15 @@
 
 更新时间：2026-06-24
 
+文档位置：`tasks/sim2sim_structure_refactor/plan.md`
+
+配套工作流文档：
+
+- `tasks/sim2sim_structure_refactor/status.md`：当前阶段状态、门禁结论、下一步。
+- `tasks/sim2sim_structure_refactor/test_matrix.md`：各阶段必须执行的测试矩阵和通过标准。
+- `tasks/sim2sim_structure_refactor/log.md`：阶段执行日志、命令、环境、结果摘要。
+- `tasks/sim2sim_structure_refactor/artifacts/`：小体积报告、索引或保留说明；大体积原始日志仍放 `tmp/`。
+
 ## -1. 最关键执行门禁
 
 本节优先级高于后续所有阶段计划，整个结构优化过程中必须持续遵守。
@@ -14,6 +23,11 @@
   - 初步原因分析。
   - 建议解决方案。
   - 需要补充的测试或数据。
+- 每一个 phase 的全部计划内测试都成功完成、确认没有问题、阶段结果已经写入文档并完成提交/push 后，可以清理该阶段测试产生的大体积临时数据，避免长期占用磁盘空间。
+- 清理测试数据前必须确认：
+  - 已保留必要的小体积 summary、metrics JSON 摘要、失败原因说明或复现实验索引。
+  - 文档中已经记录原始数据路径、清理时间、清理范围和保留内容。
+  - 本阶段不再需要原始日志做复查；如后续仍可能需要对比，只能压缩或保留，不直接删除。
 - 进入下一个阶段之前，必须把本阶段代码提交并 push 一版。
 - commit message 必须详细、具体，说明：
   - 本阶段目标。
@@ -28,7 +42,8 @@ git@github.com:qs778899-lab/GR00T-WholeBodyControl.git
 
 - 禁止 push 到 `upstream2`、`upstream3` 或其他远程。
 - 如果某阶段测试不完整、环境缺失、性能数据不足、C++ 风险未解释清楚，或无法证明结构优化没有影响既有功能，不能进入下一阶段，也不能把该阶段标记为完成。
-- 所有计划，包括 C++ 去侵入方案，只维护在本文档 `workspace/plan_/sim2sim_structure_refactor_plan.md` 中；`tmp/` 只放验证数据、manifest、日志和阶段报告，不再维护独立计划文档。
+- 所有计划，包括 C++ 去侵入方案，只维护在 `tasks/sim2sim_structure_refactor/` 下的工作流文档中；旧路径 `workspace/plan_/sim2sim_structure_refactor_plan.md` 不再维护。
+- `tmp/` 只放验证数据、manifest、原始日志和阶段报告；阶段确认完成后按本文门禁清理或压缩大体积数据。
 
 ## 0. 目标与约束
 
@@ -651,7 +666,10 @@ hook.close()
 清理要求：
 
 - `tmp/` 下只保留当前阶段需要的验证数据和最终报告。
-- 大体积中间日志需要在阶段报告确认后清理或压缩。
+- 每个 phase 的所有计划内测试都成功完成、确认没有问题、阶段文档更新完成并完成提交/push 后，可以清理该 phase 产生的大体积中间日志，避免占用磁盘。
+- 清理前必须保留小体积 summary、关键 metrics JSON、失败/差异解释、测试命令、环境和原始路径索引。
+- 如果某个测试失败、结果不确定、后续仍需复查，不能删除对应原始数据；只能压缩或继续保留。
+- 大体积中间日志需要在阶段报告确认后清理或压缩，并把清理记录写入 `tasks/sim2sim_structure_refactor/log.md`。
 - 不把 `tmp/` 内容作为默认合入内容；如需提交测试报告，单独整理小体积 summary。
 
 确定性验证的判定标准：
