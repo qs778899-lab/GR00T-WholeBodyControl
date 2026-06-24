@@ -4,11 +4,13 @@
 
 ## 当前门禁
 
-- 当前阶段：Phase 2 已完成，等待提交和 push。
+- 当前阶段：Phase 3 已开始，当前只进入范围冻结和数据清单确认，不开始代码修改。
 - Phase 1 代码提交：`3ce6143 Refactor sim2sim helpers out of mujoco base sim`
 - 已 push 远程：`origin main`
 - Phase 1 完整测试文档提交：`ce69a40 Record completed Phase 1 deterministic sim2sim validation`
-- 允许进入下一阶段：不允许进入 Phase 3，直到 Phase 2 提交并 push 到 `origin main`。
+- Phase 2 提交：`26cac18 Isolate sim2sim MuJoCo hook from base simulator`
+- Phase 2 数据覆盖门禁补充提交：`ba53983 Clarify per-phase full data coverage gate`
+- 允许进入下一阶段：Phase 2 已完成并 push，可以进入 Phase 3；Phase 3 代码修改前必须先完成本阶段数据清单、测试层级和退出标准冻结。
 - C++/header 状态：Phase 2 未修改任何 C++/header 文件，C++ diff gate 无输出。
 - 未提交的无关工作区改动：`.gitignore` 中 `tasks/` ignore 规则，非 Phase 1 提交内容。
 
@@ -19,6 +21,34 @@
 - 如果某类数据不能完整跑 sim/deploy/policy A/B/C/D 端到端链路，必须提前写明降级为 deterministic replay、manifest smoke 或 adapter smoke 的原因、风险和覆盖边界。
 - 任一挑选数据未运行、失败、结果不确定，或有效帧覆盖异常减少且无法解释，本 phase 不能标记为完成，不能进入下一阶段。
 - 该规则已写入 `plan.md` 和 `test_matrix.md`，后续 phase 必须按该规则执行。
+
+## Phase 3 启动门禁
+
+Phase 3 目标：
+
+- 仅在不改变 CLI 和输出格式的前提下，整理 `tools/sonic_eval/*.py` 内部的 streamer / metrics / adapter 重复逻辑。
+- 优先把可复用的 CSV reader、source frame filter、metrics replay、streamer manifest 逻辑收敛到 `gear_sonic/sim2sim/` 下的新模块。
+- 不修改 C++/header，不修改 deploy 主路径。
+
+Phase 3 挑选测试数据清单：
+
+- `eval_benchmark/robot_test/*.pkl`：全部 1 条，执行完整 deterministic replay、metrics replay，至少 1 条执行真实 A/B/C/D strict alignment E2E。
+- `eval_benchmark/robot/*.pkl`：全部 19 条，执行全量 streamer/data manifest smoke；如 Phase 3 修改 robot streamer 或 motionlib adapter，必须对全部 19 条执行 refactor 前后 manifest 对比。
+- `eval_benchmark/smpl_test/*.pkl`：全部 1 条，执行 SMPL adapter/manifest smoke；如 Phase 3 修改 SMPL streamer，必须执行对应 streamer manifest 对比。
+- `eval_benchmark/smpl/*.pkl`：全部 27 条，执行全量 SMPL adapter/manifest smoke；如 Phase 3 修改 SMPL adapter，必须对全部 27 条执行 refactor 前后 manifest 对比。
+- `data/smpl_filtered/` 抽样 4 条：
+  - `Idle_Left_001__A017.pkl`
+  - `Jump_002__A017.pkl`
+  - `Loop_Forward_Walk_001__A017.pkl`
+  - `Neutral_stoop_down_001__A057.pkl`
+  对这 4 条全部执行 adapter/manifest smoke；如修改 filtered loader/adapter，必须扩大抽样范围并记录原因。
+
+Phase 3 不能完成的情况：
+
+- 上述清单任一条未运行或失败。
+- 只跑单条 smoke 后声称覆盖全数据。
+- 修改 streamer/metrics/adapter 后没有做 refactor 前后 manifest 或 metrics replay 对比。
+- C++/header diff 非空且没有单独评审。
 
 ## Phase 1 结论
 

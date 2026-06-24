@@ -629,6 +629,37 @@ Phase 2 门禁结论：
 - 现有 human/SMPL encoder parquet 命令不变。
 - metrics 的数值与 Phase 0 baseline 同量级，差异可解释。
 
+Phase 3 启动门禁：
+
+- Phase 3 不直接开始代码修改，必须先冻结数据清单和测试层级。
+- 本阶段如果只做模块抽取，不改变算法和输出格式，也必须对挑选数据清单全部完成计划内测试。
+- 如果本阶段实际没有发现值得抽取的重复逻辑，必须在 `log.md` 记录“不实施代码变更”的原因，不能为了进入下一阶段而做无意义重构。
+
+Phase 3 挑选测试数据清单：
+
+| 数据范围 | 数量 | 测试层级 | 通过要求 |
+|---|---:|---|---|
+| `eval_benchmark/robot_test/*.pkl` | 1 | deterministic replay、metrics replay、至少 1 条真实 A/B/C/D strict alignment E2E | `lag_frames_log_vs_gt=0`，metrics JSON 正常写出 |
+| `eval_benchmark/robot/*.pkl` | 19 | 全量 streamer/data manifest smoke；如修改 robot streamer/adapter，则做 refactor 前后 manifest 对比 | 19/19 全部通过 |
+| `eval_benchmark/smpl_test/*.pkl` | 1 | SMPL adapter/manifest smoke；如修改 SMPL streamer，则做 streamer manifest 对比 | 1/1 通过 |
+| `eval_benchmark/smpl/*.pkl` | 27 | 全量 SMPL adapter/manifest smoke；如修改 SMPL adapter，则做 refactor 前后 manifest 对比 | 27/27 全部通过 |
+| `data/smpl_filtered` 抽样 | 4 | adapter/manifest smoke；如修改 filtered loader/adapter，则扩大抽样并说明依据 | 4/4 全部通过 |
+
+`data/smpl_filtered` 固定抽样：
+
+- `Idle_Left_001__A017.pkl`
+- `Jump_002__A017.pkl`
+- `Loop_Forward_Walk_001__A017.pkl`
+- `Neutral_stoop_down_001__A057.pkl`
+
+Phase 3 退出标准：
+
+- 清单中的所有数据都完成本阶段计划内测试。
+- 所有测试成功，且命令、环境、结果、差异解释写入 `log.md`。
+- C++/header diff 为空。
+- CLI 命令和输出文件名/字段不变。
+- 完成 commit 并只 push 到 `origin main`。
+
 ### Phase 4：base 仓库迁移适配
 
 目标：面向 base 仓库做最小合入。

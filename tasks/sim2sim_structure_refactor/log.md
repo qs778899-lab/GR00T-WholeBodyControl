@@ -312,3 +312,47 @@ Phase 2 结论：
 - 本阶段结构优化没有改变 sim2sim CSV 字段、step-sync 写入规则、exact reference pose 对齐和 metrics replay 结果。
 - 本阶段没有 C++/header 修改。
 - 满足提交和 push 门禁；完成提交/push 后才允许进入 Phase 3。
+
+## 2026-06-24 Phase 3 启动记录
+
+用户确认：如果 Phase 2 成功，可以进入下一阶段。
+
+确认结果：
+
+- Phase 2 已完成。
+- Phase 2 commit：`26cac18 Isolate sim2sim MuJoCo hook from base simulator`
+- 数据覆盖门禁补充 commit：`ba53983 Clarify per-phase full data coverage gate`
+- 两个提交均已 push 到 `origin main`。
+- 当前只进入 Phase 3 的范围冻结和数据清单确认，不开始代码修改。
+
+Phase 3 初始目标：
+
+- 评估并整理 `tools/sonic_eval/*.py` 中 streamer / metrics / adapter 的内部重复逻辑。
+- 保持现有 CLI、输出文件名、CSV/JSON 字段不变。
+- 不修改 C++/header，不修改 deploy 主路径。
+
+Phase 3 挑选测试数据清单：
+
+- `eval_benchmark/robot_test/*.pkl`：全部 1 条。
+- `eval_benchmark/robot/*.pkl`：全部 19 条。
+- `eval_benchmark/smpl_test/*.pkl`：全部 1 条。
+- `eval_benchmark/smpl/*.pkl`：全部 27 条。
+- `data/smpl_filtered` 抽样 4 条：
+  - `Idle_Left_001__A017.pkl`
+  - `Jump_002__A017.pkl`
+  - `Loop_Forward_Walk_001__A017.pkl`
+  - `Neutral_stoop_down_001__A057.pkl`
+
+Phase 3 测试层级：
+
+- `robot_test`：deterministic replay、metrics replay、至少 1 条真实 A/B/C/D strict alignment E2E。
+- `robot`：全量 streamer/data manifest smoke；如修改 robot streamer/adapter，必须执行 refactor 前后 manifest 对比。
+- `smpl_test`：SMPL adapter/manifest smoke；如修改 SMPL streamer，必须执行 streamer manifest 对比。
+- `smpl`：全量 SMPL adapter/manifest smoke；如修改 SMPL adapter，必须执行 refactor 前后 manifest 对比。
+- `smpl_filtered` 抽样：4/4 全部 adapter/manifest smoke；如修改 filtered loader/adapter，必须扩大抽样范围并记录原因。
+
+Phase 3 进入代码修改前必须先完成：
+
+- 审查 streamer / metrics / adapter 当前重复点。
+- 判断是否确有必要做代码重构。
+- 若需要改代码，先明确具体文件和测试命令。
