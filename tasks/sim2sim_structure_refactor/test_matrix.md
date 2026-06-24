@@ -43,6 +43,38 @@ git diff --name-only | rg '\.(cpp|hpp|cc|hh|h)$' || true
 
 Phase 1 已补齐并通过第一层确定性链路验证。该验证使用固定 motion、固定已录制端到端日志和 pre-refactor/current old-new 对比，绕开 policy 随机性；它不能替代后续 phase 自己的随机端到端统计验证。
 
+## 数据覆盖硬规则
+
+每个 phase 开始前必须定义本阶段的“挑选测试数据清单”。清单至少包含：
+
+- 数据路径。
+- motion name 或数据集条目名。
+- 数据类型：`robot_test` / `robot` / `smpl` / `smpl_filtered` / 其他。
+- 本阶段对该数据执行的测试层级：数据 smoke、确定性链路验证、端到端 strict alignment、端到端统计验证。
+- 是否必须跑完整 sim/deploy/policy A/B/C/D 链路。
+- 如果不能跑完整端到端链路，必须写明降级原因和风险。
+
+通过标准：
+
+- 清单中的所有数据都必须完成本阶段计划内的完整测试运行。
+- 所有测试必须成功完成；不能只跑部分数据，不能只保留成功样例。
+- 每条数据的结果必须有可追踪产物，至少包含 summary、metrics JSON 或 manifest。
+- 如果任一条数据失败、未运行、结果不确定、有效帧覆盖异常减少且原因无法解释，本 phase 不能标记为完成，不能进入下一阶段。
+- 数据 smoke 只能证明数据可加载，不能替代确定性链路验证或端到端运行。
+
+默认挑选数据范围：
+
+- `eval_benchmark/robot_test/*.pkl`：优先用于完整 A/B/C/D 端到端 strict alignment 和 deterministic replay。
+- `eval_benchmark/robot/*.pkl`：至少全量执行 streamer/data manifest smoke；若该 phase 改动 streamer、metrics、reference pose 或时间对齐逻辑，必须扩大到完整确定性链路验证或端到端运行。
+- `eval_benchmark/smpl/*.pkl`：至少全量执行 adapter/manifest smoke；若该 phase 改动 SMPL adapter、streamer 或 metrics 输入逻辑，必须扩大到完整确定性链路验证或端到端运行。
+- `data/smpl_filtered/`：必须在阶段开始前明确抽样清单；抽样数据全部执行计划内测试。若该 phase 改动 SMPL filtered 相关 loader/adapter，抽样范围必须扩大，并说明覆盖依据。
+
+阶段记录要求：
+
+- `log.md` 必须记录实际运行的数据清单、成功/失败数量、失败原因或差异解释。
+- `status.md` 必须写明本阶段数据覆盖是否满足门禁。
+- 所有验证数据、manifest、metrics 和 summary 仍统一放在项目根目录 `tmp/` 下。
+
 ## 确定性验证
 
 Phase 1 已使用的最小确定性检查：

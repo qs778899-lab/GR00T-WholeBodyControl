@@ -12,6 +12,14 @@
 - C++/header 状态：Phase 2 未修改任何 C++/header 文件，C++ diff gate 无输出。
 - 未提交的无关工作区改动：`.gitignore` 中 `tasks/` ignore 规则，非 Phase 1 提交内容。
 
+## 数据覆盖门禁
+
+- 从下一阶段开始，每个 phase 开始前必须明确本阶段挑选测试数据清单。
+- 清单中的所有数据都必须完成本阶段计划内的完整测试运行；不能只跑部分数据，不能只记录成功样例，不能把单条 smoke 结果当作全数据结果。
+- 如果某类数据不能完整跑 sim/deploy/policy A/B/C/D 端到端链路，必须提前写明降级为 deterministic replay、manifest smoke 或 adapter smoke 的原因、风险和覆盖边界。
+- 任一挑选数据未运行、失败、结果不确定，或有效帧覆盖异常减少且无法解释，本 phase 不能标记为完成，不能进入下一阶段。
+- 该规则已写入 `plan.md` 和 `test_matrix.md`，后续 phase 必须按该规则执行。
+
 ## Phase 1 结论
 
 Phase 1 目标是把 `gear_sonic/utils/mujoco_sim/base_sim.py` 中的 sim2sim 专属 Python 逻辑迁移到新增包 `gear_sonic/sim2sim/`，降低对 base 已有文件的侵入。
