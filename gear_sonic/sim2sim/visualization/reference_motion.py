@@ -124,6 +124,7 @@ class ReferenceMotionVisualizer:
         self._anchor_actual_min_history = 10
         self._anchor_wait_logged = False
         self._delayed_align_frame_count = 0
+        self._last_missing_debug_sync_log_time = 0.0
         self.set_visible(False)
 
         self.debug_subscriber = ZMQStateSubscriber(host=host, port=port, topic=topic, conflate=False)
@@ -178,6 +179,7 @@ class ReferenceMotionVisualizer:
         self._actual_root_history_last_sim_time = None
         self._anchor_wait_logged = False
         self._delayed_align_frame_count = 0
+        self._last_missing_debug_sync_log_time = 0.0
         self._motion_start_frame_received = False
         if self._align_delay_frames_auto:
             self._align_delay_frames = 0
@@ -219,9 +221,13 @@ class ReferenceMotionVisualizer:
         # If deploy has not published a source frame yet, fall back to the newest
         # buffered pose so the reference still appears before control starts.
         if self.pose_subscriber is not None and self._latest_debug_source_frame_index is None:
-            pose = self._get_latest_buffered_pose()
-            if pose is not None:
-                self._set_latest_pose(*pose)
+            latest = self._get_latest_buffered_pose_with_index()
+            if latest is not None:
+                frame_index, pose = latest
+                self._set_latest_pose(*pose, synchronized=True)
+                self._current_applied_source_frame_index = int(frame_index)
+                self._current_exact_pose = tuple(np.asarray(x, dtype=np.float64).copy() for x in pose)
+                self._log_missing_debug_sync_warning()
         else:
             self._advance_display_pose()
 
@@ -416,6 +422,12 @@ class ReferenceMotionVisualizer:
         if not self._pose_frame_buffer:
             return None
         return next(reversed(self._pose_frame_buffer.values()))
+
+    def _get_latest_buffered_pose_with_index(self):
+        if not self._pose_frame_buffer:
+            return None
+        frame_index = next(reversed(self._pose_frame_buffer.keys()))
+        return int(frame_index), self._pose_frame_buffer[frame_index]
 
     def _get_buffered_pose_for_frame(self, frame_index: int):
         if not self._pose_frame_buffer:
@@ -640,6 +652,18 @@ class ReferenceMotionVisualizer:
 
         return self._current_applied_source_frame_index, body_pos
 
+    def _log_missing_debug_sync_warning(self):
+        now = time.monotonic()
+        if now - self._last_missing_debug_sync_log_time < 5.0:
+            return
+        self._last_missing_debug_sync_log_time = now
+        print(
+            "[ReferenceMotionVisualizer] raw pose stream is visible, but deploy "
+            "source-frame debug has not been received. Reference visualization is "
+            "using pose-stream timing fallback; pass --enable-sim2sim-debug to deploy "
+            "for strict source-frame sync and error plots."
+        )
+
     def compute_exact_reference_body_pos(
         self,
         body_ids: np.ndarray,
@@ -795,4 +819,3 @@ class ReferenceMotionVisualizer:
             f"ref_root_applied=({applied_base_pos[0]:.3f}, {applied_base_pos[1]:.3f}, {applied_base_pos[2]:.3f}) "
             f"root_dist={dist:.4f}"
         )
-

@@ -219,6 +219,7 @@ show_usage() {
     echo "  --policy-input-logfile PATH   Write policy/encoder input CSV for debugging"
     echo "  --enable-motion-recording     Record streamed/planner target motions"
     echo "  --enable-sim2sim-debug        Enable sim2sim source-frame debug hook (default: off)"
+    echo "  --no-enable-sim2sim-debug     Disable sim2sim debug hook even when sim/ZMQ auto-enable applies"
     echo ""
     echo "Interface modes:"
     echo "  sim              Use loopback interface for simulation (MuJoCo)"
@@ -258,6 +259,7 @@ TARGET_MOTION_LOGFILE_DEFAULT=""
 POLICY_INPUT_LOGFILE_DEFAULT=""
 ENABLE_MOTION_RECORDING_DEFAULT="false"
 ENABLE_SIM2SIM_DEBUG_DEFAULT="false"
+ENABLE_SIM2SIM_DEBUG_EXPLICIT="false"
 
 # Initialize with defaults (will be set after parsing)
 CHECKPOINT="$CHECKPOINT_DEFAULT"
@@ -389,6 +391,12 @@ while [[ $# -gt 0 ]]; do
             ;;
         --enable-sim2sim-debug)
             ENABLE_SIM2SIM_DEBUG="true"
+            ENABLE_SIM2SIM_DEBUG_EXPLICIT="true"
+            shift
+            ;;
+        --no-enable-sim2sim-debug)
+            ENABLE_SIM2SIM_DEBUG="false"
+            ENABLE_SIM2SIM_DEBUG_EXPLICIT="true"
             shift
             ;;
         sim|real)
@@ -430,6 +438,16 @@ resolve_interface "$INTERFACE_MODE"
 echo -e "Resolved interface: ${GREEN}$TARGET${NC}"
 echo -e "Environment type:   ${GREEN}$ENV_TYPE${NC}"
 echo ""
+
+if [[ "$ENABLE_SIM2SIM_DEBUG_EXPLICIT" == "false" \
+      && "$ENV_TYPE" == "sim" \
+      && "$INPUT_TYPE" == "zmq_manager" \
+      && ( "$OUTPUT_TYPE" == "all" || "$OUTPUT_TYPE" == "zmq" ) ]]; then
+    ENABLE_SIM2SIM_DEBUG="true"
+    echo -e "${YELLOW}📋 Simulation ZMQ mode: sim2sim debug hook auto-enabled for reference visualization/source-frame sync${NC}"
+    echo -e "${YELLOW}   Pass --no-enable-sim2sim-debug to disable this sim-only behavior.${NC}"
+    echo ""
+fi
 
 # ============================================================================
 # Configuration
