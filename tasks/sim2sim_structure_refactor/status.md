@@ -4,14 +4,15 @@
 
 ## 当前门禁
 
-- 当前阶段：C++ Phase C1b 已完成本地代码优化和全部计划测试，等待 commit/push。
+- 当前阶段：C++ Phase C1b 已完成，代码和文档已提交并 push 到 `origin main`。
 - Phase 1 代码提交：`3ce6143 Refactor sim2sim helpers out of mujoco base sim`
 - 已 push 远程：`origin main`
 - Phase 1 完整测试文档提交：`ce69a40 Record completed Phase 1 deterministic sim2sim validation`
 - Phase 2 提交：`26cac18 Isolate sim2sim MuJoCo hook from base simulator`
 - Phase 2 数据覆盖门禁补充提交：`ba53983 Clarify per-phase full data coverage gate`
 - Phase 3 状态：取消执行。`tools/sonic_eval/*.py` 均视为增量拓展文件，本轮不做结构优化、不修改。
-- 允许进入下一阶段：本阶段 commit/push 完成后允许。当前没有未闭环测试阻塞。
+- C++ Phase C1b 提交：`385fbfb Complete C++ sim2sim hook isolation`
+- 允许进入下一阶段：是。当前没有未闭环测试阻塞。
 - C++/header 状态：相对 base 仓库 `/home/lab/Desktop/LHM-Robot` 的 `feat/s0_training`，C++ diff allowlist gate 通过，unexpected list 为空。
 - 未提交的无关工作区改动：`.gitignore` 中 `tasks/` ignore 规则，非 Phase 1 提交内容。
 
@@ -40,10 +41,10 @@ Run ID：`20260625_cpp_c1_final_validation`
   - `reach-3-002_chr00`：`859` frames，MPJPE-G `121.746mm`。
   - `reach-4-004_chr00`：`827` frames，MPJPE-G `83.722mm`。
 
-下一步：
+后续清理：
 
-- 提交并 push C1b 阶段代码与文档。
-- push 完成后，可按门禁清理本阶段 `tmp/sim2sim_refactor/20260625_cpp_c1_final_validation/results/` 中大体积原始运行日志，只保留 summary/metrics 索引或按需要压缩归档。
+- 已完成提交和 push。
+- 可以按门禁清理本阶段 `tmp/sim2sim_refactor/20260625_cpp_c1_final_validation/results/` 中大体积原始运行日志，只保留 summary/metrics 索引或按需要压缩归档。
 
 ## C++ Phase C1 Final Validation 阻塞
 

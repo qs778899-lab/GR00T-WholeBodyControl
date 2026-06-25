@@ -849,4 +849,5 @@ bash tmp/sim2sim_refactor/20260625_cpp_c1_final_validation/scripts/run_enabled_m
 最终结论：
 
 - C1b 结构优化和计划内全部测试成功完成。
-- 可以按流程 commit 并 push 到 `origin`。
+- 已按流程提交并 push 到 `origin main`。
+- 提交：`385fbfb Complete C++ sim2sim hook isolation`。
