@@ -1,6 +1,6 @@
 # sim2sim 结构优化执行日志
 
-更新时间：2026-06-24
+更新时间：2026-06-25
 
 ## 2026-06-24 文档迁移
 
@@ -405,3 +405,217 @@ C0 退出标准：
 - 默认 C++ build/help 通过。
 - 若 Python 旁路可覆盖 sim2sim 必需信息，最终迁移原则是 C++ 全部回退 base。
 - 若 Python 旁路不能覆盖，必须进入 C1 方案评审，不能直接修改 C++。
+
+## 2026-06-24 C0 语义修正与真机时延根因初查
+
+用户反馈：
+
+- 已做过真机测试对比，确认增加 sim2sim 版代码后严重影响真机时延。
+- C0 不应只是普通差异分类；必须找到原因并分析优化方案。
+
+文档修正：
+
+- `status.md`：C0 目标改为“真机时延回归风险定位 + C++ 去侵入审查”。
+- `plan.md`：C0 增加热路径风险排序要求，包括 per-tick 文件写入、source-frame 查询、StateLogger 锁、ZMQ debug payload、DDS callback debug 输出等。
+- 新增 `cpp_diff_review.md`：记录当前 C++ diff 的时延风险证据和优化方案。
+
+初步根因排序：
+
+1. `StateLogger` 新增 `source_frame_index` / `applied_source_frame_index`，进入 control loop，并在 CSV enabled 时每 tick 写盘；`applied_source_frame_index` 还存在同 tick 重复写入风险。
+2. `g1_deploy_onnx_ref.cpp` 在每个 control tick 两次调用 `input_interface_->GetSourceFrameIndex(...)`，并每 tick 调用 `UpdateAppliedSourceFrameIndex(...)`。
+3. `output_interface.hpp` / `zmq_output_handler.hpp` 扩展 raw reference target 和 source-frame debug payload；如果真机使用 ZMQ output，会增加 per-frame map/vector copy 和 msgpack 打包。
+4. `LowStateHandler` 在 500Hz DDS callback 中加入 `steady_clock::now()` 和每秒 `std::endl` heartbeat，属于不应默认进入真机回调的 debug 逻辑。
+5. 如果真机命令启用了 motion recording、CSV logging 或 `output-type zmq/all`，sim2sim 版新增字段会进一步放大 I/O 和 debug publish 开销。
+
+优化方向：
+
+- P0：最终合入 base 时，原则上让 16 个同路径 C++/header 文件回退 base，先恢复真机默认路径。
+- P1：sim2sim 所需 strict alignment 尽量由 Python streamer manifest、packed pose stream、MuJoCo step-sync CSV 和 metrics replay 旁路提供。
+- P2：为了保留完整原有 sim2sim 时间帧对齐逻辑，可以进入 C1；C1 必须是独立默认关闭 C++ hook，关闭时无 source-frame 查询、无 CSV 写盘、无 ZMQ payload 扩展，开启时逐帧对齐 mapping 必须与旧逻辑一致。
+
+待确认：
+
+- 用户真机测试命令中是否开启 `--enable-csv-logs`、`--enable-motion-recording`、`--output-type zmq/all`。
+- 真机时延指标包括 control loop 周期、P95/P99、超时次数、CPU 占用和磁盘写入量。
+
+## 2026-06-25 C++ hook 方案完善
+
+用户要求：
+
+- 从保留完整原有逻辑和功能的角度，保留一个默认关闭的 C++ sim2sim debug hook 是合理方案。
+- sim2sim 功能模块代码不应该写在原有 base 仓库 C++ 文件中，应单独写功能 C++ 文件，再通过最小 include/call 接入 base 原有文件。
+- 进一步完善计划和测试，确保不会影响原有任何逻辑功能。
+
+已更新：
+
+- `plan.md`：
+  - 新增“完整原有时间帧对齐逻辑保留策略”。
+  - 新增 base C++ 最小接入点表。
+  - C1 调整为“独立默认关闭 sim2sim debug hook”，不再表述为只有 Python 旁路失败才执行。
+- `test_matrix.md`：
+  - C1 必跑测试增加默认关闭行为等价检查。
+  - 增加源码边界检查。
+  - 增加旧逻辑逐帧 mapping 等价测试。
+  - 增加 base/current/C1 disabled/C1 enabled 四类性能对比要求。
+- `status.md`：
+  - 明确 C1 仍未开始代码修改。
+  - C0 必须先冻结 hook 需求、base 文件最小接入点和旧逻辑等价测试设计。
+- `cpp_diff_review.md`：
+  - 新增独立 hook 设计草案。
+  - 新增默认关闭路径和 sim2sim debug 开启路径的测试门禁。
+
+关键门禁：
+
+- `enabled=false` 必须证明真机默认路径与 base 等价，不新增文件 I/O、ZMQ publish、schema、policy/action/input 行为变化。
+- `enabled=true` 必须证明保留旧 sim2sim 时间帧对齐语义：
+  - `control_tick -> source_frame_index`
+  - `control_tick -> applied_source_frame_index`
+  - `metrics_row -> source_frame_index`
+  - `source_frame_index -> reference pose`
+- 如果逐帧 mapping 不一致，不能进入下一阶段，必须先定位差异来源并修复。
+
+## 2026-06-25 C++ 整块迁出策略修正
+
+用户进一步确认：
+
+- C++ 修改最保险的方式，是将 base 仓库中被修改的 C++ 文件里的 sim2sim 修改代码块整体迁出。
+- 不应把这些逻辑过度拆分到多个新 C++ 文件中；这样更不容易破坏原有功能。
+
+已更新：
+
+- `plan.md`：
+  - C++ 目标结构从多个 `config/hook/tracker/sink` 文件收敛为默认两个文件：
+    - `include/sim2sim_debug/sim2sim_debug.hpp`
+    - `src/sim2sim_debug/sim2sim_debug.cpp`
+  - 明确 C1 默认只新增一个头文件和一个实现文件；只有编译依赖或文件规模确实失控时，才允许增加内部 helper 文件，并必须说明原因。
+  - 将 `StateLogger`、`g1_deploy_onnx_ref.cpp`、`zmq_manager` 等处理策略改为“sim2sim 相关代码块整体迁入 `sim2sim_debug.cpp`”。
+- `test_matrix.md`：
+  - 源码边界检查改为默认只允许 `sim2sim_debug.hpp/.cpp` 承载实现主体。
+  - 增加 `find include/sim2sim_debug src/sim2sim_debug -type f` 检查，防止实现阶段过度拆分。
+- `status.md` 和 `cpp_diff_review.md`：
+  - 同步记录“少量文件整块迁出”作为 C1 默认方案。
+
+执行含义：
+
+- C1 不是重新设计一个新的 C++ debug 子系统。
+- C1 是把 current C++ diff 中已经验证过的 sim2sim 逻辑代码块，从 base 原有文件中迁出到少量独立文件。
+- base 原有文件只保留默认关闭 hook 的最小调用点。
+- 逐帧 mapping 等价测试仍是 C1 的核心通过标准。
+
+## 2026-06-25 C++ Phase C0 执行完成
+
+Run ID：`20260625_cpp_c0_review`
+
+本阶段性质：
+
+- 只做 C++ 差异审查、产物生成和验证。
+- 未修改任何 C++/header 源码文件。
+- 未进入 C1 实现。
+
+C++ diff 产物：
+
+- `tmp/sim2sim_refactor/20260625_cpp_c0_review/cpp_base_snapshot/`
+- `tmp/sim2sim_refactor/20260625_cpp_c0_review/cpp_current_snapshot/`
+- `tmp/sim2sim_refactor/20260625_cpp_c0_review/cpp_diff_raw/`
+- `tmp/sim2sim_refactor/20260625_cpp_c0_review/cpp_diff_patches/`
+- `tmp/sim2sim_refactor/20260625_cpp_c0_review/cpp_diff_manifest.json`
+
+分类结果：
+
+- `drop_non_sim2sim`：7 个文件。
+- `python_side_replacement`：2 个文件。
+- `smpl_protocol_separate_review`：2 个文件。
+- `must_keep_default_off_debug_hook`：5 个文件。
+
+C++ build/help：
+
+```bash
+cmake --build gear_sonic_deploy/build --target g1_deploy_onnx_ref -j2
+cd gear_sonic_deploy && ./target/release/g1_deploy_onnx_ref --help
+git diff --name-only | rg '\.(cpp|hpp|cc|hh|h)$' || true
+```
+
+结果：
+
+- build 通过。
+- help 通过。
+- C++/header diff gate 无输出。
+
+deterministic replay：
+
+```bash
+env PYTHONPATH=/home/lab/Desktop/IsaacLab/source \
+  /home/lab/miniconda3/envs/sonic_eval/bin/python \
+  tmp/sim2sim_refactor/20260625_cpp_c0_review/deterministic_full/c0_full_deterministic_validation.py
+```
+
+执行说明：
+
+- 第一次运行失败：新 C0 run 目录缺少 `manual_e2e_sync_deploy_logs/source_frame_index.csv`。
+- 第二次运行失败：新 C0 run 目录缺少 `manual_e2e_sync_results/reach-2-003_chr00_metrics.json`。
+- 修复方式：复制 Phase 1 固定端到端日志和 metrics 结果到 C0 run 目录。
+- 第三次运行通过。
+- 失败原因是 run 目录固定产物缺失，不是 sim2sim 对齐逻辑失败。
+
+deterministic replay 结果：
+
+- `streamer sent_frames=1130`
+- `source_frames=930`
+- `blend_frames=200`
+- `packed_zmq chunks=38`
+- `old_new_unpack_equal=true`
+- `deploy source_valid_rows=1670`
+- `deploy applied_valid_rows=1670`
+- `reference_pose_exact_hits=995`
+- `reference_pose_misses=0`
+- `step_sync_rows_raw=995`
+- `step_sync_rows_filtered=995`
+- `source_frame_valid_rows=995`
+- `lag_frames_log_vs_gt=0`
+
+metrics replay：
+
+```bash
+env PYTHONPATH=/home/lab/Desktop/IsaacLab/source \
+  /home/lab/miniconda3/envs/sonic_eval/bin/python \
+  tools/sonic_eval/compute_mujoco_tracking_metrics.py \
+  --gt-format motionlib \
+  --motion-file eval_benchmark/robot_test/reach-2-003_chr00.pkl \
+  --motion-name reach-2-003_chr00 \
+  --logs-dir /home/lab/Desktop/GR00T-WholeBodyControl/tmp/sim2sim_refactor/20260625_cpp_c0_review/manual_e2e_sync_combined_logs \
+  --out-json /home/lab/Desktop/GR00T-WholeBodyControl/tmp/sim2sim_refactor/20260625_cpp_c0_review/deterministic_full/metrics_replay_from_fixed_logs.json \
+  --no-motionlib-robot \
+  --ignore-motion-playing-mask \
+  --streamed-only \
+  --align-mode source_frame_index \
+  --actual-source step_sync_body_pos_w_14 \
+  --sim-valid-only \
+  --stream-blend-from-stand-frames 200
+```
+
+metrics replay 结果：
+
+- `num_frames=995`
+- `alignment.lag_frames_log_vs_gt=0`
+- `alignment.step_sync_rows=995`
+- `alignment.source_frame_valid_rows=995`
+- `metrics_all.mpjpe_g=179.1855428355443`
+- `metrics_all.mpjpe_l=87.76796772732865`
+- `metrics_all.mpjpe_pa=43.50997555797189`
+
+数据覆盖：
+
+- `eval_benchmark/robot_test/*.pkl`：1/1，通过 deterministic replay / metrics replay。
+- `eval_benchmark/robot/*.pkl`：19/19，通过 streamer/data manifest smoke。
+- `eval_benchmark/smpl/*.pkl`：27/27，通过 SMPL adapter/manifest smoke。
+- `data/smpl_filtered` 固定抽样：4/4，通过 adapter/manifest smoke。
+
+阶段报告：
+
+- `tasks/sim2sim_structure_refactor/cpp_phase_c0_test_report.md`
+
+结论：
+
+- C0 计划内测试全部成功完成。
+- C0 没有修改 C++/header。
+- 允许进入 C1，但 C1 必须先冻结文件清单、最小接入点、默认关闭策略、旧逻辑逐帧等价测试和性能测试命令。

@@ -1,17 +1,17 @@
 # sim2sim 结构优化状态
 
-更新时间：2026-06-24
+更新时间：2026-06-25
 
 ## 当前门禁
 
-- 当前阶段：C++ Phase C0 已开始，当前只做 C++ 差异审查和去侵入验证计划，不直接修改 C++。
+- 当前阶段：C++ Phase C0 已完成，允许进入 C++ Phase C1 方案冻结与实现准备。
 - Phase 1 代码提交：`3ce6143 Refactor sim2sim helpers out of mujoco base sim`
 - 已 push 远程：`origin main`
 - Phase 1 完整测试文档提交：`ce69a40 Record completed Phase 1 deterministic sim2sim validation`
 - Phase 2 提交：`26cac18 Isolate sim2sim MuJoCo hook from base simulator`
 - Phase 2 数据覆盖门禁补充提交：`ba53983 Clarify per-phase full data coverage gate`
 - Phase 3 状态：取消执行。`tools/sonic_eval/*.py` 均视为增量拓展文件，本轮不做结构优化、不修改。
-- 允许进入下一阶段：进入 C++ Phase C0；C0 完成前不允许修改 C++，不允许进入 C1。
+- 允许进入下一阶段：是。进入 C1 前必须先冻结 C1 文件清单、base 最小接入点、默认关闭策略、旧逻辑逐帧等价测试和性能测试命令。
 - C++/header 状态：Phase 2 未修改任何 C++/header 文件，C++ diff gate 无输出。
 - 未提交的无关工作区改动：`.gitignore` 中 `tasks/` ignore 规则，非 Phase 1 提交内容。
 
@@ -33,9 +33,10 @@
 
 C0 目标：
 
-- 针对相对 base 仓库不同的 16 个 C++/header 同路径文件，做逐文件、逐代码块去侵入审查。
+- 针对相对 base 仓库不同的 16 个 C++/header 同路径文件，先定位真机时延回归风险，再做逐文件、逐代码块去侵入审查。
 - 优先证明最终合入 base 时可以不携带这些 C++ diff。
 - C0 不直接修改 C++；只生成审查报告、patch 分类和验证证据。
+- C0 不能再被理解为普通“差异归档”。用户已经通过真机对比确认 sim2sim 版代码严重影响时延，因此 C0 必须输出当前 C++ diff 进入控制热路径的证据、优先级和拆除方案。
 
 C0 必须产出：
 
@@ -63,9 +64,92 @@ C0 通过标准：
 
 - 16 个 C++/header diff 都有明确分类：drop / python-side replacement / SMPL separate review / must-keep default-off debug hook。
 - 对于每个 proposed drop 的 C++ diff，都必须说明 sim2sim 当前由哪个 Python 旁路、manifest 或 fixed log replay 覆盖。
+- 对真机时延相关 diff 必须明确：
+  - 是否在 DDS callback、control loop、StateLogger、ZMQ debug output、文件 I/O 等热路径执行。
+  - 是否默认启用或会被常用真机命令启用。
+  - 拆除、默认关闭或替代到 Python 旁路后的预期影响。
 - 默认 C++ build/help 通过。
-- C++ 默认运行路径性能风险结论明确：C0 不修改 C++，因此默认路径无新增开销。
+- C++ 默认运行路径性能风险结论明确：C0 本身不新增修改，但必须说明 current 相比 base 已存在的 sim2sim C++ diff 是否已经造成默认路径或常用真机路径开销。
 - 如果无法证明某个 C++ diff 可丢弃，必须进入 C1 方案评审，不能直接修改代码。
+
+## C++ Phase C0 完成记录
+
+Run ID：`20260625_cpp_c0_review`
+
+报告：
+
+- `tasks/sim2sim_structure_refactor/cpp_phase_c0_test_report.md`
+- `tasks/sim2sim_structure_refactor/cpp_diff_review.md`
+
+产物：
+
+- `tmp/sim2sim_refactor/20260625_cpp_c0_review/cpp_base_snapshot/`
+- `tmp/sim2sim_refactor/20260625_cpp_c0_review/cpp_current_snapshot/`
+- `tmp/sim2sim_refactor/20260625_cpp_c0_review/cpp_diff_raw/`
+- `tmp/sim2sim_refactor/20260625_cpp_c0_review/cpp_diff_patches/`
+- `tmp/sim2sim_refactor/20260625_cpp_c0_review/deterministic_full/`
+
+测试结果：
+
+- C++ build/help：通过。
+- C++/header diff gate：无输出。
+- 16 个 C++/header diff 分类：完成。
+- deterministic replay：通过。
+- metrics replay：通过。
+- 数据覆盖：
+  - `robot_test` 1/1。
+  - `robot` 19/19。
+  - `smpl` 27/27。
+  - `smpl_filtered` 固定抽样 4/4。
+
+关键指标：
+
+- `num_frames=995`
+- `lag_frames_log_vs_gt=0`
+- `step_sync_rows=995`
+- `source_frame_valid_rows=995`
+- `reference_pose_exact_hits=995`
+- `reference_pose_misses=0`
+
+结论：
+
+- C0 没有修改 C++/header 源码。
+- C0 测试全部成功完成。
+- 可以进入 C1，但 C1 必须严格按“少量文件整块迁出 + 默认关闭 hook + 逐帧 mapping 等价测试 + 性能对比”执行。
+
+## C++ Phase C1 方向修正
+
+用户确认：
+
+- 从保留完整原有逻辑和功能的角度，保留一个默认关闭的 C++ sim2sim debug hook 是合理方案。
+- 这些功能模块的代码不应该写在原有 base C++ 文件中，应单独写功能 C++ 文件，再通过最小 include/call 接入 base 原有文件。
+
+当前 C1 方案：
+
+- 新增独立模块，但默认只允许少量文件整块承接旧逻辑：
+  - `include/sim2sim_debug/sim2sim_debug.hpp`
+  - `src/sim2sim_debug/sim2sim_debug.cpp`
+- C++ 修改最保险的方式是把 base 原有 C++ 文件中 sim2sim 相关修改代码块整体迁出，不把这些代码过度拆分到多个新文件中。
+- base 原有 C++ 文件只允许最小接入：
+  - include hook 头文件。
+  - 构造默认 disabled config/hook。
+  - 在必要位置调用 `OnStreamFrameDecoded(...)`、`OnControlTickObserved(...)`、`OnControlTickApplied(...)`。
+- 默认关闭时必须与 base 真机路径等价：
+  - 不新增文件 I/O。
+  - 不新增 ZMQ publish。
+  - 不改默认 debug schema。
+  - 不改 policy 输入、action command、keyboard/gamepad/ros2 行为。
+  - 不改 `StateLogger` 默认字段集合。
+- 开启时必须保留旧 sim2sim 时间帧对齐语义，并通过逐帧 mapping 对比验证：
+  - `control_tick -> source_frame_index`
+  - `control_tick -> applied_source_frame_index`
+  - `metrics_row -> source_frame_index`
+  - `source_frame_index -> reference pose`
+
+状态：
+
+- C1 仍未开始代码修改。
+- C0 必须先完成 hook 需求冻结、base 文件最小接入点冻结、旧逻辑等价测试设计。
 
 ## Phase 1 结论
 

@@ -1,6 +1,6 @@
 # sim2sim 结构优化测试矩阵
 
-更新时间：2026-06-24
+更新时间：2026-06-25
 
 ## 通用门禁测试
 
@@ -236,27 +236,75 @@ git diff --name-only | rg '\.(cpp|hpp|cc|hh|h)$' || true
 - 每个 proposed drop 都有 Python 旁路、manifest 或 fixed-log replay 证据。
 - 如果任何 diff 无法分类或无法证明可丢弃，C0 不能标记为完成；必须报告问题并决定是否进入 C1。
 
-### C++ Phase C1：最小默认关闭 hook，仅在 C0 失败时执行
+### C++ Phase C1：独立默认关闭 sim2sim debug hook
 
 进入条件：
 
-- C0 证明 Python 旁路不足。
+- C0 已明确哪些原有对齐逻辑必须由 C++ hook 保留，哪些可由 Python/MuJoCo 旁路提供。
 - 用户确认允许修改 C++。
-- C1 文档先列出具体文件、默认关闭策略、性能测试命令和回滚方案。
+- C1 文档先列出新增 `sim2sim_debug/` 文件、允许修改的 base 文件、默认关闭策略、旧逻辑等价性测试、性能测试命令和回滚方案。新增文件默认只允许 `include/sim2sim_debug/sim2sim_debug.hpp` 和 `src/sim2sim_debug/sim2sim_debug.cpp`，除非 C1 开始前说明必须增加 helper 文件的原因。
 
 必跑测试：
 
 - C++ 默认 debug 关闭路径 build/help。
 - C++ 默认 debug 关闭路径部署 smoke。
-- 控制循环耗时统计，与 base/default 路径对比。
+- 默认关闭路径行为等价检查：
+  - 不新增 sim2sim CSV 文件。
+  - 不新增 ZMQ debug 字段或默认 schema 变化。
+  - 不创建 sim2sim debug socket。
+  - 不修改 policy input tensor、action command、keyboard/gamepad/ros2 行为。
+- 源码边界检查：
+  - sim2sim debug 实现主体只能位于 `include/sim2sim_debug/sim2sim_debug.hpp` 和 `src/sim2sim_debug/sim2sim_debug.cpp`。
+  - 不允许把迁出的旧逻辑重新拆散到多个新 C++ 文件中；如确需增加 helper 文件，必须在 C1 开始前写明原因并单独检查。
+  - base 原有 C++ 文件只能包含最小 hook include、config 构造和 `On...(...)` 调用。
+  - `StateLogger` 默认字段集合不得新增 sim2sim 字段。
+  - `InputInterface` 公共虚接口不得新增 sim2sim 方法。
+  - `OutputInterface` / `g1_debug` 默认 schema 不得新增 sim2sim 字段。
+- 控制循环耗时统计：
+  - base。
+  - current sim2sim C++ diff。
+  - C1 `enabled=false`。
+  - C1 `enabled=true`。
+- 旧逻辑逐帧 mapping 等价测试：
+  - `control_tick -> source_frame_index`
+  - `control_tick -> applied_source_frame_index`
+  - `metrics_row -> source_frame_index`
+  - `source_frame_index -> reference pose`
 - sim2sim debug 开启路径至少 1 条 `robot_test` 真实 E2E strict alignment。
 - C0 数据清单全部重新按受影响层级执行。
+
+建议命令模板：
+
+```bash
+cmake --build gear_sonic_deploy/build --target g1_deploy_onnx_ref -j2
+cd gear_sonic_deploy && ./target/release/g1_deploy_onnx_ref --help
+
+# 源码边界检查，具体 grep pattern 在 C1 开始前冻结。
+rg -n "source_frame_index|applied_source_frame_index|sim2sim" \
+  gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/include \
+  gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/src
+
+find gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/include/sim2sim_debug \
+     gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/src/sim2sim_debug \
+     -type f | sort
+
+# 逐帧 mapping 等价检查脚本必须在 C1 中创建或补齐。
+env PYTHONPATH=/home/lab/Desktop/IsaacLab/source \
+  /home/lab/miniconda3/envs/sonic_eval/bin/python \
+  tmp/sim2sim_refactor/<run_id>/cpp_hook_alignment_equivalence.py \
+  --old-logs <old_cpp_logs> \
+  --new-logs <new_hook_logs> \
+  --out-json tmp/sim2sim_refactor/<run_id>/cpp_hook_alignment_equivalence.json
+```
 
 通过标准：
 
 - `enabled=false` 默认路径无新增文件 I/O、无 ZMQ publish、无动态分配、无 schema 变化。
 - `enabled=false` 控制循环耗时与 base/default 同量级，差异有明确解释。
 - `enabled=true` 才产生 sim2sim debug 输出。
+- `enabled=true` 的逐帧 mapping 与旧逻辑一致；若存在差异，必须逐项解释且 metrics 对齐结果不变。
+- `robot_test` 真实 E2E strict alignment 满足 `lag_frames_log_vs_gt == 0`，有效帧覆盖不能异常减少。
+- `eval_benchmark/robot/*.pkl` 19 条、`eval_benchmark/smpl/*.pkl` 27 条、`data/smpl_filtered` 固定抽样 4 条全部完成 C1 计划内测试，不能只跑单条样例。
 - C1 修改单独 commit，不能混入 Python 工具重构。
 
 ### C++ Phase C2：迁移到 base 前验证

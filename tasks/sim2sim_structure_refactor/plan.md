@@ -1,6 +1,6 @@
 # sim2sim 结构优化计划
 
-更新时间：2026-06-24
+更新时间：2026-06-25
 
 文档位置：`tasks/sim2sim_structure_refactor/plan.md`
 
@@ -236,39 +236,80 @@ gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/
       zmq_output_handler.hpp           # 保持 base debug/output schema
     state_logger.hpp                   # 保持 base 日志字段
 
-  # 只有在 Python 旁路无法满足严格对齐时，才新增以下默认关闭模块：
+  # 独立 sim2sim debug 模块：整块迁出原有修改逻辑，保留完整对齐能力，但默认关闭。
   include/sim2sim_debug/
-    source_frame_tracker.hpp           # 只记录 frame_index -> consumed/applied frame
-    sim2sim_debug_config.hpp           # 编译/运行时默认 false
-    sim2sim_debug_sink.hpp             # CSV/ZMQ sink 抽象，只有启用时创建
+    sim2sim_debug.hpp                  # 单一 facade，承接配置、hook、frame mapping、debug sink
   src/sim2sim_debug/
-    source_frame_tracker.cpp
-    sim2sim_debug_sink.cpp
+    sim2sim_debug.cpp                  # 从 base 修改文件中整块迁出的 sim2sim 逻辑
 ```
 
 设计原则：
 
 - base 原有接口签名不变，避免所有 `InputInterface` 子类被迫实现 sim2sim 方法。
 - sim2sim debug 不进入默认构造路径；默认不开文件、不分配大 buffer、不发 ZMQ 字段。
-- 如必须记录 deploy consumed frame，只在 `--enable-sim2sim-debug` 或已有 `--enable-csv-logs` 且明确开启 sim2sim 选项时启用。
+- 为了保留完整原有时间帧对齐逻辑，可以保留 C++ sim2sim debug hook；但必须默认关闭，且实现主体必须从 base 修改文件中整块迁出到 `sim2sim_debug/` 独立模块中。
+- C++ 修改最保险的方式是“整块迁出”，而不是把原有修改逻辑过度拆分到多个新 C++ 文件中。C1 默认只新增一个头文件和一个实现文件；只有编译依赖或文件规模确实失控时，才允许增加一个内部 helper 文件，并必须说明原因。
+- base 原有 C++ 文件只能做最小接入：
+  - include hook 头文件。
+  - 构造默认 disabled 的 hook/config。
+  - 在必要位置调用 `hook.On...(...)`。
+  - 关闭时只能有一次布尔判断或空对象 no-op，不能有文件 I/O、ZMQ publish、动态分配、字符串拼接、额外锁竞争。
 - 不修改 keyboard/gamepad/ros2 planner 行为；这类差异全部回退 base。
 - 不修改默认 ZMQ port；sim2sim 入口通过 CLI 参数指定端口。
 - 不把 battery SOC、BMS topic 等真机日志字段删除；这些与 sim2sim 无关。
+
+#### 完整原有时间帧对齐逻辑保留策略
+
+原则：不能为了降低真机时延而破坏 sim2sim 原有 strict alignment 语义。正确目标是把原有对齐逻辑从真机默认热路径中隔离出来。
+
+必须保留的 mapping：
+
+```text
+stream_chunk/frame_index -> motion/source_frame_index
+control_tick             -> source_frame_index
+control_tick             -> applied_source_frame_index
+metrics_row              -> source_frame_index
+source_frame_index       -> reference pose
+```
+
+新 hook 与旧逻辑的等价性要求：
+
+- `enabled=false`：所有上述 mapping 都不参与真机默认路径；base 真机行为、日志 schema、debug output schema 与 base 保持一致。
+- `enabled=true`：hook 输出的 `source_frame_index` / `applied_source_frame_index` 必须与当前旧 C++ 逻辑逐 tick 一致，或差异必须能由明确的动作起始帧、blend frame、control tick 边界解释。
+- sim2sim 评测使用 hook 输出或 Python/MuJoCo 旁路输出时，metrics 的 `(metrics_row, source_frame_index, actual_row, ref_row)` 对齐结果必须一致。
+
+#### base C++ 最小接入点
+
+允许修改的 base 文件范围必须在 C1 开始前冻结。原则上只允许以下极小接入点：
+
+| base 文件 | 允许的最小接入 | 禁止事项 |
+|---|---|---|
+| `src/g1_deploy_onnx_ref.cpp` | 创建 `Sim2SimDebugHook`；解析默认关闭 CLI/config；在 control tick 已有 motion/frame 信息处调用 `OnControlTickObserved(...)` / `OnControlTickApplied(...)` | 禁止把 CSV 写入、ZMQ pack、source-frame lookup 细节写在主循环；禁止改变 policy 输入和控制逻辑 |
+| `include/input_interface/zmq_endpoint_interface.hpp` 或对应 ZMQ 实现 | 仅在 hook enabled 时把解码到的 frame metadata 交给 `hook.OnStreamFrameDecoded(...)` | 禁止修改全局 `InputInterface` 虚接口；禁止让 keyboard/gamepad/ros2 handler 感知 sim2sim |
+| build 配置文件 | 注册 `src/sim2sim_debug/sim2sim_debug.cpp` 编译单元 | 禁止引入新的默认依赖或改变默认 target 行为 |
+
+不允许修改：
+
+- `StateLogger` 默认字段集合。
+- `OutputInterface` / `zmq_output_handler` 默认 schema。
+- keyboard、gamepad、ros2 input handler 行为。
+- `robot_parameters.hpp` 中真机相关参数。
+- BMS/battery 相关日志字段。
 
 #### 16 个同路径 C++ 文件的处理表
 
 | 文件 | 当前差异角色 | 结构优化处理 |
 |---|---|---|
-| `include/input_interface/input_interface.hpp` | 新增 `GetSourceFrameIndex(...)` 虚接口，侵入所有输入源 | 回退 base。不要在主接口暴露 sim2sim 方法；如必须读取 frame，用 `Sim2SimSourceFrameTracker` 在 ZMQ 专用实现内部旁路记录。 |
+| `include/input_interface/input_interface.hpp` | 新增 `GetSourceFrameIndex(...)` 虚接口，侵入所有输入源 | 回退 base。不要在主接口暴露 sim2sim 方法；如必须读取 frame，整块迁入 `sim2sim_debug.cpp` 内部实现，不污染公共接口。 |
 | `include/input_interface/interface_manager.hpp` | 转发 source frame，扩大接口影响面 | 回退 base。manager 不感知 sim2sim debug 字段。 |
-| `include/input_interface/zmq_manager.hpp` | 同时改 start/planner 行为和 source frame | 拆分。start/planner 行为回退 base；source frame 只允许进入默认关闭 tracker。 |
+| `include/input_interface/zmq_manager.hpp` | 同时改 start/planner 行为和 source frame | start/planner 行为回退 base；source frame 相关代码块整体迁入 `sim2sim_debug.cpp` 的默认关闭逻辑。 |
 | `include/input_interface/zmq_endpoint_interface.hpp` | 大块协议/parser/debug 改动，含 body_pos/source frame/日志变化 | 不整块合入。保留 base parser；raw pose/body_pos 优先由 Python packed stream 旁路读取。如果 C++ 必需，只增加最小字段解析并 gated。 |
 | `include/input_interface/streamed_motion_merger.hpp` | SMPL/protocol merge 行为变化 | 不纳入 sim2sim 结构优化；单独作为 SMPL protocol 需求评审。 |
-| `include/motion_data_reader.hpp` | 增加 source_frame storage/accessor | 回退 base；如果必须保留，迁入 `sim2sim_debug/source_frame_tracker`，不污染 reader 公共语义。 |
-| `include/state_logger.hpp` | 新增 source frame CSV，同时删除 battery sink | 回退 base。sim2sim CSV 写入放到 `Sim2SimDebugSink`，且不能删除原有 battery 字段。 |
-| `src/state_logger.cpp` | 写 source frame CSV，同时删除 battery SOC 写入 | 回退 base。必要时新增独立 sink 文件，不修改 StateLogger 默认字段。 |
+| `include/motion_data_reader.hpp` | 增加 source_frame storage/accessor | 回退 base；如果必须保留，整块迁入 `sim2sim_debug.cpp` 内部实现，不污染 reader 公共语义。 |
+| `include/state_logger.hpp` | 新增 source frame CSV，同时删除 battery sink | 回退 base。sim2sim CSV 写入代码块整体迁入 `sim2sim_debug.cpp` 内部实现，且不能删除原有 battery 字段。 |
+| `src/state_logger.cpp` | 写 source frame CSV，同时删除 battery SOC 写入 | 回退 base。必要时在 `sim2sim_debug.cpp` 内部保留原写入代码块，不修改 StateLogger 默认字段。 |
 | `include/output_interface/zmq_output_handler.hpp` | 修改 `g1_debug` schema，加入 source/applied frame | 默认回退 base schema。若 Python 无法旁路获取 consumed frame，可新增 `sim2sim_debug` topic 或 schema-version 字段，默认关闭。 |
-| `src/g1_deploy_onnx_ref.cpp` | 混合 SMPL future-frame、source frame logging、默认端口、logger 变化 | 不整块合入。拆成独立 patch：端口回退、logger 回退、SMPL 行为单独评审、sim2sim debug 只保留默认关闭 hook。 |
+| `src/g1_deploy_onnx_ref.cpp` | 混合 SMPL future-frame、source frame logging、默认端口、logger 变化 | 不整块合入。端口、logger、SMPL 行为分别按语义回退或单独评审；sim2sim source-frame 相关代码块整体迁入 `sim2sim_debug.cpp`，主循环只保留默认关闭 hook 调用。 |
 | `include/output_interface/output_interface.hpp` | 添加 raw reference target 输出字段 | 回退 base。raw reference GT 应来自 Python pose stream，不来自 deploy target。 |
 | `include/input_interface/gamepad.hpp` | planner/start 行为变化 | 回退 base；与 sim2sim 无关。 |
 | `include/input_interface/keyboard_handler.hpp` | stop/pause/reset 行为变化 | 回退 base；与 sim2sim 无关。 |
@@ -278,13 +319,14 @@ gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/
 
 #### C++ Phase C0：差异审查与去侵入验证
 
-目标：建立“最终合入 base 时 C++ 文件可以不变或只保留极小默认关闭 hook”的可验证前提。
+目标：先定位 current sim2sim 版 C++ 相比 base 造成真机时延回归的高风险路径，再建立“最终合入 base 时 C++ 文件可以不变或只保留极小默认关闭 hook”的可验证前提。
 
 阶段性质：
 
 - C0 是审查和验证阶段，不直接修改 C++/header。
 - C0 结束前禁止进入 C++ 代码修改。
-- C0 重点不是把当前 C++ diff 整理得更漂亮，而是判断哪些 diff 不应该带入 base。
+- C0 重点不是把当前 C++ diff 整理得更漂亮，而是判断哪些 diff 进入了 DDS callback、control loop、StateLogger、ZMQ output、文件 I/O 等真机热路径，以及哪些 diff 不应该带入 base。
+- 用户已经做过真机测试对比，确认增加 sim2sim 版代码后严重影响真机时延。因此 C0 必须输出根因分析和优化方案，不能只输出文件差异分类。
 
 任务：
 
@@ -298,6 +340,12 @@ gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/
   - `must_keep_default_off_debug_hook.patch`
 - 输出逐文件审查表：
   - `tasks/sim2sim_structure_refactor/cpp_diff_review.md`
+- 输出真机时延风险排序：
+  - 每 tick 文件写入/flush。
+  - 每 tick source-frame 查询和 logger 互斥锁更新。
+  - ZMQ debug payload 扩展与 per-frame map/vector copy。
+  - DDS LowState callback 中的周期计时和 `std::endl` 输出。
+  - motion recording / CSV logging 被真机命令意外开启的风险。
 - 在不修改 current C++ 的前提下，判断 Python 旁路能否满足 sim2sim 必需信息：
   - streamer manifest 提供 sent `frame_index`。
   - packed pose stream 提供 raw pose / root / joint 数据。
@@ -339,24 +387,36 @@ C0 验收：
 - 每个 proposed drop 都必须说明替代证据。
 - 默认 C++ build/help 通过。
 - C++/header 工作区 diff 为空；C0 不产生 C++ 修改。
-- C0 报告明确是否需要 C1。
-- 如果 deterministic replay 能证明 metrics 不依赖 deploy-emitted `applied_source_frame_index`，最终迁移时原则上 16 个 C++ 文件全部回退 base。
-- 如果不能证明，进入 C++ Phase C1 方案评审。
+- C0 报告明确是否需要 C1，并明确哪些 current C++ diff 是真机时延回归的优先根因。
+- 如果 deterministic replay 能证明部分对齐信息可由 Python/MuJoCo 旁路提供，C1 中对应功能不再进入 C++。
+- 如果为了保留完整原有逻辑仍需要 deploy consumed/applied frame，必须进入 C++ Phase C1，但只能以独立默认关闭 hook 的形式实现。
 
-#### C++ Phase C1：最小默认关闭 source-frame debug hook
+#### C++ Phase C1：独立默认关闭 sim2sim debug hook
 
-只在 C0 证明 Python 旁路不足时执行。
+C1 的目标是保留完整原有 sim2sim 时间帧对齐能力，同时消除对真机默认路径的时延影响。C1 不允许把 sim2sim 业务实现继续写在 base 原有 C++ 文件中。
 
 进入条件：
 
-- C0 报告明确指出某个 sim2sim 必需信息无法由 Python 旁路、fixed logs、stream manifest 或 MuJoCo step-sync 可靠获得。
+- C0 报告明确列出哪些对齐信息由 Python/MuJoCo 旁路提供，哪些必须由 C++ hook 提供。
 - 用户确认允许进入 C1。
-- C1 开始前必须列出具体要修改的 C++ 文件、默认关闭策略、性能测试命令和回滚方案。
+- C1 开始前必须列出：
+  - 新增 `sim2sim_debug/` 文件清单，默认只允许 `include/sim2sim_debug/sim2sim_debug.hpp` 和 `src/sim2sim_debug/sim2sim_debug.cpp`。
+  - 允许修改的 base C++ 文件和每个文件的最小接入点。
+  - 默认关闭策略。
+  - 旧逻辑等价性测试命令。
+  - 性能测试命令。
+  - 回滚方案。
 
 最小需求：
 
-- deploy 能在 debug 开启时输出“当前控制 tick 实际消费的 source frame”。
-- 不改变 policy 输入、不改变 start/planner、不改变 keyboard/gamepad、不改变默认 debug schema。
+- `enabled=false` 时，真机默认路径与 base 行为一致。
+- `enabled=true` 时，deploy 能输出当前控制 tick 的 observed source frame 和 applied source frame，用于 strict alignment。
+- 不改变 policy 输入、不改变 start/planner、不改变 keyboard/gamepad/ros2、不改变默认 debug schema、不修改 `StateLogger` 默认字段。
+- 原有 sim2sim 对齐语义必须完整保留：
+  - `source_frame_index`
+  - `applied_source_frame_index`
+  - control tick 到 source frame 的映射
+  - metrics row 到 reference pose 的映射
 
 建议接口：
 
@@ -368,25 +428,33 @@ struct Sim2SimDebugConfig {
   std::string logs_dir;
 };
 
-class Sim2SimSourceFrameTracker {
+class Sim2SimDebugHook {
  public:
-  void OnStreamFrame(int64_t frame_index);
-  void OnControlTickConsumedFrame(int64_t frame_index);
-  int64_t LatestConsumedFrame() const;
+  explicit Sim2SimDebugHook(Sim2SimDebugConfig config);
+  bool Enabled() const;
+
+  void OnStreamFrameDecoded(int64_t stream_frame_index,
+                            int64_t source_frame_index);
+  void OnControlTickObserved(uint64_t tick_index,
+                             int motion_frame,
+                             int64_t source_frame_index);
+  void OnControlTickApplied(uint64_t tick_index,
+                            int64_t applied_source_frame_index);
 };
 ```
 
 接入点：
 
-- 只在 ZMQ streamed-motion 输入实现内部更新 tracker。
-- 只在 `g1_deploy_onnx_ref.cpp` 已经进入 debug/log 输出分支时读取 tracker。
-- CSV/ZMQ 输出由 `Sim2SimDebugSink` 完成，不修改 `StateLogger` 的默认字段集合。
+- ZMQ streamed-motion 输入实现内部：只在 hook enabled 时调用 `OnStreamFrameDecoded(...)`。
+- `g1_deploy_onnx_ref.cpp` control loop：只在 hook enabled 时调用 `OnControlTickObserved(...)` 和 `OnControlTickApplied(...)`。
+- CSV/ZMQ 输出在 `sim2sim_debug.cpp` 内部沿用旧逻辑代码块完成，不拆成额外 sink 文件；不修改 `StateLogger` 的默认字段集合，不修改默认 `g1_debug` schema。
+- 如果需要 publish，使用独立 `sim2sim_debug` topic 或显式 schema version，且只有 `enabled=true && publish_zmq=true` 才创建 socket。
 
 性能要求：
 
-- `enabled=false` 时只允许一次布尔判断，无文件 I/O、无动态分配、无字符串拼接、无 ZMQ publish。
-- `enabled=true` 时记录频率随已有 debug/log 频率，不额外提高主循环 I/O 频率。
-- 需要在 base C++ 和开启 sim2sim debug 两种配置下记录控制循环耗时统计。
+- `enabled=false` 时只允许布尔判断或 no-op inline call；无文件 I/O、无动态分配、无字符串拼接、无 ZMQ publish、无锁竞争。
+- `enabled=true` 时记录频率随已有 control tick；CSV 必须避免 per-line flush，不允许在实时回路内阻塞写大文件。
+- 需要对比 base、current、C1 enabled=false、C1 enabled=true 四种配置的控制循环耗时统计。
 
 C1 数据清单：
 
@@ -400,6 +468,7 @@ C1 退出标准：
 - `enabled=false` 默认路径无新增文件 I/O、无 ZMQ publish、无动态分配、无 schema 变化。
 - `enabled=false` 控制循环耗时与 base 同量级，差异有明确解释。
 - `enabled=true` 才产生 sim2sim debug 输出。
+- `enabled=true` 的逐帧对齐 mapping 与旧逻辑一致，或差异有逐帧解释且不影响 metrics。
 - 所有输出字段、端口、schema 版本都有文档说明。
 - C1 修改必须单独 commit，不与 Python 工具或其他重构混合。
 
@@ -410,9 +479,10 @@ C1 退出标准：
 - C++ 默认配置编译通过，输出 schema 与 base 一致。
 - 真机/部署默认命令不新增 sim2sim CSV 或 debug 字段。
 - `--enable-sim2sim-debug` 开启后才产生额外 source-frame 输出。
-- 与 Phase 1/2 Python step-sync deterministic manifest 对齐：
+- 与旧 C++ 逻辑和 Phase 1/2 Python step-sync deterministic manifest 对齐：
+  - control tick observed `source_frame_index`
+  - control tick `applied_source_frame_index`
   - streamer `frame_index`
-  - deploy consumed frame
   - MuJoCo `sim_source_frame_index`
   - `sim2sim_step_sync_body_pos_w_14.csv`
 - 性能报告写入 `tmp/sim2sim_refactor/<run_id>/cpp_perf_report.md`。
