@@ -179,6 +179,19 @@ class ZMQManager : public InputInterface {
             report_temperature_flag_ = true;
             is_manager_key = true;
             break;
+          // Start/stop control from keyboard (bypasses ZMQ command subscriber)
+          case 's':
+          case 'S':
+            start_control_ = true;
+            is_manager_key = true;
+            std::cout << "[ZMQManager] START from keyboard (s)" << std::endl;
+            break;
+          case 'q':
+          case 'Q':
+            stop_control_ = true;
+            is_manager_key = true;
+            std::cout << "[ZMQManager] STOP from keyboard (q)" << std::endl;
+            break;
           // Global compliance controls - work across ALL modes
           case 'g':
           case 'G':
@@ -249,7 +262,6 @@ class ZMQManager : public InputInterface {
             }
 
             if (new_mode == ManagedMode::PLANNER) {
-              pending_stream_start_ = false;
               std::cout << "[ZMQManager] Switched to: PLANNER mode (safety reset)" << std::endl;
               if (latest_planner_message_.valid) {
                 constexpr auto PLANNER_MESSAGE_TIMEOUT = std::chrono::milliseconds(100);
@@ -321,6 +333,7 @@ class ZMQManager : public InputInterface {
       }
       if (emergency_stop_) {
         operator_state.stop = true;
+        pending_stream_start_ = false;
         if (planner_state.enabled) {
           planner_state.enabled = false;
           planner_state.initialized = false;
@@ -343,8 +356,8 @@ class ZMQManager : public InputInterface {
 
       // Handle stop control
       if (stop_control_) {
-        pending_stream_start_ = false;
         operator_state.stop = true;
+        pending_stream_start_ = false;
         if (planner_state.enabled) {
           planner_state.enabled = false;
           planner_state.initialized = false;
@@ -363,6 +376,23 @@ class ZMQManager : public InputInterface {
         has_hand_joints_ = false;
       }
 
+      if (active_mode_ == ManagedMode::STREAMED_MOTION) {
+        if (start_control_) {
+          pending_stream_start_ = true;
+        }
+        if (pending_stream_start_ && !operator_state.start && pose_interface_ &&
+            pose_interface_->HasUsableStreamedMotion()) {
+          operator_state.start = true;
+          pending_stream_start_ = false;
+          {
+            std::lock_guard<std::mutex> lock(current_motion_mutex);
+            operator_state.play = false;
+            reinitialize_heading = true;
+          }
+          std::cout << "[ZMQManager] Start control requested in STREAMED MOTION mode" << std::endl;
+        }
+      }
+
       // Delegate based on current mode
       if (active_mode_ == ManagedMode::PLANNER) {
         // Planner mode: handle planner input ourselves
@@ -372,28 +402,6 @@ class ZMQManager : public InputInterface {
                           has_planner, planner_state, movement_state_buffer,
                           current_motion_mutex);
       } else {
-        // In streamed-motion mode the command topic is owned by ZMQManager,
-        // not by the nested pose interface.  Without this handoff,
-        // start=true/planner=false switches modes but never starts CONTROL.
-        if (start_control_) {
-          pending_stream_start_ = true;
-        }
-
-        if (pending_stream_start_ && !operator_state.start) {
-          if (pose_interface_ && pose_interface_->HasUsableStreamedMotion()) {
-            operator_state.start = true;
-            pending_stream_start_ = false;
-            {
-              std::lock_guard<std::mutex> lock(current_motion_mutex);
-              operator_state.play = false;
-              reinitialize_heading = true;
-            }
-            std::cout << "[ZMQManager] Start control requested in STREAMED MOTION mode" << std::endl;
-          } else if constexpr (DEBUG_LOGGING) {
-            std::cout << "[ZMQManager] Delaying streamed-motion start until pose buffer is ready" << std::endl;
-          }
-        }
-
         // Streamed motion mode: delegate to pose interface
         if (pose_interface_) {
           pose_interface_->handle_input(motion_reader, current_motion, current_frame,
@@ -467,13 +475,6 @@ class ZMQManager : public InputInterface {
         return pose_interface_->GetLastUpdateTime();
       }
       return InputInterface::GetLastUpdateTime();
-    }
-
-    std::optional<int64_t> GetSourceFrameIndex(const MotionSequence* current_motion, int current_frame) const override {
-      if ((active_mode_ == ManagedMode::STREAMED_MOTION) && pose_interface_) {
-        return pose_interface_->GetSourceFrameIndex(current_motion, current_frame);
-      }
-      return std::nullopt;
     }
 
   private:
@@ -1274,7 +1275,7 @@ class ZMQManager : public InputInterface {
     bool report_temperature_flag_ = false;  ///< Set by 'F'/'f' keyboard shortcut.
     bool start_control_ = false;   ///< Start request from command message.
     bool stop_control_ = false;    ///< Stop request from command message.
-    bool pending_stream_start_ = false;  ///< Latched start request waiting for usable streamed motion.
+    bool pending_stream_start_ = false;  ///< Start request waiting for a usable streamed-motion pose buffer.
 
     /// True once the planner has been initialised and is generating motions.
     bool is_planner_ready_ = false;

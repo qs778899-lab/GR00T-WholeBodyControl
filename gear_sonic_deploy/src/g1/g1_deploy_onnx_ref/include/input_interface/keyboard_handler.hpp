@@ -72,7 +72,8 @@ class SimpleKeyboard : public InputInterface {
     bool motion_restart = false;   ///< Reset current motion to frame 0 (paused).
 
     bool start_control = false;    ///< Request control-system start.
-    bool stop_control = false;     ///< Request emergency stop.
+    bool stop_control = false;     ///< Request quit (exit program).
+    bool pause_control = false;    ///< Pause control and return to standing pose.
 
     bool delta_left = false;       ///< Nudge heading left  (−π/12 rad per press).
     bool delta_right = false;      ///< Nudge heading right (+π/12 rad per press).
@@ -153,6 +154,7 @@ class SimpleKeyboard : public InputInterface {
       // Reset input flags each frame
       start_control = false;
       stop_control = false;
+      pause_control = false;
       motion_prev = false;
       motion_next = false;
       play_motion = false;
@@ -245,7 +247,9 @@ class SimpleKeyboard : public InputInterface {
                 case 'Q': planner_heading_right = true; break; // Delta heading right (+0.1)
                 case ']': start_control = true; break; // Start control system
                 case 'o':
-                case 'O': stop_control = true; break; // Stop/Exit
+                case 'O': pause_control = true; break; // Pause and return to standing
+                case 'x':
+                case 'X': stop_control = true; break; // Quit program
                 case '\n': use_planner = !use_planner; break; // Use planner
                 case 'i':
                 case 'I': reinitialize = true; break; // Reinitialize base quaternion and delta heading
@@ -305,7 +309,9 @@ class SimpleKeyboard : public InputInterface {
             case 'R': motion_restart = true; break; // Restart motion
             case ']': start_control = true; break; // Start control system
             case 'o':
-            case 'O': stop_control = true; break; // Stop/Exit
+            case 'O': pause_control = true; break; // Pause and return to standing
+            case 'x':
+            case 'X': stop_control = true; break; // Quit program
             case 'q':
             case 'Q': delta_left = true; break; // Delta heading left (-0.1)
             case 'e':
@@ -347,8 +353,9 @@ class SimpleKeyboard : public InputInterface {
           std::lock_guard<std::mutex> lock(current_motion_mutex);
           operator_state.play = false;
           reinitialize_heading = true;
-          current_motion = motion_reader.GetMotionShared(motion_reader.current_motion_index_);
-          current_frame = 0;
+          auto temp_motion = std::make_shared<MotionSequence>(*current_motion);
+          temp_motion->name = "temporary_motion";
+          current_motion = temp_motion;
           if (has_planner && planner_state.enabled) {
             planner_state.enabled = false;
             planner_state.initialized = false;
@@ -430,6 +437,8 @@ class SimpleKeyboard : public InputInterface {
       }
 
       if (this->stop_control) { operator_state.stop = true; }
+
+      if (this->pause_control) { operator_state.pause = true; }
 
       if (this->report_temperature) { report_temperature = true; }
 

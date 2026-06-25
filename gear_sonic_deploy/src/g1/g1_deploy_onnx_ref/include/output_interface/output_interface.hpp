@@ -44,6 +44,7 @@
 
 #include "../state_logger.hpp"
 #include "../motion_data_reader.hpp"
+#include "../sim2sim_debug/reference_output_fields.hpp"
 
 /**
  * @class OutputInterface
@@ -148,9 +149,6 @@ protected:
         static const std::string kBaseTransTarget = "base_trans_target";
         static const std::string kBaseQuatTarget = "base_quat_target";
         static const std::string kBodyQTarget = "body_q_target";
-        static const std::string kRefBaseTransRaw = "ref_base_trans_raw";
-        static const std::string kRefBaseQuatRaw = "ref_base_quat_raw";
-        static const std::string kRefBodyQRaw = "ref_body_q_raw";
         static const std::string kBaseTransMeasured = "base_trans_measured";
         static const std::string kBaseQuatMeasured = "base_quat_measured";
         static const std::string kBodyQMeasured = "body_q_measured";
@@ -177,12 +175,8 @@ protected:
         // ---- Initialise target arrays with safe defaults ----
         std::array<double, 29> body_q_target;
         body_q_target.fill(0.0);
-        std::array<double, 29> body_q_raw;
-        body_q_raw.fill(0.0);
         std::array<double, 3> base_trans_target = {0.0, 0.0, 0.0};
-        std::array<double, 3> base_trans_raw = {0.0, 0.0, 0.0};
         std::array<double, 4> base_quat_target = {1.0, 0.0, 0.0, 0.0};  // Identity quaternion
-        std::array<double, 4> base_quat_raw = {1.0, 0.0, 0.0, 0.0};  // Identity quaternion
         
         // ---- Populate measured values from robot state (always available) ----
         // Remap from IsaacLab joint ordering to MuJoCo ordering and add default offsets.
@@ -196,16 +190,13 @@ protected:
         // Populate joint targets if available
         if (has_joint_data) {
           for (int i = 0; i < 29; i++) {
-            body_q_raw[i] = current_motion->JointPositions(current_frame)[isaaclab_to_mujoco[i]];
-            body_q_target[i] = body_q_raw[i];
+            body_q_target[i] = current_motion->JointPositions(current_frame)[isaaclab_to_mujoco[i]];
           }
         }
 
         // Populate body pose targets if available
         if (has_body_positions && has_body_quaternions) {
-          base_trans_raw = current_motion->BodyPositions(current_frame)[0];
-          base_trans_target = base_trans_raw;
-          base_quat_raw = current_motion->BodyQuaternions(current_frame)[0];
+          base_trans_target = current_motion->BodyPositions(current_frame)[0];
 
           // Get heading state atomically (both quaternion and delta heading together)
           auto heading_state_data = heading_state_buffer.GetDataWithTime().data;
@@ -225,7 +216,8 @@ protected:
           apply_delta_heading = quat_mul_d(delta_quat, apply_delta_heading);
             
           // Get reference data root rotation at this target frame (first body part, index 0)
-          std::array<double, 4> ref_data_root_rot_array = base_quat_raw;
+          const auto motion_body_quat = current_motion->BodyQuaternions(current_frame);
+          std::array<double, 4> ref_data_root_rot_array = motion_body_quat[0];
           
           // Calculate new reference root rotation with heading applied
           base_quat_target = quat_mul_d(apply_delta_heading, ref_data_root_rot_array);
@@ -234,7 +226,6 @@ protected:
           base_trans_target = quat_rotate_d(apply_delta_heading, base_trans_target);
         } else if (has_body_quaternions) {
           // Only have quaternions, use them without position
-          base_quat_raw = current_motion->BodyQuaternions(current_frame)[0];
           auto heading_state_data = heading_state_buffer.GetDataWithTime().data;
           HeadingState heading_state = heading_state_data ? *heading_state_data : HeadingState();
           
@@ -244,7 +235,9 @@ protected:
           auto delta_quat = euler_z_to_quat_d(heading_state.delta_heading);
           apply_delta_heading = quat_mul_d(delta_quat, apply_delta_heading);
             
-          base_quat_target = quat_mul_d(apply_delta_heading, base_quat_raw);
+          const auto motion_body_quat = current_motion->BodyQuaternions(current_frame);
+          std::array<double, 4> ref_data_root_rot_array = motion_body_quat[0];
+          base_quat_target = quat_mul_d(apply_delta_heading, ref_data_root_rot_array);
         }
         // else: keep default values (zeros for position, identity for quaternion)
 
@@ -266,9 +259,7 @@ protected:
         output_data_map_[kBaseTransTarget].assign(base_trans_target.begin(), base_trans_target.end());
         output_data_map_[kBaseQuatTarget].assign(base_quat_target.begin(), base_quat_target.end());
         output_data_map_[kBodyQTarget].assign(body_q_target.begin(), body_q_target.end());
-        output_data_map_[kRefBaseTransRaw].assign(base_trans_raw.begin(), base_trans_raw.end());
-        output_data_map_[kRefBaseQuatRaw].assign(base_quat_raw.begin(), base_quat_raw.end());
-        output_data_map_[kRefBodyQRaw].assign(body_q_raw.begin(), body_q_raw.end());
+        sim2sim_debug::PopulateRawReferenceOutputFields(output_data_map_, current_motion.get(), current_frame);
 
         output_data_map_[kBaseTransMeasured].assign(base_trans_measured.begin(), base_trans_measured.end());
         output_data_map_[kBaseQuatMeasured].assign(base_quat_measured.begin(), base_quat_measured.end());

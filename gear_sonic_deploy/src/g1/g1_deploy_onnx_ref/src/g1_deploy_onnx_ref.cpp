@@ -124,6 +124,7 @@
 #include <cuda_runtime.h>
 #include "../include/state_logger.hpp"
 #include "../include/sim2sim_debug/sim2sim_debug.hpp"
+#include "../include/sim2sim_debug/source_frame_tracker.hpp"
 
 // Encoder
 #include "../include/encoder.hpp"
@@ -2457,6 +2458,7 @@ class G1Deploy {
       sim2sim_debug_config.publish_zmq = enable_sim2sim_debug && (output_type == "zmq" || output_type == "all");
       sim2sim_debug_config.logs_dir = state_logger_->csv_path();
       sim2sim_debug_hook_ = std::make_unique<Sim2SimDebugHook>(sim2sim_debug_config);
+      sim2sim_debug::SetSourceFrameTrackingEnabled(sim2sim_debug_hook_->Enabled());
       if (sim2sim_debug_hook_->Enabled()) {
         std::cout << "[INFO] sim2sim debug hook enabled"
                   << " (csv=" << (sim2sim_debug_hook_->WriteCsv() ? "on" : "off")
@@ -3990,8 +3992,8 @@ class G1Deploy {
           if (state_logger_) {
             std::string motion_name = current_motion_copy ? current_motion_copy->name : "";
             int64_t source_frame_index = -1;
-            if (sim2sim_debug_hook_ && sim2sim_debug_hook_->Enabled() && input_interface_) {
-              auto maybe_source_idx = input_interface_->GetSourceFrameIndex(current_motion_copy.get(), current_frame_copy);
+            if (sim2sim_debug_hook_ && sim2sim_debug_hook_->Enabled()) {
+              auto maybe_source_idx = sim2sim_debug::LookupSourceFrameIndex(current_motion_copy.get(), current_frame_copy);
               if (maybe_source_idx.has_value()) {
                 source_frame_index = *maybe_source_idx;
               }
@@ -4017,9 +4019,9 @@ class G1Deploy {
           }
           if (state_logger_) {
             int64_t applied_source_frame_index = -1;
-            if (sim2sim_debug_hook_ && sim2sim_debug_hook_->Enabled() && input_interface_) {
+            if (sim2sim_debug_hook_ && sim2sim_debug_hook_->Enabled()) {
               auto maybe_applied_source_idx =
-                  input_interface_->GetSourceFrameIndex(current_motion_copy.get(), current_frame_copy);
+                  sim2sim_debug::LookupSourceFrameIndex(current_motion_copy.get(), current_frame_copy);
               if (maybe_applied_source_idx.has_value()) {
                 applied_source_frame_index = *maybe_applied_source_idx;
               }

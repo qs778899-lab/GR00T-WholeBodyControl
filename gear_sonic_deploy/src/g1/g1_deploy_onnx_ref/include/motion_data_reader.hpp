@@ -77,7 +77,6 @@ struct MotionSequence {
     Velocity *BodyAngVelocities(int frame) { return body_ang_velocities_.data() + frame * num_bodies; }
     Point *SmplJoints(int frame) { return smpl_joints_.data() + frame * num_smpl_joints; }
     Point *SmplPoses(int frame) { return smpl_poses_.data() + frame * num_smpl_poses; }
-    int64_t *SourceFrameIndices() { return source_frame_indices_.data(); }
 
     const double *JointPositions(int frame) const { return joint_positions_.data() + frame * num_joints; }
     const double *JointVelocities(int frame) const { return joint_velocities_.data() + frame * num_joints; }
@@ -87,7 +86,6 @@ struct MotionSequence {
     const Velocity *BodyAngVelocities(int frame) const { return body_ang_velocities_.data() + frame * num_bodies; }
     const Point *SmplJoints(int frame) const { return smpl_joints_.data() + frame * num_smpl_joints; }
     const Point *SmplPoses(int frame) const { return smpl_poses_.data() + frame * num_smpl_poses; }
-    const int64_t *SourceFrameIndices() const { return source_frame_indices_.data(); }
 
     int GetNumJoints() const { return num_joints; }
     int GetNumBodies() const { return num_bodies; }
@@ -122,7 +120,6 @@ struct MotionSequence {
       
       smpl_joints_.resize(max_frames * smpl_joints);
       smpl_poses_.resize(max_frames * smpl_poses);
-      source_frame_indices_.resize(max_frames, -1);
 
       positions_world_tmp.resize(joints + 1);
       rotations_world_tmp.resize(joints + 1);
@@ -279,7 +276,6 @@ struct MotionSequence {
     // SMPL data (separate from robot body positions/quaternions)
     std::vector<Point> smpl_joints_; // [timestep][smpl_joint_id][xyz] - SMPL joint positions
     std::vector<Point> smpl_poses_; // [timestep][smpl_pose_id][xyz] - SMPL body poses
-    std::vector<int64_t> source_frame_indices_; // [timestep] original streamed frame index, -1 if unavailable
 
     // temporary buffers for doing FK and filtering velocities,
     // to avoid allocating memory at runtime:
@@ -364,7 +360,7 @@ struct PlannerMotionState {
 class MotionRecorder {
 public:
   MotionRecorder(const std::string& base_dir = "reference/recorded_motion") 
-    : base_dir_(base_dir), active_(false), frames_written_(0), last_frame_idx_(-1) {}
+    : base_dir_(base_dir), active_(false), frames_written_(0) {}
   
   ~MotionRecorder() {
     if (active_) {
@@ -404,7 +400,6 @@ public:
       
       motion_name_ = motion_name;
       frames_written_ = 0;
-      last_frame_idx_ = -1;
       active_ = true;
       
       std::cout << "[MotionRecorder] Recording started: " << motion_dir_ << std::endl;
@@ -419,13 +414,6 @@ public:
   bool WriteFrame(std::shared_ptr<const MotionSequence> motion, int frame_idx) {
     if (!active_ || !motion || frame_idx >= motion->timesteps) {
       return false;
-    }
-
-    // After streamed motion completes, deploy can keep replaying the same
-    // terminal frame while waiting for the next clip. Do not append identical
-    // frame indices forever, or the recorder will grow without bound.
-    if (frame_idx == last_frame_idx_) {
-      return true;
     }
     
     // Lazily open files on first write when we know dimensions
@@ -518,7 +506,6 @@ public:
       }
       
       frames_written_++;
-      last_frame_idx_ = frame_idx;
       return true;
     } catch (const std::exception& e) {
       std::cerr << "[MotionRecorder] Failed to write frame: " << e.what() << std::endl;
@@ -561,7 +548,6 @@ public:
     active_ = false;
     files_open_ = false;
     frames_written_ = 0;
-    last_frame_idx_ = -1;
   }
   
   bool IsActive() const { return active_; }
@@ -663,7 +649,6 @@ private:
   bool active_;
   bool files_open_ = false;
   int frames_written_;
-  int last_frame_idx_;
   
   std::ofstream joint_pos_file_;
   std::ofstream joint_vel_file_;

@@ -27,6 +27,7 @@
 static const std::string HG_CMD_TOPIC = "rt/lowcmd";       ///< Low-level motor command topic.
 static const std::string HG_IMU_TORSO = "rt/secondary_imu";///< Secondary (torso) IMU topic.
 static const std::string HG_STATE_TOPIC = "rt/lowstate";    ///< Low-level motor / sensor state topic.
+static const std::string HG_BMS_STATE_TOPIC = "rt/lf/bmsstate";///< Battery management state topic.
 
 /// Total number of actuated joints on the G1 (29-DOF configuration).
 const int G1_NUM_MOTOR = 29;
@@ -64,9 +65,10 @@ struct HeadingState {
  * @brief High-level operator signals (set by input interfaces, read by control loop).
  */
 struct OperatorState {
-  bool stop = false;   ///< Emergency stop requested.
+  bool stop = false;   ///< Emergency stop requested (quit program).
   bool start = false;  ///< Control-system start requested.
   bool play = false;   ///< Motion playback active.
+  bool pause = false;  ///< Pause control and return to standing pose.
 };
 
 /**

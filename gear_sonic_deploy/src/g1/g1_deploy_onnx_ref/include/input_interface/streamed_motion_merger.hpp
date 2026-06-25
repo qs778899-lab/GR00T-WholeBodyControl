@@ -62,12 +62,20 @@ struct MotionSequence;
 class StreamedMotionMerger {
 public:
     /// Compile-time toggle for debug log output.
-    static constexpr bool DEBUG_LOGGING = true;
+    static constexpr bool DEBUG_LOGGING = false;
     /// Number of already-consumed frames to retain before the playback cursor
     /// (provides look-back for interpolation / blending).
     static constexpr int HISTORY_FRAMES = 5;
-    /// Maximum tolerated gap (in current-rate frames) before a catch-up reset.
-    static constexpr int MAX_GAP_FRAMES = 200;
+    /// Default max tolerated gap (in current-rate frames) before a catch-up reset.
+    /// At 50 Hz, 200 frames = ~4 s.  Override at runtime via SetMaxGapFrames()
+    /// (CLI flag --zmq-max-gap-frames) to bound teleop playback latency.
+    static constexpr int DEFAULT_MAX_GAP_FRAMES = 200;
+
+    /// Set the catch-up gap threshold (current-rate frames).  Non-positive
+    /// values restore the default.  Smaller = tighter latency bound but more
+    /// frequent catch-up skips when timing drifts.
+    void SetMaxGapFrames(int n) { max_gap_frames_ = (n > 0) ? n : DEFAULT_MAX_GAP_FRAMES; }
+    int GetMaxGapFrames() const { return max_gap_frames_; }
     
     /// Returned by MergeIncomingData() to communicate what happened.
     struct MergeResult {
@@ -85,7 +93,7 @@ public:
         std::vector<std::vector<double>> joint_pos;  ///< [frame][joint] positions (radians).
         std::vector<std::vector<double>> joint_vel;  ///< [frame][joint] velocities (rad/s).
         
-        // -- Body quaternions (required for all versions) --
+        // -- Body pose (required for all versions) --
         std::vector<std::vector<std::array<double, 3>>> body_pos;   ///< [frame][body][x,y,z] positions.
         std::vector<std::vector<std::array<double, 4>>> body_quat;  ///< [frame][body][w,x,y,z].
         
@@ -212,11 +220,13 @@ public:
 private:
     std::shared_ptr<MotionSequence> streamed_motion_;
     int stream_window_start_ = 0;
+    /// Runtime-tunable catch-up gap threshold (current-rate frames).
+    int max_gap_frames_ = DEFAULT_MAX_GAP_FRAMES;
     
     // Validate incoming data structure
     bool ValidateIncomingData(const IncomingData& data) const {
         // Check required fields
-        if (data.body_quat.empty() || data.body_pos.empty() || data.frame_indices.empty()) {
+        if (data.body_pos.empty() || data.body_quat.empty() || data.frame_indices.empty()) {
             std::cerr << "[StreamedMotionMerger] Missing required fields (body_pos/body_quat/frame_indices)" << std::endl;
             return false;
         }
@@ -282,8 +292,8 @@ private:
         }
         
         // Calculate max gap based on catch_up flag
-        int max_gap_frames = catch_up_enabled 
-            ? (MAX_GAP_FRAMES + HISTORY_FRAMES) 
+        int max_gap_frames = catch_up_enabled
+            ? (max_gap_frames_ + HISTORY_FRAMES)
             : std::numeric_limits<int>::max();
         
 
@@ -416,8 +426,6 @@ private:
         if (data.num_joints > 0 && old_motion->GetNumJoints() > 0) {
             int joints_to_copy = std::min(data.num_joints, old_motion->GetNumJoints());
             for (int i = 0; i < copy_count; ++i) {
-                new_motion->SourceFrameIndices()[copy_dst_idx + i] =
-                    old_motion->SourceFrameIndices()[copy_src_idx + i];
                 for (int joint = 0; joint < joints_to_copy; ++joint) {
                     new_motion->JointPositions(copy_dst_idx + i)[joint] = 
                         old_motion->JointPositions(copy_src_idx + i)[joint];
@@ -427,18 +435,6 @@ private:
             }
         }
         
-        // Copy body positions
-        int old_pos_bodies = old_motion->GetNumBodies();
-        int pos_bodies_to_copy = std::min(data.num_pos_bodies, old_pos_bodies);
-        for (int i = 0; i < copy_count; ++i) {
-            for (int b = 0; b < pos_bodies_to_copy; ++b) {
-                for (int xyz = 0; xyz < 3; ++xyz) {
-                    new_motion->BodyPositions(copy_dst_idx + i)[b][xyz] =
-                        old_motion->BodyPositions(copy_src_idx + i)[b][xyz];
-                }
-            }
-        }
-
         // Copy body quaternions
         int old_quat_bodies = old_motion->GetNumBodyQuaternions();
         int quat_bodies_to_copy = std::min(data.num_quat_bodies, old_quat_bodies);
@@ -447,6 +443,18 @@ private:
                 for (int q = 0; q < 4; ++q) {
                     new_motion->BodyQuaternions(copy_dst_idx + i)[b][q] = 
                         old_motion->BodyQuaternions(copy_src_idx + i)[b][q];
+                }
+            }
+        }
+
+        // Copy body positions
+        int old_pos_bodies = old_motion->GetNumBodies();
+        int pos_bodies_to_copy = std::min(data.num_pos_bodies, old_pos_bodies);
+        for (int i = 0; i < copy_count; ++i) {
+            for (int b = 0; b < pos_bodies_to_copy; ++b) {
+                for (int xyz = 0; xyz < 3; ++xyz) {
+                    new_motion->BodyPositions(copy_dst_idx + i)[b][xyz] =
+                        old_motion->BodyPositions(copy_src_idx + i)[b][xyz];
                 }
             }
         }
@@ -493,21 +501,14 @@ private:
             }
         }
         
-        // Copy body positions (always present)
+        // Copy body positions and quaternions (always present)
         for (int frame = 0; frame < data.num_frames; ++frame) {
-            if (frame < static_cast<int>(data.frame_indices.size())) {
-                motion->SourceFrameIndices()[dst_frame_offset + frame] = data.frame_indices[frame];
-            }
             for (int body = 0; body < data.num_pos_bodies; ++body) {
                 for (int xyz = 0; xyz < 3; ++xyz) {
                     motion->BodyPositions(dst_frame_offset + frame)[body][xyz] =
                         data.body_pos[frame][body][xyz];
                 }
             }
-        }
-
-        // Copy body quaternions (always present)
-        for (int frame = 0; frame < data.num_frames; ++frame) {
             for (int body = 0; body < data.num_quat_bodies; ++body) {
                 for (int q = 0; q < 4; ++q) {
                     motion->BodyQuaternions(dst_frame_offset + frame)[body][q] = 

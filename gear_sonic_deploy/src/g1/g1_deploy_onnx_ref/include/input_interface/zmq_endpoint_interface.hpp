@@ -63,13 +63,21 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <sstream>
 #include <algorithm>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 
 #include "input_interface.hpp"
 #include "zmq_packed_message_subscriber.hpp"
 #include "streamed_motion_merger.hpp"
+#include "teleop_latency_logger.hpp"
+#include "sim2sim_debug/source_frame_tracker.hpp"
+
+#ifndef LOG
+#define LOG(level) std::cerr
+#endif
 
 /**
  * @class ZMQEndpointInterface
@@ -88,7 +96,7 @@
 class ZMQEndpointInterface : public InputInterface {
 public:
     /// Compile-time toggle for debug log output.
-    static constexpr bool DEBUG_LOGGING = true;
+    static constexpr bool DEBUG_LOGGING = false;
     
     // ------------------------------------------------------------------
     // Per-frame action flags (reset at the start of every update() call)
@@ -98,7 +106,8 @@ public:
     bool play_motion = false;      ///< Play / resume.
     bool motion_restart = false;   ///< Restart (frame 0, paused).
     bool start_control = false;    ///< Start control system.
-    bool stop_control = false;     ///< Emergency stop.
+    bool stop_control = false;     ///< Quit program.
+    bool pause_control = false;    ///< Pause and return to standing pose.
     bool delta_left = false;       ///< Heading nudge left.
     bool delta_right = false;      ///< Heading nudge right.
     bool reinitialize = false;     ///< Recapture IMU heading.
@@ -121,7 +130,6 @@ public:
     std::shared_ptr<MotionSequence> streamed_motion_;
     /// Global frame index corresponding to streamed_motion_[0].
     int stream_window_start_ = 0;
-    int last_frame_step_ = 1;
 
     static constexpr std::string_view LOCALHOST = "localhost";
 
@@ -130,9 +138,14 @@ public:
         int port = 5556,
         const std::string& topic = "pose",
         bool use_conflate = false,
-        bool verbose = false
+        bool verbose = false,
+        int max_gap_frames = StreamedMotionMerger::DEFAULT_MAX_GAP_FRAMES
     ) : InputInterface(), host_(host), port_(port), topic_(topic), verbose_(verbose), is_localhost_(host == LOCALHOST) {
         type_ = InputType::NETWORK;
+
+        // Bound how far the playback cursor may drift behind the live mocap
+        // stream before a catch-up reset (teleop latency cap).
+        motion_merger_.SetMaxGapFrames(max_gap_frames);
         
         // Set terminal to non-blocking mode (same as SimpleKeyboard)
         tcgetattr(STDIN_FILENO, &old_termios_);
@@ -165,9 +178,14 @@ public:
         // Initialize streamed motion buffer (reserve large capacity for streaming)
         ResetStreamedMotion();
         
-        std::cout << "[ZMQEndpointInterface] Connected to " << host << ":" << port 
+        std::cout << "[ZMQEndpointInterface] Connected to " << host << ":" << port
                   << " topic='" << topic << "'" << std::endl;
+        std::cout << "[ZMQEndpointInterface] max_gap_frames=" << motion_merger_.GetMaxGapFrames()
+                  << " (~" << (motion_merger_.GetMaxGapFrames() * 20) << " ms latency cap @ 50 Hz)" << std::endl;
         std::cout << "[ZMQEndpointInterface] Press ENTER to toggle between loaded motions and ZMQ stream" << std::endl;
+
+        // Per-merge teleop latency CSV (see logs/teleop_latency_*.csv).
+        latency_logger_ = std::make_unique<TeleopLatencyLogger>("logs");
     }
     
     ~ZMQEndpointInterface() {
@@ -193,6 +211,7 @@ public:
         // Reset input flags each frame
         start_control = false;
         stop_control = false;
+        pause_control = false;
         motion_prev = false;
         motion_next = false;
         play_motion = false;
@@ -217,8 +236,12 @@ public:
                 case 'r':
                 case 'R': motion_restart = true; break;
                 case ']': start_control = true; break;
+                case 's':
+                case 'S': start_control = true; break;  // 's' also starts control (easier to remember)
                 case 'o':
-                case 'O': stop_control = true; break;
+                case 'O': pause_control = true; break;  // Pause and return to standing
+                case 'x':
+                case 'X': stop_control = true; break;   // Quit program
                 case 'f':
                 case 'F': report_temperature = true; break;
                 case 'q':
@@ -293,8 +316,9 @@ public:
                 external_token_state_.SetData({});
                 operator_state.play = false;
                 reinitialize_heading = true;
-                current_motion = motion_reader.GetMotionShared(motion_reader.current_motion_index_);
-                current_frame = 0;
+                auto temp_motion = std::make_shared<MotionSequence>(*current_motion);
+                temp_motion->name = "temporary_motion";
+                current_motion = temp_motion;
                 if (has_planner && planner_state.enabled) {
                     planner_state.enabled = false;
                     planner_state.initialized = false;
@@ -354,6 +378,7 @@ public:
             }
         }
         if (stop_control) { operator_state.stop = true; }
+        if (pause_control) { operator_state.pause = true; }
         if (this->report_temperature) { report_temperature = true; }
         if (start_control) { operator_state.start = true; }
 
@@ -381,6 +406,7 @@ public:
             int frame_offset_adjustment = 0;
             bool did_catchup = false;
             int protocol_version_for_mode_update = -1;
+            int frame_step_for_log = 1;  // captured from merge result for latency logging
             {
                 std::lock_guard<std::mutex> lock(data_mutex_);
                 if (has_new_data_) {
@@ -406,7 +432,7 @@ public:
                                                "Protocol version 4 with empty token data!");
                             return;
                         }
-                        
+
                         // Keep robot active
                         {
                             std::lock_guard<std::mutex> lock(current_motion_mutex);
@@ -414,7 +440,7 @@ public:
                             has_external_token_state_ = true;
                             operator_state.play = true; // this should be redundant because the robot never read reference motion
                         }
-                        
+
                         // Skip motion handling and keyboard controls
                         return;
                     }
@@ -440,11 +466,18 @@ public:
                     
                         
                         new_motion = result.motion;
-                        std::cout << "[ZMQEndpointInterface] motion name: " << new_motion->name << std::endl;
+                        if (verbose_) {
+                            std::cout << "[ZMQEndpointInterface] motion name: " << new_motion->name << std::endl;
+                        }
                         stream_window_start_ = result.window_start;
-                        last_frame_step_ = std::max(1, result.frame_step);
                         frame_offset_adjustment = result.frame_offset_adjustment;
                         did_catchup = result.did_catchup_reset;
+                        frame_step_for_log = result.frame_step;
+                        sim2sim_debug::RegisterSourceFrameWindow(
+                            new_motion.get(),
+                            result.window_start,
+                            result.frame_step,
+                            new_motion->timesteps);
                         
                         if constexpr (DEBUG_LOGGING) {
                             int window_end_msg_idx = stream_window_start_ + result.frame_step * (new_motion->timesteps - 1);
@@ -465,7 +498,8 @@ public:
             // update streamed_motion_ and current_frame if we have new data
             if (new_motion) {
                 streamed_motion_ = new_motion;
-                
+                int cursor_after_merge = 0;  // playback cursor right after this merge (for latency log)
+
                 // Handle catch-up reset: when window was reset due to large gap, start from beginning
                 if (did_catchup) {
                     std::lock_guard<std::mutex> lock(current_motion_mutex);
@@ -504,8 +538,39 @@ public:
                     current_frame = adjusted_frame;
                     current_motion = streamed_motion_;  // Assign shared_ptr directly for thread safety
                     operator_state.play = true; // Auto-play when entering ZMQ mode
+                    cursor_after_merge = adjusted_frame;
                 }
-                
+
+                // ── Teleop latency instrumentation ──────────────────────────
+                // How far the playback cursor sits behind the newest buffered
+                // frame == the dominant, variable component of teleop latency.
+                if (latency_logger_) {
+                    const int fs = (frame_step_for_log > 0) ? frame_step_for_log : 1;
+                    const long ts = static_cast<long>(streamed_motion_->timesteps);
+                    long latency_frames = (ts > 0) ? (ts - 1 - cursor_after_merge) : 0;
+                    if (latency_frames < 0) latency_frames = 0;
+
+                    const double now_mono_ms = std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now().time_since_epoch()).count();
+                    const double now_wall_ms = std::chrono::duration<double, std::milli>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
+                    const double interarrival_ms =
+                        (last_log_mono_ms_ > 0.0) ? (now_mono_ms - last_log_mono_ms_) : 0.0;
+                    last_log_mono_ms_ = now_mono_ms;
+
+                    constexpr double kControlPeriodMs = 20.0;  // 50 Hz control loop
+                    TeleopLatencyLogger::Row row;
+                    row.wall_time_ms = now_wall_ms;
+                    row.monotonic_ms = now_mono_ms;
+                    row.msg_interarrival_ms = interarrival_ms;
+                    row.newest_frame_index = static_cast<long>(stream_window_start_) + fs * (ts - 1);
+                    row.playback_frame = static_cast<long>(stream_window_start_) + fs * cursor_after_merge;
+                    row.latency_frames = latency_frames;
+                    row.latency_ms = latency_frames * kControlPeriodMs;
+                    row.did_catchup = did_catchup ? 1 : 0;
+                    row.frame_step = fs;
+                    latency_logger_->Record(row);
+                }
             }
             return; // Skip keyboard motion controls when in ZMQ mode
         }
@@ -583,32 +648,8 @@ public:
       return last_receive_time_;
     }
 
-    std::optional<int64_t> GetSourceFrameIndex(const MotionSequence* current_motion, int current_frame) const override {
-      if (!current_motion) {
-        return std::nullopt;
-      }
-      if (current_motion->name != "streamed") {
-        return std::nullopt;
-      }
-      if (current_frame < 0) {
-        return std::nullopt;
-      }
-      const int64_t* source_frame_indices = current_motion->SourceFrameIndices();
-      if (source_frame_indices == nullptr) {
-        return std::nullopt;
-      }
-      const int64_t source_frame_index = source_frame_indices[current_frame];
-      if (source_frame_index < 0) {
-        return std::nullopt;
-      }
-      return source_frame_index;
-    }
-
     bool HasUsableStreamedMotion() const {
-      return use_zmq_stream &&
-             streamed_motion_ &&
-             streamed_motion_->timesteps > 0 &&
-             last_receive_time_.has_value();
+      return streamed_motion_ && streamed_motion_->timesteps > 0;
     }
     
 private:
@@ -622,7 +663,6 @@ private:
         streamed_motion_->name = "streamed";
         streamed_motion_->ReserveCapacity(15000, 29, 1, 1, 0, 0); // max 15k frames, 29 joints, 1 body, 1 quat
         stream_window_start_ = 0;
-        last_frame_step_ = 1;
         data_timestamp_.reset();
         last_receive_time_.reset();
     }
@@ -707,22 +747,30 @@ private:
         
         // ===== PROTOCOL VERSION 4: Token-Only Streaming (check first, has different requirements) =====
         if (protocol_version == 4) {
+            LOG(INFO) << "[Token Debug] Entering Protocol v4 token-only streaming mode";
+
             // Token-only mode - no motion data, just tokens for the policy
             if (token_state_idx < 0) {
+                LOG(ERROR) << "[Token Debug] Version 4 missing required field 'token_state'";
                 std::cerr << "[ZMQEndpointInterface] Version 4 missing required field 'token_state'" << std::endl;
                 return result;
             }
+
+            LOG(INFO) << "[Token Debug] token_state field found at index: " << token_state_idx;
 
             // Check protocol version before decoding token_state
             if (active_protocol_version_ == -1) {
                 // First message - establish protocol version
                 active_protocol_version_ = protocol_version;
+                LOG(INFO) << "[Token Debug] Protocol version " << active_protocol_version_ << " established (first message)";
                 if constexpr (DEBUG_LOGGING) {
                     std::cout << "[ZMQEndpointInterface] Protocol version " << active_protocol_version_ << " established" << std::endl;
                 }
             } else if (active_protocol_version_ != protocol_version) {
                 // Protocol version changed - this is an error
-                std::cerr << "[ZMQEndpointInterface] ERROR: Protocol version changed from " 
+                LOG(ERROR) << "[Token Debug] Protocol version changed from " << active_protocol_version_
+                          << " to " << protocol_version << " (this is an error!)";
+                std::cerr << "[ZMQEndpointInterface] ERROR: Protocol version changed from "
                         << active_protocol_version_ << " to " << protocol_version << std::endl;
                 result.protocol_version = protocol_version;  // Signal the change to caller
                 return result;
@@ -731,31 +779,62 @@ private:
             // Decode token_state field
             const auto& token_field = buffered_header_.fields[static_cast<size_t>(token_state_idx)];
             const auto& token_buf = buffered_buffers_[static_cast<size_t>(token_state_idx)];
-            
+
+            LOG(INFO) << "[Token Debug] token_field.dtype: " << token_field.dtype
+                     << ", buffer size: " << token_buf.size() << " bytes";
+
             // Calculate token dimension from shape
             size_t token_dim = 1;
-            for (size_t d : token_field.shape) {
-                token_dim *= d;
+            std::stringstream shape_str;
+            shape_str << "[";
+            for (size_t i = 0; i < token_field.shape.size(); ++i) {
+                if (i > 0) shape_str << ", ";
+                shape_str << token_field.shape[i];
+                token_dim *= token_field.shape[i];
             }
-            
+            shape_str << "]";
+
+            LOG(INFO) << "[Token Debug] token_field.shape: " << shape_str.str()
+                     << " → total token_dim: " << token_dim;
+
             std::vector<double> token_data(token_dim);
             bool needs_swap = buffered_header_.NeedsByteSwap();
-            
+
+            LOG(INFO) << "[Token Debug] Byte swap needed: " << (needs_swap ? "YES" : "NO");
+
             if (token_field.dtype == "f32") {
+                LOG(INFO) << "[Token Debug] Decoding as f32 (float32)";
                 for (size_t i = 0; i < token_dim; ++i) {
                     float val;
                     std::memcpy(&val, token_buf.data() + i * sizeof(float), sizeof(float));
                     if (needs_swap) val = byte_swap(val);
                     token_data[i] = static_cast<double>(val);
                 }
+                LOG(INFO) << "[Token Debug] Successfully decoded " << token_dim << " f32 tokens";
+                LOG(INFO) << "[Token Debug] First 5 tokens: ["
+                         << token_data[0] << ", "
+                         << (token_dim > 1 ? std::to_string(token_data[1]) : "N/A") << ", "
+                         << (token_dim > 2 ? std::to_string(token_data[2]) : "N/A") << ", "
+                         << (token_dim > 3 ? std::to_string(token_data[3]) : "N/A") << ", "
+                         << (token_dim > 4 ? std::to_string(token_data[4]) : "N/A") << "]";
             } else if (token_field.dtype == "f64") {
+                LOG(INFO) << "[Token Debug] Decoding as f64 (float64)";
                 for (size_t i = 0; i < token_dim; ++i) {
                     double val;
                     std::memcpy(&val, token_buf.data() + i * sizeof(double), sizeof(double));
                     if (needs_swap) val = byte_swap(val);
                     token_data[i] = val;
                 }
+                LOG(INFO) << "[Token Debug] Successfully decoded " << token_dim << " f64 tokens";
+                LOG(INFO) << "[Token Debug] First 5 tokens: ["
+                         << token_data[0] << ", "
+                         << (token_dim > 1 ? std::to_string(token_data[1]) : "N/A") << ", "
+                         << (token_dim > 2 ? std::to_string(token_data[2]) : "N/A") << ", "
+                         << (token_dim > 3 ? std::to_string(token_data[3]) : "N/A") << ", "
+                         << (token_dim > 4 ? std::to_string(token_data[4]) : "N/A") << "]";
             } else {
+                LOG(ERROR) << "[Token Debug] Unsupported dtype: '" << token_field.dtype
+                          << "' for token_state (only f32 and f64 are supported)";
                 std::cerr << "[ZMQEndpointInterface] Version 4: unsupported dtype '" << token_field.dtype << "' for token_state" << std::endl;
                 return result;
             }
@@ -784,11 +863,30 @@ private:
                                + " (chunk_size: " + std::to_string(num_frames) + ")";
                 }
             }
-            std::cout << "[ZMQEndpointInterface] Protocol v4: Received " << token_dim 
+            std::cout << "[ZMQEndpointInterface] Protocol v4: Received " << token_dim
                       << "D token (latent action), tokens[0]=" << token_data[0] << frame_info << std::endl;
-            
+
+            LOG(INFO) << "[Token Debug] === TOKEN RECEPTION SUMMARY ===";
+            LOG(INFO) << "[Token Debug] Protocol version: v4";
+            LOG(INFO) << "[Token Debug] Token dimension: " << token_dim;
+            LOG(INFO) << "[Token Debug] Token dtype: " << token_field.dtype;
+            // Log all token values
+            std::ostringstream token_all;
+            token_all << "[";
+            for (size_t i = 0; i < token_data.size(); ++i) {
+                if (i > 0) token_all << ", ";
+                token_all << token_data[i];
+            }
+            token_all << "]";
+            LOG(WARNING) << "[Token Debug] All token values (" << token_data.size() << " total): " << token_all.str();
+            LOG(INFO) << "[Token Debug] Frame info: " << (frame_info.empty() ? "No frame_index" : frame_info);
+            LOG(INFO) << "[Token Debug] Moving token_data to result.token_data";
+
             // Store tokens in the external token state buffer (inherited from InputInterface)
             result.token_data = std::move(token_data);
+
+            LOG(INFO) << "[Token Debug] Token data stored in result, size: " << result.token_data.size();
+            LOG(INFO) << "[Token Debug] === END TOKEN RECEPTION ===";
             
             // Decode hand joint positions if present (7 DOF joint values) - same as protocol v2/v3
             bool has_left_hand_joints = (left_hand_joints_idx >= 0);
@@ -901,11 +999,12 @@ private:
         }
         
         // Validate required fields based on protocol version (for motion protocols v1/v2/v3)
-        // body_pos/body_quat and frame_index are required for motion protocols
+        // body_pos, body_quat, and frame_index are required for motion protocols
         if (body_pos_idx < 0) {
             std::cerr << "[ZMQEndpointInterface] Missing required field 'body_pos' (or 'body_pos_w')" << std::endl;
             return result;
         }
+
         if (body_quat_idx < 0) {
             std::cerr << "[ZMQEndpointInterface] Missing required field 'body_quat' (or 'body_quat_w')" << std::endl;
             return result;
@@ -1093,60 +1192,60 @@ private:
             }
         }
         
-        // Decode body positions (required for all versions)
-        const auto& pos_field = buffered_header_.fields[body_pos_idx];
-        const auto& pos_buf = buffered_buffers_[body_pos_idx];
+        // Decode body positions (required for motion protocols).
+        // Support shapes: [N, num_pos_bodies, 3] or [N, 3] for single body.
+        const auto& body_pos_field = buffered_header_.fields[body_pos_idx];
+        const auto& body_pos_buf = buffered_buffers_[body_pos_idx];
 
         int num_pos_bodies = 1;
-        if (pos_field.shape.size() == 3) {
-            num_pos_bodies = static_cast<int>(pos_field.shape[1]);
-        } else if (pos_field.shape.size() == 2) {
+        if (body_pos_field.shape.size() == 3) {
+            num_pos_bodies = static_cast<int>(body_pos_field.shape[1]);
+        } else if (body_pos_field.shape.size() == 2) {
             num_pos_bodies = 1;
         } else {
-            std::cerr << "[ZMQEndpointInterface] Invalid body_pos shape dimensions: "
-                      << pos_field.shape.size() << std::endl;
+            std::cerr << "[ZMQEndpointInterface] Invalid body_pos shape" << std::endl;
+            return result;
+        }
+        if (num_pos_bodies <= 0) {
+            std::cerr << "[ZMQEndpointInterface] Invalid number of body_pos bodies: " << num_pos_bodies << std::endl;
             return result;
         }
 
-        int pos_stride = num_pos_bodies * 3;
         std::vector<std::vector<std::array<double, 3>>> decoded_body_pos(num_frames);
         for (int frame = 0; frame < num_frames; ++frame) {
             decoded_body_pos[frame].resize(num_pos_bodies, {0.0, 0.0, 0.0});
         }
 
-        if (pos_field.dtype == "f32") {
+        int body_pos_stride = num_pos_bodies * 3;
+        if (body_pos_field.dtype == "f32") {
             for (int frame = 0; frame < num_frames; ++frame) {
                 for (int body = 0; body < num_pos_bodies; ++body) {
                     for (int xyz = 0; xyz < 3; ++xyz) {
                         float val;
-                        std::memcpy(
-                            &val,
-                            pos_buf.data() + (frame * pos_stride + body * 3 + xyz) * sizeof(float),
-                            sizeof(float)
-                        );
+                        std::memcpy(&val, body_pos_buf.data() + (frame * body_pos_stride + body * 3 + xyz) * sizeof(float), sizeof(float));
                         if (needs_swap) val = byte_swap(val);
                         decoded_body_pos[frame][body][xyz] = static_cast<double>(val);
                     }
                 }
             }
-        } else if (pos_field.dtype == "f64") {
+        } else if (body_pos_field.dtype == "f64") {
             for (int frame = 0; frame < num_frames; ++frame) {
                 for (int body = 0; body < num_pos_bodies; ++body) {
                     for (int xyz = 0; xyz < 3; ++xyz) {
                         double val;
-                        std::memcpy(
-                            &val,
-                            pos_buf.data() + (frame * pos_stride + body * 3 + xyz) * sizeof(double),
-                            sizeof(double)
-                        );
+                        std::memcpy(&val, body_pos_buf.data() + (frame * body_pos_stride + body * 3 + xyz) * sizeof(double), sizeof(double));
                         if (needs_swap) val = byte_swap(val);
                         decoded_body_pos[frame][body][xyz] = val;
                     }
                 }
             }
         } else {
-            std::cerr << "[ZMQEndpointInterface] Unsupported body_pos dtype: " << pos_field.dtype << std::endl;
+            std::cerr << "[ZMQEndpointInterface] Unsupported body_pos dtype: " << body_pos_field.dtype << std::endl;
             return result;
+        }
+
+        if constexpr (DEBUG_LOGGING) {
+            std::cout << "[ZMQEndpointInterface] Decoded body positions: " << num_pos_bodies << " bodies per frame" << std::endl;
         }
 
         // Decode body quaternions (required for both versions)
@@ -1558,14 +1657,15 @@ private:
                 }
             }
             
-            // Print frame indices for protocol v3 (SMPL actions)
-            if (protocol_version == 3 && !frame_indices.empty()) {
+            // Print frame indices for protocol v3 (SMPL actions) — verbose only
+            // (this fires on every message; see logs/teleop_latency_*.csv instead).
+            if (verbose_ && protocol_version == 3 && !frame_indices.empty()) {
                 if (frame_indices.size() == 1) {
-                    std::cout << "[ZMQEndpointInterface] Protocol v3: Received SMPL action (single) - frame_index: " 
+                    std::cout << "[ZMQEndpointInterface] Protocol v3: Received SMPL action (single) - frame_index: "
                               << frame_indices[0] << std::endl;
                 } else {
-                    std::cout << "[ZMQEndpointInterface] Protocol v3: Received SMPL action (chunk) - frames: " 
-                              << frame_indices[0] << " to " << frame_indices.back() 
+                    std::cout << "[ZMQEndpointInterface] Protocol v3: Received SMPL action (chunk) - frames: "
+                              << frame_indices[0] << " to " << frame_indices.back()
                               << ", chunk_size: " << frame_indices.size() << std::endl;
                 }
             }
@@ -1952,7 +2052,13 @@ private:
     std::optional<std::chrono::steady_clock::time_point> last_receive_time_{}; ///< Timestamp of last OnPoseDataReceived (ms, monotonic).
     uint64_t receive_count_ = 0;       ///< Total number of messages received.
     uint64_t last_decode_time_ = 0;    ///< Timestamp of last DecodeIntoMotionSequence call (ms).
-    
+
+    // ------------------------------------------------------------------
+    // Teleop latency logging (per-merge CSV)
+    // ------------------------------------------------------------------
+    std::unique_ptr<TeleopLatencyLogger> latency_logger_;  ///< Writes logs/teleop_latency_*.csv.
+    double last_log_mono_ms_ = 0.0;    ///< Monotonic time (ms) of the previous logged merge.
+
 };
 
 #endif // ZMQ_ENDPOINT_INTERFACE_HPP

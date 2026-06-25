@@ -1,5 +1,7 @@
 #ifdef HAS_ROS2
 
+#include <cstring>
+#include <cstdio>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <iostream>

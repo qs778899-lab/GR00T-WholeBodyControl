@@ -735,8 +735,118 @@ enabled E2E strict alignment：
 
 - `tasks/sim2sim_structure_refactor/cpp_phase_c1_test_report.md`
 
-结论：
+阶段内结论：
 
 - C1 计划内测试全部成功完成。
 - 默认关闭路径不再产生 source-frame CSV，也不执行 source-frame 查询/更新。
 - 显式 enabled 路径 strict alignment 为 `0 lag`，保持原 sim2sim 时间帧对齐逻辑。
+
+## 2026-06-25 C++ Phase C1 Final Validation 补测
+
+Run ID：`20260625_cpp_c1_final_validation`
+
+用户要求补充 7 个最高风险测试，尤其是当前 enabled E2E 不能只跑 `reach-2-003_chr00`，需要多选 `eval_benchmark/robot/*.pkl`。
+
+测试结果汇总：
+
+- 默认关闭 ZMQ schema 精确检查：通过。`g1_debug` schema 共 `34` 个 key，不包含 `source_frame_index` / `applied_source_frame_index`，deploy logs 不生成对应 CSV。
+- deterministic source-frame replay：通过。固定日志 replay `num_frames=995`，`lag_frames_log_vs_gt=0`，source/applied cursor 均单调且属于固定 stream manifest。
+- StateLogger unit deterministic test：通过。默认关闭不生成 source-frame CSV，enabled 生成两份 CSV。
+- ZMQOutputHandler schema deterministic test：通过。default-off `34` keys，enabled `36` keys，enabled 时 source-frame fields 存在。
+- C++ diff allowlist gate：失败。相对 base 仓库 `/home/lab/Desktop/LHM-Robot` 的 `feat/s0_training`，除 C1 hook allowlist 外仍存在 13 个非 hook C++/header/test 文件差异。
+- 默认关闭 timing 多样本：通过。解析到 `40` 条控制循环 timing，3 个 5-sample 窗口平均 obs-to-motor 分别为 `536.8us`、`593.2us`、`484.6us`。
+- enabled E2E 多 motion：通过。`eval_benchmark/robot` 下 4 条 motion 全部 strict alignment `0 lag`：
+  - `reach-1-001_chr00`: `743` frames
+  - `reach-2-003_chr00`: `1007` frames
+  - `reach-3-002_chr00`: `855` frames
+  - `reach-4-004_chr00`: `823` frames
+
+阻塞文件清单：
+
+- `gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/include/input_interface/gamepad.hpp`
+- `gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/include/input_interface/input_interface.hpp`
+- `gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/include/input_interface/interface_manager.hpp`
+- `gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/include/input_interface/keyboard_handler.hpp`
+- `gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/include/input_interface/ros2_input_handler.hpp`
+- `gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/include/input_interface/streamed_motion_merger.hpp`
+- `gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/include/input_interface/teleop_latency_logger.hpp`
+- `gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/include/input_interface/zmq_endpoint_interface.hpp`
+- `gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/include/input_interface/zmq_manager.hpp`
+- `gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/include/motion_data_reader.hpp`
+- `gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/include/output_interface/output_interface.hpp`
+- `gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/include/robot_parameters.hpp`
+- `gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/tests/test_ros2.cpp`
+
+结论：
+
+- runtime/default-off/enabled sim2sim hook 行为测试通过。
+- C++ 结构集成门禁未通过。当前分支仍有非 hook C++ diff，不能按流程标记 C1 完成，不能 push 作为阶段完成版本。
+- 下一步必须移除或迁移这些非 hook C++ diff，然后重跑全部 7 项 final validation。
+
+## 2026-06-25 C++ Phase C1b 迁出与最终复测
+
+Run ID：`20260625_cpp_c1_final_validation`
+
+代码处理：
+
+- 将 allowlist 外 13 个非 hook C++/header/test 文件恢复到 base 等价，避免把非 sim2sim 的 keyboard/gamepad/ros2/motion reader/robot parameters/test 改动带入团队分支。
+- 保留默认关闭 C++ sim2sim debug hook。
+- 新增/保留独立 sim2sim helper：
+  - `include/sim2sim_debug/source_frame_tracker.hpp`
+  - `src/sim2sim_debug/source_frame_tracker.cpp`
+  - `include/sim2sim_debug/reference_output_fields.hpp`
+- 最小接入点：
+  - `g1_deploy_onnx_ref.cpp`：enabled 时启用 source-frame tracker 和 hook。
+  - `zmq_endpoint_interface.hpp` / `streamed_motion_merger.hpp`：streamed motion 数据接收与 `body_pos` 保留。
+  - `zmq_manager.hpp`：streamed motion start control 的最小接入。
+  - `output_interface.hpp`：enabled 时填充 raw reference fields。
+  - `state_logger` / `zmq_output_handler`：默认关闭 source-frame CSV/schema，enabled 时输出。
+
+关键修正：
+
+- 第一次 enabled 多 motion 复测发现 `body_pos` 丢失会导致 raw reference global position 退化，MPJPE-G 出现米级异常。
+- 将 `body_pos` 解码、校验、传入 `StreamedMotionMerger` 并写入 `MotionSequence` 后，enabled E2E 恢复到正常毫米级同量级结果。
+- 测试脚本加严：
+  - enabled E2E 每条 motion 必须 `num_frames >= 500`。
+  - 每条 motion 必须 `lag_frames_log_vs_gt == 0`。
+  - 每条 motion 必须满足 MPJPE 阈值。
+  - schema 捕获样例必须包含 source-frame 字段。
+
+最终测试命令与结果：
+
+```bash
+cmake --build gear_sonic_deploy/build --target g1_deploy_onnx_ref -j2
+cd gear_sonic_deploy && ./target/release/g1_deploy_onnx_ref --help | rg 'enable-sim2sim-debug|enable-csv-logs|output-type'
+bash -n gear_sonic_deploy/deploy.sh && gear_sonic_deploy/deploy.sh --help | rg 'enable-sim2sim-debug|enable-csv-logs|output-type'
+/home/lab/miniconda3/envs/sonic_eval/bin/python tmp/sim2sim_refactor/20260625_cpp_c1_final_validation/scripts/deterministic_cpp_boundary_checks.py
+g++ -std=c++20 -I gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/include \
+  tmp/sim2sim_refactor/20260625_cpp_c1_final_validation/scripts/state_logger_sim2sim_gate_test.cpp \
+  gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/src/state_logger.cpp \
+  gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/src/file_sink.cpp \
+  -o tmp/sim2sim_refactor/20260625_cpp_c1_final_validation/scripts/state_logger_sim2sim_gate_test
+tmp/sim2sim_refactor/20260625_cpp_c1_final_validation/scripts/state_logger_sim2sim_gate_test \
+  tmp/sim2sim_refactor/20260625_cpp_c1_final_validation/results/state_logger_unit
+/home/lab/miniconda3/envs/sonic_eval/bin/python tmp/sim2sim_refactor/20260625_cpp_c1_debug_hook/deterministic_full/c1_full_deterministic_validation.py
+bash tmp/sim2sim_refactor/20260625_cpp_c1_final_validation/scripts/run_enabled_multi_motion_e2e.sh
+/home/lab/miniconda3/envs/sonic_eval/bin/python tmp/sim2sim_refactor/20260625_cpp_c1_final_validation/scripts/summarize_final_validation.py
+```
+
+通过项：
+
+- build/help/deploy help：通过。
+- default-off ZMQ schema/runtime：通过，`31` keys，无 `source_frame_index` / `applied_source_frame_index`，deploy logs 无 source-frame CSV。
+- deterministic fixed replay：通过，`num_frames=995`，`lag_frames_log_vs_gt=0`。
+- StateLogger unit：通过。
+- ZMQOutputHandler schema：通过，default-off `31` keys，enabled `36` keys。
+- C++ diff allowlist gate：通过，unexpected list 为空。
+- default-off timing 多样本：通过，解析到 `43` 条 timing。
+- enabled E2E 多 motion：通过：
+  - `reach-1-001_chr00`: `735` frames, `0 lag`, MPJPE-G `112.477mm`
+  - `reach-2-003_chr00`: `1007` frames, `0 lag`, MPJPE-G `175.410mm`
+  - `reach-3-002_chr00`: `859` frames, `0 lag`, MPJPE-G `121.746mm`
+  - `reach-4-004_chr00`: `827` frames, `0 lag`, MPJPE-G `83.722mm`
+
+最终结论：
+
+- C1b 结构优化和计划内全部测试成功完成。
+- 可以按流程 commit 并 push 到 `origin`。

@@ -4,16 +4,108 @@
 
 ## 当前门禁
 
-- 当前阶段：C++ Phase C0 已完成，允许进入 C++ Phase C1 方案冻结与实现准备。
+- 当前阶段：C++ Phase C1b 已完成本地代码优化和全部计划测试，等待 commit/push。
 - Phase 1 代码提交：`3ce6143 Refactor sim2sim helpers out of mujoco base sim`
 - 已 push 远程：`origin main`
 - Phase 1 完整测试文档提交：`ce69a40 Record completed Phase 1 deterministic sim2sim validation`
 - Phase 2 提交：`26cac18 Isolate sim2sim MuJoCo hook from base simulator`
 - Phase 2 数据覆盖门禁补充提交：`ba53983 Clarify per-phase full data coverage gate`
 - Phase 3 状态：取消执行。`tools/sonic_eval/*.py` 均视为增量拓展文件，本轮不做结构优化、不修改。
-- 允许进入下一阶段：是。进入 C1 前必须先冻结 C1 文件清单、base 最小接入点、默认关闭策略、旧逻辑逐帧等价测试和性能测试命令。
-- C++/header 状态：Phase 2 未修改任何 C++/header 文件，C++ diff gate 无输出。
+- 允许进入下一阶段：本阶段 commit/push 完成后允许。当前没有未闭环测试阻塞。
+- C++/header 状态：相对 base 仓库 `/home/lab/Desktop/LHM-Robot` 的 `feat/s0_training`，C++ diff allowlist gate 通过，unexpected list 为空。
 - 未提交的无关工作区改动：`.gitignore` 中 `tasks/` ignore 规则，非 Phase 1 提交内容。
+
+## C++ Phase C1b 完成记录
+
+Run ID：`20260625_cpp_c1_final_validation`
+
+结构结论：
+
+- 已将 13 个非 hook C++/header/test 差异恢复到 base 等价，避免把 keyboard/gamepad/ros2/motion reader/robot parameters/test 等非 sim2sim 改动带入团队分支。
+- 保留默认关闭的 C++ sim2sim debug hook。
+- sim2sim 需要的 source-frame window tracking、raw reference output helper、enabled-only CSV/ZMQ 字段集中在 `sim2sim_debug` 新模块和最小接入点。
+- `streamed_motion_merger.hpp` 只保留 streamed motion 必需的 `body_pos` 承接，避免 enabled E2E raw reference 全局位置退化为零。
+
+7 项最终验证全部通过：
+
+- default-off ZMQ schema：通过，`31` keys，不含 `source_frame_index` / `applied_source_frame_index`，deploy logs 不生成对应 CSV。
+- deterministic fixed replay：通过，`num_frames=995`，`lag_frames_log_vs_gt=0`，source/applied cursor 单调且属于 fixed stream manifest。
+- StateLogger unit：通过，default-off 不生成 source-frame CSV，enabled 生成两份 CSV。
+- ZMQOutputHandler schema：通过，default-off `31` keys，enabled `36` keys。
+- C++ diff allowlist gate：通过，unexpected list 为空。
+- default-off timing 多样本：通过，解析到 `43` 条 timing，3 个 5-sample 窗口 obs-to-motor 平均值为 `536.8us`、`593.2us`、`484.6us`。
+- enabled E2E 多 motion：通过，4 条 `eval_benchmark/robot/*.pkl` 全部 `0 lag`：
+  - `reach-1-001_chr00`：`735` frames，MPJPE-G `112.477mm`。
+  - `reach-2-003_chr00`：`1007` frames，MPJPE-G `175.410mm`。
+  - `reach-3-002_chr00`：`859` frames，MPJPE-G `121.746mm`。
+  - `reach-4-004_chr00`：`827` frames，MPJPE-G `83.722mm`。
+
+下一步：
+
+- 提交并 push C1b 阶段代码与文档。
+- push 完成后，可按门禁清理本阶段 `tmp/sim2sim_refactor/20260625_cpp_c1_final_validation/results/` 中大体积原始运行日志，只保留 summary/metrics 索引或按需要压缩归档。
+
+## C++ Phase C1 Final Validation 阻塞
+
+Run ID：`20260625_cpp_c1_final_validation`
+
+已通过：
+
+- default-off ZMQ schema：通过。
+- deterministic fixed replay：通过。
+- StateLogger unit：通过。
+- ZMQOutputHandler default-off/enabled schema：通过。
+- default-off timing 多样本：通过。
+- enabled E2E 多 motion：通过，`eval_benchmark/robot` 下 4 条 motion 均 `0 lag`。
+
+未通过：
+
+- C++ diff allowlist gate：失败。
+
+阻塞原因：
+
+- C1 允许保留的 C++ 差异应集中在默认关闭 sim2sim debug hook 及最小接入点。
+- 当前分支除 hook allowlist 外，仍有 `input_interface/*`、`motion_data_reader.hpp`、`robot_parameters.hpp`、`output_interface.hpp`、`test_ros2.cpp` 等非 hook 文件与 base 不一致。
+- 这不满足“尽量不要修改 base C++ 文件、避免影响真机部署和时延”的核心目标。
+
+下一步：
+
+- 逐文件移除或迁移上述非 hook C++ diff。用户确认这些文件也必须遵循“整体迁出到新 C++ 文件”的原则：
+  - 不允许把 source-frame、stream debug、teleop latency、pause/stop 行为改动继续散落在 base 原文件中。
+  - 需要保留的 sim2sim 功能必须整体迁入 `sim2sim_debug` 相关新增 C++ 文件。
+  - 不属于 sim2sim 必需功能的热路径改动恢复到 base 等价。
+- 保留默认关闭 C++ sim2sim debug hook 的最小接入。
+- 重跑 C1 final validation 全部 7 项测试。
+- 只有 7 项全部通过后，才能 commit/push 并标记阶段完成。
+
+## C++ Phase C1b 迁出规则
+
+C1b 目标：
+
+- 不扩大 C++ allowlist。
+- 将 13 个非 hook 文件中的 sim2sim/source-frame/stream debug 逻辑整体迁出到新增 C++ 模块。
+- 原 base 文件只保留最小接入点；不能在原文件中保留大段 sim2sim 专属逻辑。
+
+初步分类：
+
+- 需要迁出到新 C++ 模块：
+  - source-frame 查询链路：`InputInterface::GetSourceFrameIndex`、`InterfaceManager::GetSourceFrameIndex`、`ZMQManager::GetSourceFrameIndex`、`ZMQEndpointInterface::GetSourceFrameIndex`。
+  - source-frame 存储链路：`MotionSequence::SourceFrameIndices`、`StreamedMotionMerger` 写入/复制 source-frame indices。
+  - streamed body position debug 数据：`StreamedMotionMerger::IncomingData::body_pos` 及复制逻辑。
+  - raw reference ZMQ output fields：`ref_base_trans_raw`、`ref_base_quat_raw`、`ref_body_q_raw`。
+- 应恢复到 base 等价，除非后续证明是 sim2sim 必需：
+  - keyboard/gamepad/ros2/zmq 中 `pause_control` 删除、`O/X/S/Q` 语义变化。
+  - `teleop_latency_logger.hpp` 删除及 ZMQ latency cap 参数变化。
+  - `DEBUG_LOGGING=true` 默认变化。
+  - motion reset 时从 temporary motion 改回 reader shared motion 的行为变化。
+  - `HG_BMS_STATE_TOPIC` 删除。
+  - `test_ros2.cpp` include 清理。
+
+C1b 测试门禁：
+
+- C++ diff allowlist gate 必须通过：非 hook 文件不能再出现在 unexpected list。
+- C1 final validation 7 项全部重跑且全部通过。
+- 如果 C1b 为保持 enabled sim2sim 功能新增独立 C++ 文件，这些文件必须只在 `--enable-sim2sim-debug` 或 sim2sim 专用路径中启用。
 
 ## 数据覆盖门禁
 

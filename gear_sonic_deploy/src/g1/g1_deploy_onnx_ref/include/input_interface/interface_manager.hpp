@@ -262,13 +262,6 @@ class InterfaceManager : public InputInterface {
       return InputInterface::GetExternalTokenState();  // Fallback to base class
     }
 
-    std::optional<int64_t> GetSourceFrameIndex(const MotionSequence* current_motion, int current_frame) const override {
-      if (current_) {
-        return current_->GetSourceFrameIndex(current_motion, current_frame);
-      }
-      return std::nullopt;
-    }
-
     /// Forward raw wireless-remote byte buffer to the internal Gamepad instance.
     /// Called by the Unitree SDK callback whenever new joystick data arrives.
     void UpdateGamepadRemoteData(const uint8_t* buff, size_t size) {
@@ -399,4 +392,3 @@ class InterfaceManager : public InputInterface {
 };
 
 #endif // INTERFACE_MANAGER_HPP
-
