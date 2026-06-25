@@ -256,6 +256,7 @@ tmp/
 eval_benchmark/
 .CLAUDE.md
 .AGENTS.md
+AGENTS.md
 .codex
 .claude/
 .agents/
@@ -271,3 +272,4 @@ data_0506/data_0418/
 data_0424/
 data_0424
 data_0506/
+tasks/
