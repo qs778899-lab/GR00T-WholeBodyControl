@@ -619,3 +619,124 @@ metrics replay 结果：
 - C0 计划内测试全部成功完成。
 - C0 没有修改 C++/header。
 - 允许进入 C1，但 C1 必须先冻结文件清单、最小接入点、默认关闭策略、旧逻辑逐帧等价测试和性能测试命令。
+
+## 2026-06-25 C++ Phase C1 执行完成
+
+Run ID：`20260625_cpp_c1_debug_hook`
+
+本阶段改动：
+
+- 新增默认关闭的 C++ sim2sim debug hook：
+  - `gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/include/sim2sim_debug/sim2sim_debug.hpp`
+  - `gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/src/sim2sim_debug/sim2sim_debug.cpp`
+- `g1_deploy_onnx_ref.cpp` 只保留最小接入点：解析 `--enable-sim2sim-debug`、创建 hook、在 enabled 时才执行 source-frame 查询和 applied-source update。
+- `StateLogger` 的 source-frame CSV sink 和写入默认关闭。
+- `ZMQOutputHandler` 的 source-frame 字段默认不进入 `g1_debug` schema。
+- `deploy.sh` 增加 `--enable-sim2sim-debug` 转发。
+
+构建与入口测试：
+
+```bash
+cmake -S gear_sonic_deploy -B gear_sonic_deploy/build
+cmake --build gear_sonic_deploy/build --target g1_deploy_onnx_ref -j2
+cd gear_sonic_deploy && ./target/release/g1_deploy_onnx_ref --help | rg 'enable-sim2sim-debug|enable-csv-logs|output-type'
+bash -n gear_sonic_deploy/deploy.sh
+gear_sonic_deploy/deploy.sh --help | rg 'enable-sim2sim-debug|enable-csv-logs|output-type'
+```
+
+结果：全部通过。
+
+静态隔离检查：
+
+- `GetSourceFrameIndex(...)` 只在 `sim2sim_debug_hook_->Enabled()` 后调用。
+- `UpdateAppliedSourceFrameIndex(...)` 只在 enabled block 内调用。
+- `StateLogger` source-frame CSV sink 使用 `enable_csv && enable_sim2sim_debug`。
+- ZMQ source-frame fields 只在 `enable_sim2sim_debug_` 时 pack。
+- `deploy.sh` 转发 `--enable-sim2sim-debug`。
+
+结果：通过。
+
+确定性 replay：
+
+```bash
+/home/lab/miniconda3/envs/sonic_eval/bin/python \
+  tmp/sim2sim_refactor/20260625_cpp_c1_debug_hook/deterministic_full/c1_full_deterministic_validation.py
+```
+
+执行说明：
+
+- 第一次误用系统 Python，失败：`ModuleNotFoundError: No module named 'pandas'`。
+- 使用 `sonic_eval` 环境重跑，通过。
+
+结果：
+
+- `old_new_unpack_equal=true`
+- `sent_frames=1130`
+- `step_sync_rows_filtered=995`
+- `source_frame_valid_rows=995`
+- `reference_pose_exact_hits=995`
+- `reference_pose_misses=0`
+- `lag_frames_log_vs_gt=0`
+- 数据 manifest smoke：`robot=19/19`，`smpl=27/27`，`smpl_filtered=4/4`。
+
+fixed-log metrics replay：
+
+- `num_frames=995`
+- `alignment.lag_frames_log_vs_gt=0`
+- `alignment.step_sync_rows=995`
+- `alignment.source_frame_valid_rows=995`
+
+enabled E2E strict alignment：
+
+- domain：`122`
+- pose port：`5926`
+- debug port：`5918`
+- motion：`eval_benchmark/robot_test/reach-2-003_chr00.pkl`
+- deploy：显式传入 `--enable-sim2sim-debug`
+
+结果：
+
+- `num_frames=769`
+- `alignment.lag_frames_log_vs_gt=0`
+- `alignment.source_frame_valid_rows=769`
+- `alignment.step_sync_rows=769`
+- `metrics_all.mpjpe_g=95.7565672488709`
+- `metrics_all.mpjpe_l=37.10884109482132`
+- `metrics_all.mpjpe_pa=30.266596272019257`
+
+默认关闭 runtime smoke：
+
+- 前两次配置不计为通过：
+  - `default_off_smoke`：deploy 在完成 control loop 初始化前被 timeout 中断。
+  - `default_off_smoke_rerun`：deploy 完成初始化但未发送 stream，没有产生 policy loop timing。
+- 最终有效测试：`default_off_stream_smoke`
+  - domain：`125`
+  - pose port：`5986`
+  - debug port：`5978`
+  - deploy：不传 `--enable-sim2sim-debug`
+  - streamer：`eval_benchmark/robot_test/reach-2-003_chr00.pkl`
+
+结果：
+
+- deploy logs 中没有 `source_frame_index.csv` 或 `applied_source_frame_index.csv`。
+- stdout 未出现 `sim2sim debug hook enabled`。
+- 控制循环进入 policy path，代表性样本：
+  - `Obs: 335us, Policy: 81us, Obs 2 Motor Command: 417us, Post processing: 221us`
+  - `Obs: 496us, Policy: 95us, Obs 2 Motor Command: 592us, Post processing: 53us`
+  - `Obs: 418us, Policy: 143us, Obs 2 Motor Command: 561us, Post processing: 30us`
+  - `Obs: 412us, Policy: 92us, Obs 2 Motor Command: 504us, Post processing: 36us`
+  - `Obs: 388us, Policy: 94us, Obs 2 Motor Command: 482us, Post processing: 88us`
+
+进程清理：
+
+- domain `122`、`125`，ports `5918/5926/5978/5986` 对应 sim/deploy/streamer 进程已停止。
+
+阶段报告：
+
+- `tasks/sim2sim_structure_refactor/cpp_phase_c1_test_report.md`
+
+结论：
+
+- C1 计划内测试全部成功完成。
+- 默认关闭路径不再产生 source-frame CSV，也不执行 source-frame 查询/更新。
+- 显式 enabled 路径 strict alignment 为 `0 lag`，保持原 sim2sim 时间帧对齐逻辑。

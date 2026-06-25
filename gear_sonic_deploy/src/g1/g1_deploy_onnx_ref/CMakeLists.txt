@@ -38,7 +38,7 @@ else()
   message(FATAL_ERROR "msgpack not found. Install libmsgpack-dev (Ubuntu/Debian) or msgpack-cxx (Arch) or msgpack-devel (RHEL/CentOS)")
 endif()
 
-file(GLOB_RECURSE PROJECT_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
+file(GLOB_RECURSE PROJECT_SRCS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
 list(REMOVE_ITEM PROJECT_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/src/g1_deploy_onnx_ref.cpp)
 
 

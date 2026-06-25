@@ -31,7 +31,7 @@ std::optional<std::map<std::string, std::variant<std::string, int, double, bool>
   return robot_config_;
 }
 
-StateLogger::StateLogger(std::string csv_dir, size_t ring_capacity, int num_joints, int num_actions, double dt_seconds, bool enable_csv, std::map<std::string, std::variant<std::string, int, double, bool>> robot_config)
+StateLogger::StateLogger(std::string csv_dir, size_t ring_capacity, int num_joints, int num_actions, double dt_seconds, bool enable_csv, std::map<std::string, std::variant<std::string, int, double, bool>> robot_config, bool enable_sim2sim_debug)
   : dt{dt_seconds},
   csv_path_(getLogsDir(enable_csv, csv_dir)),
   capacity_(ring_capacity > 0 ? ring_capacity : 1),
@@ -39,6 +39,7 @@ StateLogger::StateLogger(std::string csv_dir, size_t ring_capacity, int num_join
   configured_num_joints_(num_joints),
   configured_num_actions_(num_actions),
   enable_csv_(enable_csv),
+  enable_sim2sim_debug_(enable_sim2sim_debug),
 
   sink_base_quat_(enable_csv, csv_path_, "base_quat", "base_q", FileSink::HeaderType::QUATERNION),
   sink_base_ang_vel_(enable_csv, csv_path_, "base_ang_vel", "base_w", FileSink::HeaderType::XYZ),
@@ -61,8 +62,8 @@ StateLogger::StateLogger(std::string csv_dir, size_t ring_capacity, int num_join
   sink_token_state_(enable_csv, csv_path_, "token_state", "token", FileSink::HeaderType::VECTOR),
   sink_encoder_mode_(enable_csv, csv_path_, "encoder_mode", "encoder_mode", FileSink::HeaderType::VECTOR),
   sink_motion_playing_(enable_csv, csv_path_, "motion_playing", "playing", FileSink::HeaderType::VECTOR),
-  sink_source_frame_index_(enable_csv, csv_path_, "source_frame_index", "source_frame_index", FileSink::HeaderType::VECTOR),
-  sink_applied_source_frame_index_(enable_csv, csv_path_, "applied_source_frame_index", "applied_source_frame_index", FileSink::HeaderType::VECTOR),
+  sink_source_frame_index_(enable_csv && enable_sim2sim_debug, csv_path_, "source_frame_index", "source_frame_index", FileSink::HeaderType::VECTOR),
+  sink_applied_source_frame_index_(enable_csv && enable_sim2sim_debug, csv_path_, "applied_source_frame_index", "applied_source_frame_index", FileSink::HeaderType::VECTOR),
 
   robot_config_(std::move(robot_config)) {
   // Open motion_name CSV file
@@ -179,6 +180,9 @@ bool StateLogger::LogPostState(const std::span<double>& token_state,
 }
 
 bool StateLogger::UpdateAppliedSourceFrameIndex(int64_t applied_source_frame_index) {
+  if (!enable_sim2sim_debug_) {
+    return true;
+  }
   std::lock_guard<std::mutex> lock(ring_mutex_);
   if (size_ == 0) {
     return false;
@@ -373,18 +377,20 @@ void StateLogger::appendTokenStateToCSV_(const Entry& e) {
   std::array<double, 1> motion_playing_arr = {e.play ? 1.0 : 0.0};
   sink_motion_playing_.writeLine(e.index, t_ms, t_realtime_ms, t_monotonic_ms, e.ros_timestamp, std::span(motion_playing_arr));
 
-  // Write source frame index (convert int64 to double for FileSink)
-  std::array<double, 1> source_frame_idx_arr = {static_cast<double>(e.source_frame_index)};
-  sink_source_frame_index_.writeLine(e.index, t_ms, t_realtime_ms, t_monotonic_ms, e.ros_timestamp, std::span(source_frame_idx_arr));
+  if (enable_sim2sim_debug_) {
+    // Write source frame index (convert int64 to double for FileSink)
+    std::array<double, 1> source_frame_idx_arr = {static_cast<double>(e.source_frame_index)};
+    sink_source_frame_index_.writeLine(e.index, t_ms, t_realtime_ms, t_monotonic_ms, e.ros_timestamp, std::span(source_frame_idx_arr));
 
-  std::array<double, 1> applied_source_frame_idx_arr = {static_cast<double>(e.applied_source_frame_index)};
-  sink_applied_source_frame_index_.writeLine(
-      e.index,
-      t_ms,
-      t_realtime_ms,
-      t_monotonic_ms,
-      e.ros_timestamp,
-      std::span(applied_source_frame_idx_arr));
+    std::array<double, 1> applied_source_frame_idx_arr = {static_cast<double>(e.applied_source_frame_index)};
+    sink_applied_source_frame_index_.writeLine(
+        e.index,
+        t_ms,
+        t_realtime_ms,
+        t_monotonic_ms,
+        e.ros_timestamp,
+        std::span(applied_source_frame_idx_arr));
+  }
   
   // Write motion name to separate file (custom string handling)
   writeMotionNameLine_(e.index, t_ms, t_realtime_ms, t_monotonic_ms, e.ros_timestamp, e.motion_name);

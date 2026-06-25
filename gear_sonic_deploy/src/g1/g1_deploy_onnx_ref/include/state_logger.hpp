@@ -144,7 +144,8 @@ class StateLogger {
    * @param robot_config   Optional robot configuration map (model paths, frequencies, etc.) - immutable after construction
    */
   StateLogger(std::string csv_dir, size_t ring_capacity, int num_joints = -1, int num_actions = -1, double dt_seconds = 0.0, bool enable_csv = true,
-              std::map<std::string, std::variant<std::string, int, double, bool>> robot_config = {});
+              std::map<std::string, std::variant<std::string, int, double, bool>> robot_config = {},
+              bool enable_sim2sim_debug = false);
 
   // Non-copyable, movable
   StateLogger(const StateLogger&) = delete;
@@ -193,6 +194,8 @@ class StateLogger {
                     int64_t source_frame_index = -1);
 
   bool UpdateAppliedSourceFrameIndex(int64_t applied_source_frame_index = -1);
+  bool sim2sim_debug_enabled() const { return enable_sim2sim_debug_; }
+  const std::string& csv_path() const { return csv_path_; }
 
   size_t capacity() const;
   size_t size() const;
@@ -227,6 +230,7 @@ class StateLogger {
   int configured_num_joints_ = -1;
   int configured_num_actions_ = -1;
   bool enable_csv_ = true;
+  bool enable_sim2sim_debug_ = false;
 
   // Ring buffer state
   mutable std::mutex ring_mutex_;

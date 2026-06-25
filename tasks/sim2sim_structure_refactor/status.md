@@ -249,3 +249,39 @@ Phase 2 退出标准：
 - C++/header diff 为空。
 - 文档记录命令、环境、结果、失败原因或差异解释。
 - commit 并只 push 到 `origin main`。
+
+## C++ Phase C1 Status
+
+状态：完成，允许提交和 push。
+
+Run ID：`20260625_cpp_c1_debug_hook`
+
+改动范围：
+
+- 新增 `sim2sim_debug` C++ hook 文件。
+- 默认关闭 `g1_deploy_onnx_ref` 中的 source-frame 查询、applied-source update、source-frame CSV、ZMQ source-frame fields。
+- 通过 `--enable-sim2sim-debug` 显式恢复 sim2sim debug 输出。
+- `deploy.sh` 支持转发该开关。
+
+测试结论：
+
+- C++ build/help：通过。
+- `deploy.sh` syntax/help：通过。
+- 静态默认关闭 gate：通过。
+- 确定性 replay：通过，`995` rows，`lag_frames_log_vs_gt=0`。
+- fixed-log metrics replay：通过，`995` rows，`lag_frames_log_vs_gt=0`。
+- enabled E2E：通过，`769` rows，`lag_frames_log_vs_gt=0`。
+- default-off stream smoke：通过，无 source-frame CSV，loop timing 同量级。
+
+关键产物：
+
+- `tasks/sim2sim_structure_refactor/cpp_phase_c1_test_report.md`
+- `tmp/sim2sim_refactor/20260625_cpp_c1_debug_hook/deterministic_full/phase1_full_deterministic_validation_summary.json`
+- `tmp/sim2sim_refactor/20260625_cpp_c1_debug_hook/deterministic_full/metrics_replay_from_fixed_logs.json`
+- `tmp/sim2sim_refactor/20260625_cpp_c1_debug_hook/e2e_hook_results/summary.json`
+- `tmp/sim2sim_refactor/20260625_cpp_c1_debug_hook/default_off_stream_smoke/summary.json`
+
+注意：
+
+- `default_off_smoke` 和 `default_off_smoke_rerun` 是测试配置不足，不作为通过结果；最终有效结果是 `default_off_stream_smoke`。
+- C1 后进入 C2 前必须先 commit 并只 push 到 `origin`。

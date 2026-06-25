@@ -218,6 +218,7 @@ show_usage() {
     echo "  --target-motion-logfile PATH  Write target motion CSV for debugging"
     echo "  --policy-input-logfile PATH   Write policy/encoder input CSV for debugging"
     echo "  --enable-motion-recording     Record streamed/planner target motions"
+    echo "  --enable-sim2sim-debug        Enable sim2sim source-frame debug hook (default: off)"
     echo ""
     echo "Interface modes:"
     echo "  sim              Use loopback interface for simulation (MuJoCo)"
@@ -256,6 +257,7 @@ LOGS_DIR_DEFAULT=""
 TARGET_MOTION_LOGFILE_DEFAULT=""
 POLICY_INPUT_LOGFILE_DEFAULT=""
 ENABLE_MOTION_RECORDING_DEFAULT="false"
+ENABLE_SIM2SIM_DEBUG_DEFAULT="false"
 
 # Initialize with defaults (will be set after parsing)
 CHECKPOINT="$CHECKPOINT_DEFAULT"
@@ -272,6 +274,7 @@ LOGS_DIR="$LOGS_DIR_DEFAULT"
 TARGET_MOTION_LOGFILE="$TARGET_MOTION_LOGFILE_DEFAULT"
 POLICY_INPUT_LOGFILE="$POLICY_INPUT_LOGFILE_DEFAULT"
 ENABLE_MOTION_RECORDING="$ENABLE_MOTION_RECORDING_DEFAULT"
+ENABLE_SIM2SIM_DEBUG="$ENABLE_SIM2SIM_DEBUG_DEFAULT"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -382,6 +385,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --enable-motion-recording)
             ENABLE_MOTION_RECORDING="true"
+            shift
+            ;;
+        --enable-sim2sim-debug)
+            ENABLE_SIM2SIM_DEBUG="true"
             shift
             ;;
         sim|real)
@@ -631,6 +638,9 @@ fi
 if [[ "$ENABLE_MOTION_RECORDING" == "true" ]]; then
 echo -e "  Motion Recording:   ${GREEN}enabled${NC}"
 fi
+if [[ "$ENABLE_SIM2SIM_DEBUG" == "true" ]]; then
+echo -e "  Sim2Sim Debug:      ${GREEN}enabled${NC}"
+fi
 if [[ -n "$EXTRA_ARGS" ]]; then
 echo -e "  Extra Args:         ${GREEN}$EXTRA_ARGS${NC}"
 fi
@@ -661,6 +671,9 @@ echo -e "${BLUE}    --policy-input-logfile $POLICY_INPUT_LOGFILE \\${NC}"
 fi
 if [[ "$ENABLE_MOTION_RECORDING" == "true" ]]; then
 echo -e "${BLUE}    --enable-motion-recording \\${NC}"
+fi
+if [[ "$ENABLE_SIM2SIM_DEBUG" == "true" ]]; then
+echo -e "${BLUE}    --enable-sim2sim-debug \\${NC}"
 fi
 if [[ -n "$EXTRA_ARGS" ]]; then
 echo -e "${BLUE}    $EXTRA_ARGS${NC}"
@@ -708,6 +721,9 @@ if [[ "$confirm" =~ ^[Yy]$ ]] || [[ -z "$confirm" ]]; then
     fi
     if [[ "$ENABLE_MOTION_RECORDING" == "true" ]]; then
         DEPLOY_CMD+=(--enable-motion-recording)
+    fi
+    if [[ "$ENABLE_SIM2SIM_DEBUG" == "true" ]]; then
+        DEPLOY_CMD+=(--enable-sim2sim-debug)
     fi
 
     # shellcheck disable=SC2086  # EXTRA_ARGS may contain multiple flags by design

@@ -129,9 +129,10 @@ public:
      * @param port    TCP port to bind the PUB socket to (e.g. 5557).
      * @param topic   Topic prefix prepended to each published message.
      */
-    explicit ZMQOutputHandler(StateLogger& logger, int port, const std::string& topic) 
+    explicit ZMQOutputHandler(StateLogger& logger, int port, const std::string& topic, bool enable_sim2sim_debug = false) 
         : OutputInterface(logger), realtime_debug_context_(1), topic_(topic),
-          robot_config_topic_("robot_config") {
+          robot_config_topic_("robot_config"),
+          enable_sim2sim_debug_(enable_sim2sim_debug) {
 
         std::cout << "Initializing realtime debug socket" << std::endl;
         std::cout << "Binding to port: " << port << " and topic: " << topic_ << std::endl;
@@ -235,6 +236,7 @@ private:
 
     std::string topic_;              ///< User-provided topic name (e.g. "g1_debug") for combined state+viz.
     std::string robot_config_topic_; ///< Topic for robot config messages.
+    bool enable_sim2sim_debug_ = false;
 
     msgpack::sbuffer state_data_sbuf_;  ///< Reused each tick; cleared in pack_combined_state().
 
@@ -279,9 +281,12 @@ private:
             has_heading_state = true;
         }
 
-        // State-logger fields: 20 base + 2 optional heading
+        // State-logger fields: 18 base + 2 optional heading + 2 optional sim2sim debug fields.
         // Visualisation fields: output_data_map_.size() (typically 11)
-        int num_state_fields = has_heading_state ? 22 : 20;
+        int num_state_fields = has_heading_state ? 20 : 18;
+        if (enable_sim2sim_debug_) {
+            num_state_fields += 2;
+        }
         int num_viz_fields = static_cast<int>(output_data_map_.size());
         pk.pack_map(num_state_fields + num_viz_fields);
 
@@ -296,11 +301,13 @@ private:
         pk.pack("ros_timestamp");
         pk.pack(state.ros_timestamp);
 
-        pk.pack("source_frame_index");
-        pk.pack(state.source_frame_index);
+        if (enable_sim2sim_debug_) {
+            pk.pack("source_frame_index");
+            pk.pack(state.source_frame_index);
 
-        pk.pack("applied_source_frame_index");
-        pk.pack(state.applied_source_frame_index);
+            pk.pack("applied_source_frame_index");
+            pk.pack(state.applied_source_frame_index);
+        }
 
         pk.pack("base_quat");
         pk.pack_array(4);

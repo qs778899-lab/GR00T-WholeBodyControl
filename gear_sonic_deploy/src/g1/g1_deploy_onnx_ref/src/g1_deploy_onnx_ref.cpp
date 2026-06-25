@@ -123,6 +123,7 @@
 
 #include <cuda_runtime.h>
 #include "../include/state_logger.hpp"
+#include "../include/sim2sim_debug/sim2sim_debug.hpp"
 
 // Encoder
 #include "../include/encoder.hpp"
@@ -338,6 +339,7 @@ class G1Deploy {
 
     // State logger
     std::unique_ptr<StateLogger> state_logger_;
+    std::unique_ptr<Sim2SimDebugHook> sim2sim_debug_hook_;
     
     // Output interfaces (supports multiple simultaneous outputs)
     std::vector<std::unique_ptr<OutputInterface>> output_interfaces_;
@@ -2158,6 +2160,7 @@ class G1Deploy {
       int zmq_out_port = 5608,
       std::string zmq_out_topic = "g1_debug",
       bool enable_motion_recording = false,
+      bool enable_sim2sim_debug = false,
       std::array<double, 3> initial_compliance = {0.05, 0.05, 0.0},
       double initial_max_close_ratio = 1.0,
       int dds_domain_id = 0)
@@ -2441,11 +2444,24 @@ class G1Deploy {
         std::string resolved_logs_dir = logs_dir;
         // dt is control_dt_; pass complete robot_config to constructor
         state_logger_ = std::make_unique<StateLogger>(resolved_logs_dir, 10000, G1_NUM_MOTOR, G1_NUM_MOTOR, 
-                                                       control_dt_, enable_csv_logs, robot_config);
+                                                       control_dt_, enable_csv_logs, robot_config, enable_sim2sim_debug);
       } catch (const std::exception& e) {
         std::cerr << "[ERROR] Failed to initialize state logger: " << e.what() << std::endl;
         std::cerr << "State logger is required for operation. Exiting..." << std::endl;
         throw;  // Re-throw to stop program initialization
+      }
+
+      Sim2SimDebugConfig sim2sim_debug_config;
+      sim2sim_debug_config.enabled = enable_sim2sim_debug;
+      sim2sim_debug_config.write_csv = enable_csv_logs;
+      sim2sim_debug_config.publish_zmq = enable_sim2sim_debug && (output_type == "zmq" || output_type == "all");
+      sim2sim_debug_config.logs_dir = state_logger_->csv_path();
+      sim2sim_debug_hook_ = std::make_unique<Sim2SimDebugHook>(sim2sim_debug_config);
+      if (sim2sim_debug_hook_->Enabled()) {
+        std::cout << "[INFO] sim2sim debug hook enabled"
+                  << " (csv=" << (sim2sim_debug_hook_->WriteCsv() ? "on" : "off")
+                  << ", zmq=" << (sim2sim_debug_hook_->PublishZmq() ? "on" : "off")
+                  << ")" << std::endl;
       }
 
       // Initialize input interface based on type
@@ -2554,7 +2570,8 @@ class G1Deploy {
 #endif
 
       if (create_zmq) {
-        auto zmq_handler = std::make_unique<ZMQOutputHandler>(*state_logger_, zmq_out_port, zmq_out_topic);
+        auto zmq_handler = std::make_unique<ZMQOutputHandler>(
+            *state_logger_, zmq_out_port, zmq_out_topic, sim2sim_debug_hook_ && sim2sim_debug_hook_->PublishZmq());
         std::cout << "Initialized ZMQ output interface" << std::endl;
         // Publish robot config so subscribers can receive it before control loop starts
         zmq_handler->publish_config();
@@ -3973,11 +3990,12 @@ class G1Deploy {
           if (state_logger_) {
             std::string motion_name = current_motion_copy ? current_motion_copy->name : "";
             int64_t source_frame_index = -1;
-            if (input_interface_) {
+            if (sim2sim_debug_hook_ && sim2sim_debug_hook_->Enabled() && input_interface_) {
               auto maybe_source_idx = input_interface_->GetSourceFrameIndex(current_motion_copy.get(), current_frame_copy);
               if (maybe_source_idx.has_value()) {
                 source_frame_index = *maybe_source_idx;
               }
+              sim2sim_debug_hook_->OnControlTickObserved(counter_, current_frame_copy, source_frame_index);
             }
             if (!state_logger_->LogPostState(
                   std::span(token_state_data_),
@@ -3999,15 +4017,16 @@ class G1Deploy {
           }
           if (state_logger_) {
             int64_t applied_source_frame_index = -1;
-            if (input_interface_) {
+            if (sim2sim_debug_hook_ && sim2sim_debug_hook_->Enabled() && input_interface_) {
               auto maybe_applied_source_idx =
                   input_interface_->GetSourceFrameIndex(current_motion_copy.get(), current_frame_copy);
               if (maybe_applied_source_idx.has_value()) {
                 applied_source_frame_index = *maybe_applied_source_idx;
               }
-            }
-            if (!state_logger_->UpdateAppliedSourceFrameIndex(applied_source_frame_index)) {
-              std::cerr << "[WARNING] Failed to update applied_source_frame_index in state logger" << std::endl;
+              sim2sim_debug_hook_->OnControlTickApplied(counter_, applied_source_frame_index);
+              if (!state_logger_->UpdateAppliedSourceFrameIndex(applied_source_frame_index)) {
+                std::cerr << "[WARNING] Failed to update applied_source_frame_index in state logger" << std::endl;
+              }
             }
           }
           auto motor_command_end_time = std::chrono::steady_clock::now();
@@ -4194,6 +4213,7 @@ int main(int argc, char const* argv[]) {
     std::cout << "  --logs-dir <path>: optional logs output base directory (default: logs/<timestamp>/)" << std::endl;
     std::cout << "  --enable-csv-logs: enable writing CSV logs (default: OFF)" << std::endl;
     std::cout << "  --enable-motion-recording: enable motion recording for ZMQ/planner (default: OFF)" << std::endl;
+    std::cout << "  --enable-sim2sim-debug: enable sim2sim source-frame debug hook (default: OFF)" << std::endl;
     std::cout << "  --set-compliance <value>: set initial VR 3-point compliance (0.01=rigid, 0.5=compliant; default: [0.5, 0.5, 0.0])" << std::endl;
     std::cout << "                                 Can specify 1 value (both hands) or 3 values (left_wrist,right_wrist,head)" << std::endl;
     std::cout << "                                 Keyboard controls: g/h = left hand +/- 0.1, b/v = right hand +/- 0.1" << std::endl;
@@ -4239,6 +4259,7 @@ int main(int argc, char const* argv[]) {
   bool zmq_conflate = false;  // default off; enable with --zmq-conflate
   bool zmq_verbose = false;
   bool enableMotionRecording = false;  // default off; enable with --enable-motion-recording
+  bool enableSim2SimDebug = false;  // default off; enable with --enable-sim2sim-debug
   int zmq_out_port = 5608;
   std::string zmq_out_topic = "g1_debug";
   int dds_domain_id = 0;
@@ -4429,6 +4450,9 @@ int main(int argc, char const* argv[]) {
     } else if (std::string(argv[i]) == "--enable-motion-recording") {
       enableMotionRecording = true;
       std::cout << "[INFO] Motion recording enabled" << std::endl;
+    } else if (std::string(argv[i]) == "--enable-sim2sim-debug") {
+      enableSim2SimDebug = true;
+      std::cout << "[INFO] sim2sim debug hook enabled" << std::endl;
     } else if (std::string(argv[i]) == "--set-compliance") {
       if (i + 1 < argc) {
         // Parse compliance values (can be 1 or 3 values)
@@ -4511,10 +4535,11 @@ int main(int argc, char const* argv[]) {
     zmq_verbose,
     zmq_out_port,
     zmq_out_topic,
-      enableMotionRecording,
-      initial_compliance,
-      initial_max_close_ratio,
-      dds_domain_id
+    enableMotionRecording,
+    enableSim2SimDebug,
+    initial_compliance,
+    initial_max_close_ratio,
+    dds_domain_id
   );
   std::cout << "[DEBUG] G1Deploy object created successfully!" << std::endl;
   
