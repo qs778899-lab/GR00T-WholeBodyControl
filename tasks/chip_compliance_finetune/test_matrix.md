@@ -69,7 +69,7 @@ Run from the repository root. These commands include the inherited Phase 1 check
    PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s gear_sonic/tests/compliance -p 'test_*.py' -v
    ```
 
-   Required result: 45 tests pass. The repository's portable `.venv_sim` run has four expected CUDA/Hydra skips; a CPU environment with Hydra installed has only the two CUDA skips. The suite covers CPU shape alignment, separate typed index spaces, arbitrary site sets, deterministic CHIP-faithful discrete compliance sampling, non-zero yaw/full-rotation frame and CHIP-sign checks, non-mutation, pulse scheduling, activation-edge damper seeding, full/partial reset, inactive-site masking, per-step net-wrench limiting, body-local wrench conversion, disabled writer ownership, and production-source fast-path routing.
+   Required result: every discovered test passes. The current regression run discovers 65 tests with 12 expected CUDA/Hydra skips because preserved Phase 3 work is also present; the Phase 2-only subset contains 52 tests with seven expected skips. The suite covers CPU shape alignment, separate typed index spaces, arbitrary site sets, deterministic CHIP-faithful discrete compliance sampling, non-zero yaw/full-rotation frame and CHIP-sign checks, non-mutation, command-owned private-RNG pulse countdowns, exact global CPU/CUDA RNG preservation while disabled, deterministic partial reset, explicit runtime enable/disable without mutating static config, immediate state/countdown cancellation, selected-body-only writer clearing with unrelated composer-row preservation, activation-edge damper seeding, inactive-site masking, fixed-shape pulse completion, per-step net-wrench limiting, body-local wrench conversion, release interval-event parity, strict/public versus prevalidated parity, and production-source fast-path routing without dynamic due indices.
 
 2. Full `sonic_backup` CPU/CUDA/Hydra suite
 
@@ -85,9 +85,9 @@ Run from the repository root. These commands include the inherited Phase 1 check
        -m unittest discover -s gear_sonic/tests/compliance -p 'test_*.py' -v
    ```
 
-   Required result: all 45 tests pass with no skip. The Hydra tests must compose only the derived compliance experiment and resolve both full and partial runtime body-name sets without fixed indices.
+   Required result: every discovered test passes with no skip (65/65 in the current regression run). The Hydra tests must compose only the derived compliance experiment, prove its interval-event set and ranges exactly match the release experiment, and resolve both full and partial runtime body-name sets without fixed indices.
 
-3. Dedicated CUDA host-sync profiler assertion
+3. Dedicated portable CUDA scale-profiler assertion
 
    ```bash
    env LD_LIBRARY_PATH="${_CHIP_PHASE2_CUDA_LIB}" \
@@ -96,11 +96,11 @@ Run from the repository root. These commands include the inherited Phase 1 check
        PYTHONDONTWRITEBYTECODE=1 \
        /home/lab/miniconda3/envs/sonic_backup/bin/python \
        -m unittest \
-       gear_sonic.tests.compliance.test_sonic_phase2_adapter.HotPathHostSyncTest.test_cuda_prevalidated_hot_path_does_not_extract_scalars \
+       gear_sonic.tests.compliance.test_sonic_phase2_adapter.HotPathHostSyncTest.test_cuda_bound_compute_has_no_dynamic_indices_or_scalar_extraction \
        -v
    ```
 
-   Required result: one test passes. Both `TorchDispatchMode` and `torch.profiler` must observe no `aten::_local_scalar_dense` in the prevalidated production path.
+   Required result: one test passes. At 4096 environments and 14 configurable sites, both `TorchDispatchMode` and `torch.profiler` call the portable mixin's bound `compute(dt)` with deterministic tensor fixtures and a fake articulation/composer. The scale audit executes countdown → fixed-size candidate sampling → due/start masks → state update → pulse completion → resultant-wrench limit → body-local adapter → damper update. The trace must contain neither `aten::nonzero` nor `aten::_local_scalar_dense`; disabled compute must consume no private/global RNG, and enabled compute must preserve the process-global CPU/CUDA RNG states exactly. This test complements, but does not substitute for, the real Isaac-bound smoke below.
 
 4. One-environment disabled and enabled simulator smokes
 
@@ -127,7 +127,7 @@ Run from the repository root. These commands include the inherited Phase 1 check
        --smpl-motion-dir "${_CHIP_PHASE2_SMPL}"
    ```
 
-   Both runs must print `CHIP_PHASE2_SMOKE_PASS`. Disabled mode must keep the writer inactive and report zero applied wrench. Enabled mode must observe a non-zero wrench, reconstruct the world force from the composer's current body-local rows, verify local offset torque, and report actual peak net force/torque below configured limits. After 100 enabled steps it must switch the same command to disabled for two steps: the first clears ownership/selected composer rows, the second keeps ownership false and those rows zero. Reset must then clear all command and damper state.
+   Both runs must print `CHIP_PHASE2_SMOKE_PASS`. Disabled mode must first complete all 100 steps with the writer inactive, zero applied wrench, infinite command-owned pulse countdowns, and exact process-global CPU/CUDA RNG preservation. Only after those checks pass, the same real AppLauncher environment must print `CHIP_PHASE2_REAL_BOUND_PROFILE_PASS`: it temporarily enables the actual `SonicComplianceCommand`, forces its private countdown due, and calls the bound `command.compute(dt)` under `TorchDispatchMode` plus CPU/CUDA profiler activities. That trace must reject `aten::nonzero` and `aten::_local_scalar_dense` while covering actual articulation `index_select`/link-frame helpers, `ArticulationWrenchAdapter`, and Isaac Lab `WrenchComposer`; the portable scale audit separately covers the optional target-damper path. Before any subsequent `env.step`, it must switch off and prove command state/countdown/ownership plus the real composer's selected force and torque rows are cleared. The separate enabled invocation then runs the normal forced test: it must observe a non-zero wrench, reconstruct world force from current body-local rows, verify local-offset torque, and report peak net force/torque below configured limits. After 100 enabled steps it must also preserve an unrelated sentinel through immediate off, re-enable using only private RNG, cancel again, remain clear for two disabled steps, and reset all command/damper state.
 
 5. Import, syntax, and patch hygiene
 

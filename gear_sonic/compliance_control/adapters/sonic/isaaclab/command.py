@@ -16,12 +16,7 @@ from ..frames import (
     quaternion_rotate_wxyz_prevalidated,
     world_positions_to_frame_prevalidated,
 )
-from ..observation import select_articulation_site_quaternions, select_articulation_sites
-from ..sampling import (
-    limit_peak_forces_by_net_wrench,
-    mask_requested_peak_forces,
-    sample_compliance_pulses,
-)
+from ..operational import ComplianceOperationalControl
 from ..state import SonicComplianceCommandState
 from ..wrench import ArticulationWrenchAdapter, WrenchWriteGate
 
@@ -36,7 +31,7 @@ def _frame_from_kind(kind: str, *, anchor_body: str) -> CartesianFrameSpec:
     raise ValueError("frame_kind must be 'world', 'anchor_local', or 'heading_local'")
 
 
-class SonicComplianceCommand(CommandTerm):
+class SonicComplianceCommand(ComplianceOperationalControl, CommandTerm):
     """Independent command/state for optional CHIP-style compliant tracking."""
 
     cfg: SonicComplianceCommandCfg
@@ -80,6 +75,21 @@ class SonicComplianceCommand(CommandTerm):
             target_damper_alpha=cfg.target_damper_alpha,
             site_offsets_local=site_offsets_local,
         )
+        self._articulation_site_indices = torch.tensor(
+            self.sites.articulation_indices,
+            dtype=torch.long,
+            device=self.device,
+        )
+        self._application_offsets_local = self.state.site_offsets_local.view(
+            1,
+            self.sites.spec.num_sites,
+            3,
+        ).expand(self.num_envs, self.sites.spec.num_sites, 3).clone()
+        self._compliance_values_m_per_n = torch.tensor(
+            cfg.compliance_values_m_per_n,
+            dtype=dtype,
+            device=self.device,
+        )
         self.wrench = ArticulationWrenchAdapter(
             self.robot,
             body_selection=self.sites.articulation,
@@ -89,6 +99,19 @@ class SonicComplianceCommand(CommandTerm):
         )
         self._sampling_generator = torch.Generator(device=self.state.device)
         self._sampling_generator.manual_seed(cfg.sampling_seed)
+        self._all_env_ids = torch.arange(
+            self.num_envs,
+            dtype=torch.long,
+            device=self.state.device,
+        )
+        self._time_to_next_pulse = torch.full(
+            (self.num_envs,),
+            math.inf,
+            dtype=self.state.dtype,
+            device=self.state.device,
+        )
+        self._operational_enabled = bool(cfg.enabled)
+        self._operational_enabled_last_update = False
         self._wrench_write_gate = WrenchWriteGate()
         self.metrics["enabled_fraction"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["active_site_fraction"] = torch.zeros(self.num_envs, device=self.device)
@@ -120,41 +143,43 @@ class SonicComplianceCommand(CommandTerm):
     def current_site_positions_w(self) -> torch.Tensor:
         """Read offset site points using only articulation-space indices."""
 
-        body_position_w = select_articulation_sites(
-            self.robot.data.body_pos_w,
-            self.sites.articulation,
+        body_position_w = self.robot.data.body_pos_w.index_select(
+            1,
+            self._articulation_site_indices,
         )
-        body_quaternion_wxyz = select_articulation_site_quaternions(
-            self.robot.data.body_quat_w,
-            self.sites.articulation,
+        body_quaternion_wxyz = self.robot.data.body_quat_w.index_select(
+            1,
+            self._articulation_site_indices,
         )
-        offsets = self.state.site_offsets_local.view(1, self.sites.spec.num_sites, 3)
         return body_position_w + quaternion_rotate_wxyz_prevalidated(
             body_quaternion_wxyz,
-            offsets.expand_as(body_position_w),
+            self._application_offsets_local,
         )
 
     def current_site_quaternions_wxyz(self) -> torch.Tensor:
         """Read current link-frame quaternions using articulation-space indices."""
 
-        return select_articulation_site_quaternions(
-            self.robot.data.body_quat_w,
-            self.sites.articulation,
+        return self.robot.data.body_quat_w.index_select(
+            1,
+            self._articulation_site_indices,
         )
 
     def application_offsets_local(self) -> torch.Tensor:
         """Expand configured link-local application offsets over environments."""
 
-        return self.state.site_offsets_local.view(
-            1,
-            self.sites.spec.num_sites,
-            3,
-        ).expand(self.num_envs, self.sites.spec.num_sites, 3)
+        return self._application_offsets_local.clone()
 
-    def current_eef_common_future(self) -> torch.Tensor:
+    def current_eef_common_future(
+        self,
+        current_site_positions_w: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """Read current offset sites and expand over the future dimension."""
 
-        current_eef_w = self.current_site_positions_w()
+        current_eef_w = (
+            self.current_site_positions_w()
+            if current_site_positions_w is None
+            else current_site_positions_w
+        )
         anchor_position_w, anchor_quaternion_wxyz = self._anchor_pose_w()
         current_common = world_positions_to_frame_prevalidated(
             current_eef_w,
@@ -175,11 +200,13 @@ class SonicComplianceCommand(CommandTerm):
     ) -> None:
         """Clear wrench/command state and reset selected damper goals."""
 
-        self.state.reset(self.current_eef_common_future(), env_ids)
+        ids = self.state._env_ids_tensor(env_ids)  # noqa: SLF001
+        self.state.reset(self.current_eef_common_future(), ids)
+        self._schedule_next_pulse(ids)
         if self._wrench_write_gate.consume_clear_on_reset(
-            globally_enabled=self.cfg.enabled,
+            globally_enabled=self._operational_enabled,
         ):
-            self.wrench.clear(env_ids if self.cfg.enabled else None)
+            self.wrench.clear(ids if self._operational_enabled else None)
 
     def sample_and_apply(
         self,
@@ -187,97 +214,46 @@ class SonicComplianceCommand(CommandTerm):
     ) -> None:
         """Sample arbitrary simultaneous site pulses; the next command step writes them."""
 
-        if not self.cfg.enabled:
+        if not self._operational_enabled:
             return
         ids = self.state._env_ids_tensor(env_ids)  # noqa: SLF001
-        count = ids.numel()
-        num_sites = self.sites.spec.num_sites
-        if count == 0:
+        if ids.numel() == 0:
             return
-
-        inactive = ~self.state.pulse_active[ids]
-        ids = ids[inactive]
-        count = ids.numel()
-        if count == 0:
-            return
-        samples = sample_compliance_pulses(
-            num_envs=count,
-            num_sites=num_sites,
+        requested_mask = torch.zeros(
+            self.num_envs,
+            dtype=torch.bool,
             device=self.state.device,
-            dtype=self.state.dtype,
-            generator=self._sampling_generator,
-            globally_enabled=self.cfg.enabled,
-            enabled_probability=self.cfg.enabled_probability,
-            site_probability=self.cfg.site_probability,
-            force_magnitude_range_n=self.cfg.force_magnitude_range_n,
-            compliance_values_m_per_n=self.cfg.compliance_values_m_per_n,
-            duration_range_s=self.cfg.force_duration_range_s,
-            max_active_sites=self.cfg.max_active_sites,
         )
-        application_positions_w = self.current_site_positions_w()[ids]
-        wrench_origin_w = self.robot.data.body_pos_w[ids, self.anchor_body_index]
-        requested_peak_force = mask_requested_peak_forces(
-            samples.peak_force_on_robot_w,
-            samples.enabled,
-            samples.site_mask,
+        requested_mask[ids] = True
+        start_mask = self.state.startable_pulse_mask_prevalidated(requested_mask)
+        application_positions_w = self.current_site_positions_w()
+        current_eef_common = (
+            self.current_eef_common_future(application_positions_w)
+            if self.cfg.target_damper_enabled
+            else None
         )
-        peak_force = limit_peak_forces_by_net_wrench(
-            requested_peak_force,
-            application_positions_w,
-            wrench_origin_w,
-            max_net_force_n=self.cfg.max_net_force_n,
-            max_net_torque_nm=self.cfg.max_net_torque_nm,
-        )
-        if self.cfg.target_damper_enabled:
-            self.state.seed_damper_sites(
-                self.current_eef_common_future(),
-                ids,
-                samples.enabled.unsqueeze(-1) & samples.site_mask,
-            )
-        self.state.start_pulses(
-            ids,
-            enabled=samples.enabled,
-            site_mask=samples.site_mask,
-            compliance=samples.compliance,
-            peak_force_on_robot_w=peak_force,
-            duration_s=samples.duration_s,
+        self._sample_and_start_masked_prevalidated(
+            start_mask,
+            application_positions_w=application_positions_w,
+            wrench_origin_w=self.robot.data.body_pos_w[:, self.anchor_body_index],
+            current_eef_common=current_eef_common,
         )
 
     def _resample_command(self, env_ids: Sequence[int]) -> None:
         self.reset_envs(env_ids)
 
-    def _update_command(self) -> None:
-        if not self.cfg.enabled:
-            self.state.cancel_all_prevalidated()
-            if self._wrench_write_gate.consume_clear_on_disable():
-                self.wrench.clear()
-            return
+    def _resample(self, env_ids: Sequence[int]) -> None:
+        """Override Isaac Lab's global-RNG ``time_left.uniform_`` lifecycle."""
 
-        scheduled_force_on_robot_w = self.state.advance_force_schedule(
-            self._env.step_dt,
-            rise_end=self.cfg.force_rise_end,
-            fall_start=self.cfg.force_fall_start,
-        )
-        application_positions_w = self.current_site_positions_w()
-        wrench_origin_w = self.robot.data.body_pos_w[:, self.anchor_body_index]
-        applied_force_on_robot_w = limit_peak_forces_by_net_wrench(
-            scheduled_force_on_robot_w,
-            application_positions_w,
-            wrench_origin_w,
-            max_net_force_n=self.cfg.max_net_force_n,
-            max_net_torque_nm=self.cfg.max_net_torque_nm,
-        )
-        self.state.set_applied_force_prevalidated(applied_force_on_robot_w)
-        self.wrench.set_world_forces_prevalidated(
-            applied_force_on_robot_w,
-            body_quaternions_wxyz=self.current_site_quaternions_wxyz(),
-            application_offsets_local=self.application_offsets_local(),
-        )
-        self._wrench_write_gate.mark_written()
-        if self.cfg.target_damper_enabled:
-            if not self.state.damper_initialized:
-                self.state.reset(self.current_eef_common_future())
-            self.state.update_damper_prevalidated(self.current_eef_common_future())
+        ids = self.state._env_ids_tensor(env_ids)  # noqa: SLF001
+        if ids.numel() == 0:
+            return
+        self.time_left[ids] = math.inf
+        self._resample_command(ids)
+        self.command_counter[ids] += 1
+
+    def _update_command(self) -> None:
+        self._update_command_prevalidated(self._env.step_dt)
 
     def _update_metrics(self) -> None:
         enabled = self.state.enabled
@@ -304,6 +280,7 @@ class SonicComplianceCommandCfg(CommandTermCfg):
     force_magnitude_range_n: tuple[float, float] = (0.0, 40.0)
     compliance_values_m_per_n: tuple[float, ...] = (0.0, 0.02, 0.05)
     force_duration_range_s: tuple[float, float] = (1.0, 3.0)
+    pulse_interval_range_s: tuple[float, float] = (3.5, 6.0)
     force_rise_end: float = 0.2
     force_fall_start: float = 0.8
     max_active_sites: int = 2
@@ -326,6 +303,7 @@ class SonicComplianceCommandCfg(CommandTermCfg):
         for name, value_range in (
             ("force_magnitude_range_n", self.force_magnitude_range_n),
             ("force_duration_range_s", self.force_duration_range_s),
+            ("pulse_interval_range_s", self.pulse_interval_range_s),
         ):
             if len(value_range) != 2:
                 raise ValueError(f"{name} must contain [min, max]")
@@ -346,6 +324,8 @@ class SonicComplianceCommandCfg(CommandTermCfg):
         _frame_from_kind(self.frame_kind, anchor_body=self.anchor_body)
         if self.force_duration_range_s[0] <= 0.0:
             raise ValueError("force_duration_range_s minimum must be positive")
+        if self.pulse_interval_range_s[0] <= 0.0:
+            raise ValueError("pulse_interval_range_s minimum must be positive")
         if type(self.max_active_sites) is not int or self.max_active_sites <= 0:
             raise ValueError("max_active_sites must be a positive integer")
         if self.max_net_force_n <= 0.0 or self.max_net_torque_nm <= 0.0:

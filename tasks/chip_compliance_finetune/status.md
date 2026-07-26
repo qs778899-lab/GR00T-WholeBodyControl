@@ -15,7 +15,7 @@ phases:
     status: PASSED
   - id: 3
     name: Checkpoint-compatible policy/critic integration
-    status: PENDING
+    status: IN_PROGRESS
   - id: 4
     name: Low-resource finetune smoke and parity regression
     status: PENDING
@@ -66,19 +66,35 @@ phase_2_scope:
 phase_2_result:
   completed_on: 2026-07-27
   status: PASSED
-  portable_suite: 45 tests, 4 expected CUDA/Hydra skips
-  sonic_backup_suite: 45 tests, 0 skips
-  dedicated_cuda_profiler: PASSED, no aten::_local_scalar_dense
+  regression_reason: Disabled compliance inherited global RNG consumption from CommandTerm/EventManager; follow-up review found dynamic CUDA due indices and boolean pulse-finish writes in the per-step path.
+  private_countdown_scheduler: PASSED
+  disabled_global_cpu_cuda_rng_parity: PASSED
+  release_interval_event_parity: PASSED
+  deterministic_partial_reset: PASSED
+  explicit_operational_enable_api: PASSED
+  immediate_owned_row_clear_without_env_step: PASSED
+  unrelated_composer_row_preservation: PASSED
+  static_config_unchanged_by_runtime_switch: PASSED
+  portable_full_discovery: 65 tests, 12 expected CUDA/Hydra skips
+  portable_phase_2_subset: 52 tests, 7 expected CUDA/Hydra skips
+  strict_prevalidated_parity: PASSED
+  portable_fixed_shape_cpu_profiler: PASSED, mixin bound compute / fake composer / 4096 envs / 14 sites / no aten::nonzero or aten::_local_scalar_dense
+  sonic_backup_suite: 65 tests, 0 skips, PASSED
+  independent_sonic_backup_suite: 65 tests, 0 skips, PASSED_AFTER_PREVALIDATED_DUE_FIX
+  portable_cuda_scale_profiler: PASSED, mixin bound compute / fake composer / 4096 envs / 14 sites / no aten::nonzero or aten::_local_scalar_dense
+  real_isaac_bound_cpu_cuda_profiler: PASSED, AppLauncher SonicComplianceCommand / forced private due / actual WrenchComposer / no aten::nonzero or aten::_local_scalar_dense
+  real_trace_global_rng_parity: PASSED, exact CPU and CUDA states
+  real_trace_immediate_owned_row_clear: PASSED, force and torque rows zero before env.step
+  parent_independent_real_bound_disabled_smoke: PASSED, wall 18.174 s / both markers / peak 0 N and 0 N*m / trace RNG and immediate-off clear
   discrete_chip_sampling: PASSED
-  disabled_smoke_100_steps: PASSED, peak 0 N / 0 N*m
-  enabled_smoke_100_steps: PASSED, peak 8.457119 N / 2.564395 N*m
+  disabled_smoke_100_steps: PASSED, peak 0 N / 0 N*m, then real-bound trace passed
+  enabled_smoke_100_steps: PASSED, peak 6.785363 N / 2.197217 N*m
+  independent_disabled_enabled_smokes: PASSED_AFTER_PREVALIDATED_DUE_FIX
   active_to_off_two_step_smoke: PASSED
   reset_before_disabled_update_clear_once: PASSED
   body_local_force_offset_reconstruction: PASSED
-  independent_cpu_suite: 45 tests, 2 expected CUDA skips
-  independent_sonic_backup_suite: 45 tests, 0 skips
-  independent_disabled_enabled_smokes: PASSED
   release_config_unchanged: PASSED
   syntax_import_hygiene: PASSED
+  cuda_rerun_blocker: RESOLVED
 
 next_action: EXECUTE_PHASE_3_ONLY

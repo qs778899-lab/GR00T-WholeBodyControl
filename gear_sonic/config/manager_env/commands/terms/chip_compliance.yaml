@@ -15,6 +15,7 @@ force:
   force_magnitude_range_n: [0.0, 40.0]
   compliance_values_m_per_n: [0.0, 0.02, 0.05]
   force_duration_range_s: [1.0, 3.0]
+  pulse_interval_range_s: [3.5, 6.0]
   force_rise_end: 0.2
   force_fall_start: 0.8
   max_active_sites: 2
@@ -24,5 +25,4 @@ force:
   max_displacement_m: 0.25
   target_damper_enabled: false
   target_damper_alpha: 0.1
-  resampling_time_range: [1.0e9, 1.0e9]
   debug_vis: false

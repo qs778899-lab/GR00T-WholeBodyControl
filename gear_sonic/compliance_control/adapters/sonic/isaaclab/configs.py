@@ -8,9 +8,8 @@ from gear_sonic.envs.manager_env.mdp.observations import TokenizerCfg
 
 @configclass
 class ComplianceEventsCfg(EventCfg):
-    """Release events plus explicit compliance sampling/reset slots."""
+    """Release events plus the explicit compliance reset slot."""
 
-    compliance_force_push = None
     compliance_force_reset = None
 
 

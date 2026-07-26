@@ -18,6 +18,8 @@ Phase 2 adds only the SONIC/Isaac Lab adapter, an independent command/event stat
 
 The default training envelope follows CHIP: force magnitude is sampled uniformly from `0–40 N`, duration uniformly from `1–3 s`, and inverse Cartesian stiffness is sampled discretely from `{0, 0.02, 0.05} m/N`. The discrete set is configurable as `compliance_values_m_per_n`.
 
+Enabled control steps draw fixed `[num_envs, ...]` candidates from a command-owned generator and combine them with fixed-size `due_mask`/`start_mask` tensors. This avoids dynamic CUDA index construction while keeping per-environment pulse timing asynchronous. Disabled control steps draw nothing from either the private generator or process-global CPU/CUDA generators.
+
 SONIC additionally limits the resultant wrench around the configured anchor on every simulation step. All selected site forces in an environment are uniformly scaled by
 
 `min(1, 30 N / |sum(F)|, 20 N·m / |sum(r × F)|)`.
@@ -34,4 +36,6 @@ Consequently a CHIP-envelope sample can be smaller than its requested magnitude 
 
 ## Hot-path boundary
 
-Public checked APIs retain shape/device/finiteness validation. The lifecycle-validated simulator path uses explicit prevalidated tensor functions so its per-step CUDA path performs no `.item()`, tensor truth conversion, or `aten::_local_scalar_dense`. CPU and CUDA dispatch/profiler tests enforce this boundary.
+Public checked APIs retain shape/device/finiteness validation. The lifecycle-validated simulator path uses explicit prevalidated tensor functions, and the command mixin overrides inherited `CommandTerm.compute(dt)` so no dynamic resample IDs are created. Countdown, pulse start/completion, and damper seeding use fixed-shape masks with `torch.where`/`copy_`; the per-step CUDA path performs no `.item()`, tensor truth conversion, `aten::nonzero`, or `aten::_local_scalar_dense`.
+
+The synchronization audit has two deliberately different layers. A portable 4096-environment × 14-site test binds `ComplianceOperationalControl.compute(dt)` to deterministic tensor fixtures and a fake composer; it exercises scale, arbitrary-site shapes, and target-damper updates without requiring Isaac Lab. The one-environment AppLauncher smoke separately profiles the actual `SonicComplianceCommand` instance, articulation pose/index and link-frame rotation helpers, `ArticulationWrenchAdapter`, and Isaac Lab `WrenchComposer`. Only after 100 disabled steps pass does that smoke force the private countdown due and call the bound `command.compute(dt)` under both `TorchDispatchMode` and CPU/CUDA profiler activities. It then disables immediately, before another environment step, and proves the real composer's owned force and torque rows are zero. Both layers reject `aten::nonzero` and `aten::_local_scalar_dense`; the large fixture is not represented as a real Isaac-bound instance.

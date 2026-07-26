@@ -1,7 +1,0 @@
-compliance_force_push:
-  _target_: isaaclab.managers.EventTermCfg
-  func: gear_sonic.compliance_control.adapters.sonic.isaaclab.events:apply_compliance_force
-  mode: interval
-  interval_range_s: [3.5, 6.0]
-  params:
-    command_name: force

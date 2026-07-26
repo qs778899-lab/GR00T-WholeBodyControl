@@ -105,6 +105,11 @@ class SonicComplianceCommandState:
     def pulse_active(self) -> torch.Tensor:
         return self._pulse_active.clone()
 
+    def startable_pulse_mask_prevalidated(self, due_mask: torch.Tensor) -> torch.Tensor:
+        """Exclude already-active rows without producing dynamic-length indices."""
+
+        return due_mask & ~self._pulse_active
+
     @property
     def pulse_elapsed_s(self) -> torch.Tensor:
         return self._pulse_elapsed_s.clone()
@@ -224,23 +229,42 @@ class SonicComplianceCommandState:
         if (compliance < 0.0).any():
             raise ValueError("compliance must be non-negative")
 
+        self.set_samples_prevalidated(
+            ids,
+            enabled=enabled,
+            site_mask=site_mask,
+            compliance=compliance,
+            force_on_robot_w=force_on_robot_w,
+        )
+
+    def set_samples_prevalidated(
+        self,
+        env_ids: torch.Tensor,
+        *,
+        enabled: torch.Tensor,
+        site_mask: torch.Tensor,
+        compliance: torch.Tensor,
+        force_on_robot_w: torch.Tensor,
+    ) -> None:
+        """Store lifecycle-validated samples without CUDA scalar extraction."""
+
         requested = enabled.unsqueeze(-1) & site_mask
-        self._enabled[ids] = enabled
-        self._site_mask[ids] = site_mask
-        self._compliance[ids] = torch.where(
+        self._enabled[env_ids] = enabled
+        self._site_mask[env_ids] = site_mask
+        self._compliance[env_ids] = torch.where(
             requested.unsqueeze(-1),
             compliance,
             0.0,
         )
-        self._force_on_robot_w[ids] = torch.where(
+        self._force_on_robot_w[env_ids] = torch.where(
             requested.unsqueeze(-1),
             force_on_robot_w,
             0.0,
         )
-        self._peak_force_on_robot_w[ids] = self._force_on_robot_w[ids]
-        self._pulse_active[ids] = False
-        self._pulse_elapsed_s[ids] = 0.0
-        self._pulse_duration_s[ids] = 0.0
+        self._peak_force_on_robot_w[env_ids] = self._force_on_robot_w[env_ids]
+        self._pulse_active[env_ids] = False
+        self._pulse_elapsed_s[env_ids] = 0.0
+        self._pulse_duration_s[env_ids] = 0.0
 
     def start_pulses(
         self,
@@ -274,6 +298,54 @@ class SonicComplianceCommandState:
         self._pulse_duration_s[ids] = torch.where(active, duration_s, 0.0)
         self._force_on_robot_w[ids] = 0.0
 
+    def start_pulses_masked_prevalidated(
+        self,
+        start_mask: torch.Tensor,
+        *,
+        enabled: torch.Tensor,
+        site_mask: torch.Tensor,
+        compliance: torch.Tensor,
+        peak_force_on_robot_w: torch.Tensor,
+        duration_s: torch.Tensor,
+    ) -> None:
+        """Start fixed-size trusted candidates selected by an environment mask."""
+
+        requested = enabled.unsqueeze(-1) & site_mask
+        env_gate = start_mask.unsqueeze(-1)
+        xyz_gate = env_gate.unsqueeze(-1)
+        candidate_compliance = torch.where(
+            requested.unsqueeze(-1),
+            compliance,
+            0.0,
+        )
+        candidate_peak_force = torch.where(
+            requested.unsqueeze(-1),
+            peak_force_on_robot_w,
+            0.0,
+        )
+        self._enabled.copy_(torch.where(start_mask, enabled, self._enabled))
+        self._site_mask.copy_(torch.where(env_gate, site_mask, self._site_mask))
+        self._compliance.copy_(
+            torch.where(xyz_gate, candidate_compliance, self._compliance)
+        )
+        self._peak_force_on_robot_w.copy_(
+            torch.where(xyz_gate, candidate_peak_force, self._peak_force_on_robot_w)
+        )
+        active = enabled & site_mask.any(dim=-1)
+        self._pulse_active.copy_(
+            torch.where(start_mask, active, self._pulse_active)
+        )
+        self._pulse_elapsed_s.copy_(
+            torch.where(start_mask, 0.0, self._pulse_elapsed_s)
+        )
+        candidate_duration = torch.where(active, duration_s, 0.0)
+        self._pulse_duration_s.copy_(
+            torch.where(start_mask, candidate_duration, self._pulse_duration_s)
+        )
+        self._force_on_robot_w.copy_(
+            torch.where(xyz_gate, 0.0, self._force_on_robot_w)
+        )
+
     def advance_force_schedule(
         self,
         dt_s: float,
@@ -306,14 +378,24 @@ class SonicComplianceCommandState:
             torch.zeros_like(self._force_on_robot_w),
         )
         finished = active & (self._pulse_elapsed_s >= self._pulse_duration_s)
-        self._pulse_active[finished] = False
-        self._enabled[finished] = False
-        self._site_mask[finished] = False
-        self._compliance[finished] = 0.0
-        self._force_on_robot_w[finished] = 0.0
-        self._peak_force_on_robot_w[finished] = 0.0
-        self._pulse_elapsed_s[finished] = 0.0
-        self._pulse_duration_s[finished] = 0.0
+        site_gate = finished.unsqueeze(-1)
+        xyz_gate = site_gate.unsqueeze(-1)
+        self._pulse_active.copy_(active & ~finished)
+        self._enabled.copy_(torch.where(finished, False, self._enabled))
+        self._site_mask.copy_(torch.where(site_gate, False, self._site_mask))
+        self._compliance.copy_(torch.where(xyz_gate, 0.0, self._compliance))
+        self._force_on_robot_w.copy_(
+            torch.where(xyz_gate, 0.0, self._force_on_robot_w)
+        )
+        self._peak_force_on_robot_w.copy_(
+            torch.where(xyz_gate, 0.0, self._peak_force_on_robot_w)
+        )
+        self._pulse_elapsed_s.copy_(
+            torch.where(finished, 0.0, self._pulse_elapsed_s)
+        )
+        self._pulse_duration_s.copy_(
+            torch.where(finished, 0.0, self._pulse_duration_s)
+        )
         return self.force_on_robot_w
 
     def set_applied_force_prevalidated(self, force_on_robot_w: torch.Tensor) -> None:
@@ -431,6 +513,11 @@ class SonicComplianceCommandState:
         )
         return self._target_damper.update_prevalidated(update_input)
 
+    def reset_damper_prevalidated(self, current_eef_common: torch.Tensor) -> None:
+        """Initialize lifecycle-validated command-side damper state."""
+
+        self._target_damper.reset_prevalidated(current_eef_common)
+
     def seed_damper_sites(
         self,
         current_eef_common: torch.Tensor,
@@ -476,3 +563,18 @@ class SonicComplianceCommandState:
             previous,
         )
         self._target_damper.reset(seeded)
+
+    def seed_damper_sites_masked_prevalidated(
+        self,
+        current_eef_common: torch.Tensor,
+        active_site_mask: torch.Tensor,
+    ) -> None:
+        """Seed fixed-size trusted site candidates without dynamic indices."""
+
+        previous = self._target_damper.previous_target
+        seeded = torch.where(
+            active_site_mask[:, None, :, None],
+            current_eef_common,
+            previous,
+        )
+        self._target_damper.reset_prevalidated(seeded)

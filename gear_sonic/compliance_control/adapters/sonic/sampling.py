@@ -8,6 +8,68 @@ import math
 import torch
 
 
+def reschedule_pulse_countdown_prevalidated(
+    time_to_next_pulse: torch.Tensor,
+    env_ids: torch.Tensor,
+    *,
+    globally_enabled: bool,
+    interval_range_s: tuple[float, float],
+    generator: torch.Generator,
+) -> None:
+    """Reset selected countdown rows using only the caller-owned generator."""
+
+    if env_ids.numel() == 0:
+        return
+    if not globally_enabled:
+        time_to_next_pulse[env_ids] = torch.inf
+        return
+    lower, upper = interval_range_s
+    unit_samples = torch.rand(
+        env_ids.numel(),
+        dtype=time_to_next_pulse.dtype,
+        device=time_to_next_pulse.device,
+        generator=generator,
+    )
+    time_to_next_pulse[env_ids] = unit_samples * (upper - lower) + lower
+
+
+def reschedule_pulse_countdown_mask_prevalidated(
+    time_to_next_pulse: torch.Tensor,
+    due_mask: torch.Tensor,
+    *,
+    interval_range_s: tuple[float, float],
+    generator: torch.Generator,
+) -> None:
+    """Reschedule fixed-size candidate rows selected by a trusted bool mask."""
+
+    lower, upper = interval_range_s
+    unit_samples = torch.rand(
+        time_to_next_pulse.shape,
+        dtype=time_to_next_pulse.dtype,
+        device=time_to_next_pulse.device,
+        generator=generator,
+    )
+    candidates = unit_samples * (upper - lower) + lower
+    time_to_next_pulse.copy_(
+        torch.where(due_mask, candidates, time_to_next_pulse)
+    )
+
+
+def advance_pulse_countdown_prevalidated(
+    time_to_next_pulse: torch.Tensor,
+    dt_s: float,
+    *,
+    globally_enabled: bool,
+) -> torch.Tensor:
+    """Advance countdowns and return a fixed-size due mask without global RNG."""
+
+    if not globally_enabled:
+        time_to_next_pulse.fill_(torch.inf)
+        return torch.zeros_like(time_to_next_pulse, dtype=torch.bool)
+    time_to_next_pulse -= dt_s
+    return time_to_next_pulse <= 0.0
+
+
 @dataclass(frozen=True, slots=True)
 class CompliancePulseSamples:
     enabled: torch.Tensor
@@ -52,6 +114,43 @@ def sample_compliance_pulses(
             "compliance_values_m_per_n must contain finite non-negative values"
         )
     device = torch.device(device)
+    compliance_values = torch.tensor(
+        compliance_values_m_per_n,
+        dtype=dtype,
+        device=device,
+    )
+    return sample_compliance_pulses_prevalidated(
+        num_envs=num_envs,
+        num_sites=num_sites,
+        device=device,
+        dtype=dtype,
+        generator=generator,
+        globally_enabled=globally_enabled,
+        enabled_probability=enabled_probability,
+        site_probability=site_probability,
+        force_magnitude_range_n=force_magnitude_range_n,
+        compliance_values_m_per_n=compliance_values,
+        duration_range_s=duration_range_s,
+        max_active_sites=max_active_sites,
+    )
+
+
+def sample_compliance_pulses_prevalidated(
+    *,
+    num_envs: int,
+    num_sites: int,
+    device: torch.device,
+    dtype: torch.dtype,
+    generator: torch.Generator,
+    globally_enabled: bool,
+    enabled_probability: float,
+    site_probability: float,
+    force_magnitude_range_n: tuple[float, float],
+    compliance_values_m_per_n: torch.Tensor,
+    duration_range_s: tuple[float, float],
+    max_active_sites: int,
+) -> CompliancePulseSamples:
+    """Sample lifecycle-validated pulse tensors without CUDA scalar extraction."""
 
     enabled = torch.zeros(num_envs, dtype=torch.bool, device=device)
     if globally_enabled:
@@ -108,18 +207,13 @@ def sample_compliance_pulses(
     )
     magnitudes = force_min + (force_max - force_min) * force_uniform
 
-    compliance_values = torch.tensor(
-        compliance_values_m_per_n,
-        dtype=dtype,
-        device=device,
-    )
     compliance_indices = torch.randint(
-        len(compliance_values_m_per_n),
+        compliance_values_m_per_n.shape[0],
         (num_envs, num_sites),
         device=device,
         generator=generator,
     )
-    compliance = compliance_values[compliance_indices]
+    compliance = compliance_values_m_per_n[compliance_indices]
 
     duration_min, duration_max = duration_range_s
     duration_uniform = torch.rand(
@@ -154,6 +248,20 @@ def mask_requested_peak_forces(
         raise ValueError("site_mask must be bool with shape [env, site]")
     if enabled.device != peak_force_on_robot_w.device or site_mask.device != enabled.device:
         raise ValueError("force, enabled, and site_mask must use the same device")
+    return mask_requested_peak_forces_prevalidated(
+        peak_force_on_robot_w,
+        enabled,
+        site_mask,
+    )
+
+
+def mask_requested_peak_forces_prevalidated(
+    peak_force_on_robot_w: torch.Tensor,
+    enabled: torch.Tensor,
+    site_mask: torch.Tensor,
+) -> torch.Tensor:
+    """Mask lifecycle-validated requested forces without host synchronization."""
+
     requested = enabled.unsqueeze(-1) & site_mask
     return torch.where(
         requested.unsqueeze(-1),
@@ -190,6 +298,25 @@ def limit_peak_forces_by_net_wrench(
         raise ValueError("force, position, and origin tensors must share device")
     if max_net_force_n <= 0.0 or max_net_torque_nm <= 0.0:
         raise ValueError("net wrench limits must be positive")
+
+    return limit_peak_forces_by_net_wrench_prevalidated(
+        peak_force_on_robot_w,
+        application_positions_w,
+        wrench_origin_w,
+        max_net_force_n=max_net_force_n,
+        max_net_torque_nm=max_net_torque_nm,
+    )
+
+
+def limit_peak_forces_by_net_wrench_prevalidated(
+    peak_force_on_robot_w: torch.Tensor,
+    application_positions_w: torch.Tensor,
+    wrench_origin_w: torch.Tensor,
+    *,
+    max_net_force_n: float,
+    max_net_torque_nm: float,
+) -> torch.Tensor:
+    """Limit lifecycle-validated force rows without CUDA scalar extraction."""
 
     net_force = peak_force_on_robot_w.sum(dim=1)
     moment_arms = application_positions_w - wrench_origin_w.unsqueeze(1)

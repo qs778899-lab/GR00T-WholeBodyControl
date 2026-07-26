@@ -5,23 +5,31 @@ from __future__ import annotations
 import ast
 import math
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
 
 import torch
 
 from gear_sonic.compliance_control.adapters.sonic import (
     ArticulationWrenchAdapter,
+    ComplianceOperationalControl,
     SiteIndexSpace,
     SonicComplianceCommandState,
     WrenchWriteGate,
+    advance_pulse_countdown_prevalidated,
     build_sonic_compliance_targets,
     build_sonic_compliance_targets_prevalidated,
     frame_positions_to_world,
     limit_peak_forces_by_net_wrench,
+    limit_peak_forces_by_net_wrench_prevalidated,
     mask_requested_peak_forces,
+    mask_requested_peak_forces_prevalidated,
     resolve_compliance_sites,
     resolve_site_indices,
+    reschedule_pulse_countdown_mask_prevalidated,
+    reschedule_pulse_countdown_prevalidated,
     sample_compliance_pulses,
+    sample_compliance_pulses_prevalidated,
     select_articulation_sites,
     select_reference_sites,
     world_positions_to_frame,
@@ -509,6 +517,88 @@ class PulseScheduleAndResetTest(unittest.TestCase):
 
 
 class SamplingAndWrenchTest(unittest.TestCase):
+    def _assert_private_countdown_rng_and_partial_reset(self, device: torch.device) -> None:
+        private_generator = torch.Generator(device=device).manual_seed(731)
+        private_before = private_generator.get_state().clone()
+        countdown = torch.tensor([1.0, 2.0, 3.0, 4.0], device=device)
+        selected = torch.tensor([1, 3], dtype=torch.long, device=device)
+        cpu_rng_before = torch.random.get_rng_state().clone()
+        cuda_rng_before = (
+            torch.cuda.get_rng_state(device).clone() if device.type == "cuda" else None
+        )
+
+        reschedule_pulse_countdown_prevalidated(
+            countdown,
+            selected,
+            globally_enabled=False,
+            interval_range_s=(3.5, 6.0),
+            generator=private_generator,
+        )
+        due = advance_pulse_countdown_prevalidated(
+            countdown,
+            0.02,
+            globally_enabled=False,
+        )
+        self.assertFalse(due.any())
+        self.assertTrue(torch.isinf(countdown).all())
+        self.assertTrue(torch.equal(private_generator.get_state(), private_before))
+        self.assertTrue(torch.equal(torch.random.get_rng_state(), cpu_rng_before))
+        if cuda_rng_before is not None:
+            self.assertTrue(torch.equal(torch.cuda.get_rng_state(device), cuda_rng_before))
+
+        generator_a = torch.Generator(device=device).manual_seed(99)
+        generator_b = torch.Generator(device=device).manual_seed(99)
+        countdown_a = torch.full((4,), 9.0, device=device)
+        countdown_b = countdown_a.clone()
+        cpu_rng_before = torch.random.get_rng_state().clone()
+        cuda_rng_before = (
+            torch.cuda.get_rng_state(device).clone() if device.type == "cuda" else None
+        )
+        for values, generator in (
+            (countdown_a, generator_a),
+            (countdown_b, generator_b),
+        ):
+            reschedule_pulse_countdown_prevalidated(
+                values,
+                selected,
+                globally_enabled=True,
+                interval_range_s=(3.5, 6.0),
+                generator=generator,
+            )
+        torch.testing.assert_close(countdown_a, countdown_b, rtol=0.0, atol=0.0)
+        torch.testing.assert_close(countdown_a[[0, 2]], torch.tensor([9.0, 9.0], device=device))
+        self.assertTrue((countdown_a[selected] >= 3.5).all())
+        self.assertTrue((countdown_a[selected] <= 6.0).all())
+        self.assertTrue(torch.equal(torch.random.get_rng_state(), cpu_rng_before))
+        if cuda_rng_before is not None:
+            self.assertTrue(torch.equal(torch.cuda.get_rng_state(device), cuda_rng_before))
+
+        countdown_a.copy_(torch.tensor([0.1, 0.3, 0.1, 0.5], device=device))
+        due = advance_pulse_countdown_prevalidated(
+            countdown_a,
+            0.2,
+            globally_enabled=True,
+        )
+        torch.testing.assert_close(
+            due,
+            torch.tensor([True, False, True, False], device=device),
+        )
+        unaffected_before = countdown_a[[1, 3]].clone()
+        reschedule_pulse_countdown_mask_prevalidated(
+            countdown_a,
+            due,
+            interval_range_s=(3.5, 6.0),
+            generator=generator_a,
+        )
+        torch.testing.assert_close(countdown_a[[1, 3]], unaffected_before)
+
+    def test_private_countdown_cpu_rng_and_partial_reset(self) -> None:
+        self._assert_private_countdown_rng_and_partial_reset(torch.device("cpu"))
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA unavailable")
+    def test_private_countdown_cuda_rng_and_partial_reset(self) -> None:
+        self._assert_private_countdown_rng_and_partial_reset(torch.device("cuda:0"))
+
     def test_disabled_wrench_gate_never_writes_and_clears_active_once(self) -> None:
         class FakeWrench:
             def __init__(self) -> None:
@@ -593,6 +683,146 @@ class SamplingAndWrenchTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(limited).all())
         self.assertTrue((torch.linalg.vector_norm(net_force, dim=-1) <= 25.0001).all())
         self.assertTrue((torch.linalg.vector_norm(net_torque, dim=-1) <= 10.0001).all())
+
+    def test_prevalidated_sampling_and_start_match_strict_public_boundaries(self) -> None:
+        device = torch.device("cpu")
+        sampling_kwargs = dict(
+            num_envs=4,
+            num_sites=3,
+            device=device,
+            dtype=torch.float32,
+            globally_enabled=True,
+            enabled_probability=1.0,
+            site_probability=0.75,
+            force_magnitude_range_n=(5.0, 20.0),
+            duration_range_s=(1.0, 3.0),
+            max_active_sites=2,
+        )
+        public_samples = sample_compliance_pulses(
+            generator=torch.Generator().manual_seed(321),
+            compliance_values_m_per_n=(0.0, 0.02, 0.05),
+            **sampling_kwargs,
+        )
+        fast_samples = sample_compliance_pulses_prevalidated(
+            generator=torch.Generator().manual_seed(321),
+            compliance_values_m_per_n=torch.tensor([0.0, 0.02, 0.05]),
+            **sampling_kwargs,
+        )
+        for field in (
+            "enabled",
+            "site_mask",
+            "compliance",
+            "peak_force_on_robot_w",
+            "duration_s",
+        ):
+            torch.testing.assert_close(
+                getattr(public_samples, field),
+                getattr(fast_samples, field),
+            )
+
+        positions = torch.arange(36, dtype=torch.float32).view(4, 3, 3) / 10.0
+        origins = torch.zeros(4, 3)
+        public_requested = mask_requested_peak_forces(
+            public_samples.peak_force_on_robot_w,
+            public_samples.enabled,
+            public_samples.site_mask,
+        )
+        fast_requested = mask_requested_peak_forces_prevalidated(
+            fast_samples.peak_force_on_robot_w,
+            fast_samples.enabled,
+            fast_samples.site_mask,
+        )
+        public_peak = limit_peak_forces_by_net_wrench(
+            public_requested,
+            positions,
+            origins,
+            max_net_force_n=25.0,
+            max_net_torque_nm=10.0,
+        )
+        fast_peak = limit_peak_forces_by_net_wrench_prevalidated(
+            fast_requested,
+            positions,
+            origins,
+            max_net_force_n=25.0,
+            max_net_torque_nm=10.0,
+        )
+        torch.testing.assert_close(public_peak, fast_peak)
+
+        public_state = _make_state(
+            device=device,
+            num_envs=4,
+            num_future=1,
+            site_names=("a", "b", "c"),
+        )
+        fast_state = _make_state(
+            device=device,
+            num_envs=4,
+            num_future=1,
+            site_names=("a", "b", "c"),
+        )
+        current = torch.zeros(4, 1, 3, 3)
+        public_state.reset(current)
+        fast_state.reset(current)
+        compliance = public_samples.compliance.unsqueeze(-1).expand(4, 3, 3)
+        public_state.start_pulses(
+            None,
+            enabled=public_samples.enabled,
+            site_mask=public_samples.site_mask,
+            compliance=compliance,
+            peak_force_on_robot_w=public_peak,
+            duration_s=public_samples.duration_s,
+        )
+        fast_state.start_pulses_masked_prevalidated(
+            torch.ones(4, dtype=torch.bool),
+            enabled=fast_samples.enabled,
+            site_mask=fast_samples.site_mask,
+            compliance=compliance,
+            peak_force_on_robot_w=fast_peak,
+            duration_s=fast_samples.duration_s,
+        )
+        for attribute in (
+            "enabled",
+            "site_mask",
+            "compliance",
+            "force_on_robot_w",
+            "peak_force_on_robot_w",
+            "pulse_active",
+            "pulse_elapsed_s",
+            "pulse_duration_s",
+        ):
+            torch.testing.assert_close(
+                getattr(public_state, attribute),
+                getattr(fast_state, attribute),
+            )
+
+        invalid_duration = public_samples.duration_s.clone()
+        invalid_duration[0] = 0.0
+        with self.assertRaisesRegex(ValueError, "finite and positive"):
+            public_state.start_pulses(
+                None,
+                enabled=public_samples.enabled,
+                site_mask=public_samples.site_mask,
+                compliance=compliance,
+                peak_force_on_robot_w=public_peak,
+                duration_s=invalid_duration,
+            )
+        with self.assertRaisesRegex(ValueError, "unique"):
+            public_state.start_pulses(
+                torch.tensor([0, 0]),
+                enabled=torch.ones(2, dtype=torch.bool),
+                site_mask=torch.ones(2, 3, dtype=torch.bool),
+                compliance=torch.ones(2, 3, 3),
+                peak_force_on_robot_w=torch.ones(2, 3, 3),
+                duration_s=torch.ones(2),
+            )
+        with self.assertRaisesRegex(ValueError, "finite"):
+            public_state.set_samples(
+                torch.tensor([0]),
+                enabled=torch.ones(1, dtype=torch.bool),
+                site_mask=torch.ones(1, 3, dtype=torch.bool),
+                compliance=torch.full((1, 3, 3), float("nan")),
+                force_on_robot_w=torch.ones(1, 3, 3),
+            )
 
     def test_inactive_random_peak_does_not_shrink_requested_site(self) -> None:
         peak = torch.tensor([[[5.0, 0.0, 0.0], [1000.0, 0.0, 0.0]]])
@@ -771,8 +1001,33 @@ class HotPathHostSyncTest(unittest.TestCase):
         command_tree = ast.parse(
             (root / "compliance_control/adapters/sonic/isaaclab/command.py").read_text()
         )
+        operational_tree = ast.parse(
+            (root / "compliance_control/adapters/sonic/operational.py").read_text()
+        )
+        sampling_tree = ast.parse(
+            (root / "compliance_control/adapters/sonic/sampling.py").read_text()
+        )
         observation_tree = ast.parse(
             (root / "compliance_control/adapters/sonic/isaaclab/observations.py").read_text()
+        )
+        smoke_tree = ast.parse(
+            (root / "scripts/run_chip_compliance_smoke.py").read_text()
+        )
+
+        command_class = next(
+            node
+            for node in command_tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "SonicComplianceCommand"
+        )
+        self.assertIsInstance(command_class.bases[0], ast.Name)
+        self.assertEqual(command_class.bases[0].id, "ComplianceOperationalControl")
+        self.assertNotIn(
+            "compute",
+            {
+                node.name
+                for node in command_class.body
+                if isinstance(node, ast.FunctionDef)
+            },
         )
 
         def calls_in(function_name: str, tree: ast.AST) -> set[str]:
@@ -792,32 +1047,228 @@ class HotPathHostSyncTest(unittest.TestCase):
             return names
 
         update_calls = calls_in("_update_command", command_tree)
+        compute_calls = calls_in("compute", operational_tree)
+        production_update_calls = calls_in(
+            "_update_command_prevalidated",
+            operational_tree,
+        )
+        operational_setter_calls = calls_in("set_operational_enabled", operational_tree)
+        resample_calls = calls_in("_resample", command_tree)
+        schedule_calls = calls_in("_schedule_next_pulse", operational_tree)
+        due_update_calls = calls_in("_update_due_pulses_prevalidated", operational_tree)
+        due_sample_calls = calls_in(
+            "_sample_and_start_masked_prevalidated",
+            operational_tree,
+        )
         reset_calls = calls_in("reset_envs", command_tree)
         sample_calls = calls_in("sample_and_apply", command_tree)
         current_position_calls = calls_in("current_site_positions_w", command_tree)
         current_common_calls = calls_in("current_eef_common_future", command_tree)
         observation_calls = calls_in("sonic_compliance_target", observation_tree)
-        self.assertIn("set_world_forces_prevalidated", update_calls)
-        self.assertIn("update_damper_prevalidated", update_calls)
-        self.assertIn("limit_peak_forces_by_net_wrench", update_calls)
-        self.assertIn("set_applied_force_prevalidated", update_calls)
-        self.assertIn("consume_clear_on_disable", update_calls)
-        self.assertIn("mark_written", update_calls)
+        real_profile_calls = calls_in("_profile_real_bound_compute", smoke_tree)
+        self.assertEqual(update_calls, {"_update_command_prevalidated"})
+        self.assertIn("_update_metrics", compute_calls)
+        self.assertIn("_update_command_prevalidated", compute_calls)
+        self.assertIn("set_world_forces_prevalidated", production_update_calls)
+        self.assertIn("update_damper_prevalidated", production_update_calls)
+        self.assertIn(
+            "limit_peak_forces_by_net_wrench_prevalidated",
+            production_update_calls,
+        )
+        self.assertIn("set_applied_force_prevalidated", production_update_calls)
+        self.assertIn("consume_clear_on_disable", production_update_calls)
+        self.assertIn(
+            "advance_pulse_countdown_prevalidated",
+            production_update_calls,
+        )
+        self.assertIn("_update_due_pulses_prevalidated", production_update_calls)
+        self.assertNotIn("sample_and_apply", update_calls)
+        self.assertIn("mark_written", production_update_calls)
+        self.assertIn("cancel_all_prevalidated", operational_setter_calls)
+        self.assertIn("advance_pulse_countdown_prevalidated", operational_setter_calls)
+        self.assertIn("consume_clear_on_disable", operational_setter_calls)
+        self.assertIn("clear", operational_setter_calls)
+        self.assertIn("_schedule_next_pulse", operational_setter_calls)
+        self.assertNotIn("reset", operational_setter_calls)
+        self.assertIn("_resample_command", resample_calls)
+        self.assertTrue({"uniform_", "rand", "random_"}.isdisjoint(resample_calls))
+        self.assertIn("reschedule_pulse_countdown_prevalidated", schedule_calls)
+        self.assertIn("advance_pulse_countdown_prevalidated", due_update_calls)
+        self.assertIn("startable_pulse_mask_prevalidated", due_update_calls)
+        self.assertIn("_sample_and_start_masked_prevalidated", due_update_calls)
+        self.assertIn(
+            "reschedule_pulse_countdown_mask_prevalidated",
+            due_update_calls,
+        )
+        self.assertIn("sample_compliance_pulses_prevalidated", due_sample_calls)
+        self.assertIn("mask_requested_peak_forces_prevalidated", due_sample_calls)
+        self.assertIn("limit_peak_forces_by_net_wrench_prevalidated", due_sample_calls)
+        self.assertIn("seed_damper_sites_masked_prevalidated", due_sample_calls)
+        self.assertIn("start_pulses_masked_prevalidated", due_sample_calls)
+        self.assertTrue(
+            {
+                "_env_ids_tensor",
+                "nonzero",
+                "sample_compliance_pulses",
+                "mask_requested_peak_forces",
+                "limit_peak_forces_by_net_wrench",
+                "seed_damper_sites",
+                "set_samples",
+                "start_pulses",
+            }.isdisjoint(due_sample_calls)
+        )
         self.assertIn("consume_clear_on_reset", reset_calls)
-        self.assertIn("seed_damper_sites", sample_calls)
-        self.assertIn("mask_requested_peak_forces", sample_calls)
+        self.assertIn("_env_ids_tensor", sample_calls)
+        self.assertIn("startable_pulse_mask_prevalidated", sample_calls)
+        self.assertIn("_sample_and_start_masked_prevalidated", sample_calls)
         self.assertIn("quaternion_rotate_wxyz_prevalidated", current_position_calls)
+        self.assertIn("index_select", current_position_calls)
         self.assertIn("world_positions_to_frame_prevalidated", current_common_calls)
         self.assertIn("build_sonic_compliance_targets_prevalidated", observation_calls)
+        self.assertTrue(
+            {
+                "compute",
+                "profile",
+                "record_function",
+                "set_operational_enabled",
+                "synchronize",
+                "index_select",
+            }.issubset(real_profile_calls)
+        )
         for calls in (
             update_calls,
+            compute_calls,
+            production_update_calls,
             reset_calls,
             sample_calls,
             current_position_calls,
             current_common_calls,
             observation_calls,
+            operational_setter_calls,
+            resample_calls,
+            schedule_calls,
+            due_update_calls,
+            due_sample_calls,
         ):
-            self.assertTrue({"item", "tolist", "bool"}.isdisjoint(calls))
+            self.assertTrue({"item", "tolist", "bool", "nonzero"}.isdisjoint(calls))
+
+        real_profile_function = next(
+            node
+            for node in ast.walk(smoke_tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_profile_real_bound_compute"
+        )
+        profile_attributes = {
+            node.attr
+            for node in ast.walk(real_profile_function)
+            if isinstance(node, ast.Attribute)
+        }
+        self.assertTrue({"CPU", "CUDA", "ProfilerActivity"}.issubset(profile_attributes))
+        self.assertTrue(
+            any(
+                isinstance(node, ast.ClassDef)
+                and any(
+                    isinstance(base, ast.Name) and base.id == "TorchDispatchMode"
+                    for base in node.bases
+                )
+                for node in ast.walk(real_profile_function)
+            )
+        )
+        operational_switches = [
+            node
+            for node in ast.walk(real_profile_function)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "set_operational_enabled"
+        ]
+        enable_call = next(
+            node
+            for node in operational_switches
+            if node.args
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value is True
+        )
+        disable_call = next(
+            node
+            for node in operational_switches
+            if node.args
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value is False
+        )
+        bound_compute_call = next(
+            node
+            for node in ast.walk(real_profile_function)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "compute"
+        )
+        self.assertLess(enable_call.lineno, bound_compute_call.lineno)
+        self.assertLess(bound_compute_call.lineno, disable_call.lineno)
+
+        main_function = next(
+            node
+            for node in smoke_tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "main"
+        )
+        disabled_baseline_loop = next(
+            node
+            for node in ast.walk(main_function)
+            if isinstance(node, ast.For)
+            and isinstance(node.iter, ast.Call)
+            and isinstance(node.iter.func, ast.Name)
+            and node.iter.func.id == "range"
+            and any(
+                isinstance(child, ast.Attribute) and child.attr == "steps"
+                for child in ast.walk(node.iter)
+            )
+        )
+        real_profile_call = next(
+            node
+            for node in ast.walk(main_function)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_profile_real_bound_compute"
+        )
+        self.assertLess(disabled_baseline_loop.end_lineno, real_profile_call.lineno)
+        self.assertTrue(
+            any(
+                isinstance(node, ast.If)
+                and ast.unparse(node.test) == "not args.enabled"
+                and real_profile_call in set(ast.walk(node))
+                for node in ast.walk(main_function)
+            )
+        )
+
+        for tree in (command_tree, operational_tree, sampling_tree):
+            self.assertFalse(
+                any(
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "nonzero"
+                    for node in ast.walk(tree)
+                )
+            )
+
+        def dotted_attribute(node: ast.AST) -> str | None:
+            parts = []
+            while isinstance(node, ast.Attribute):
+                parts.append(node.attr)
+                node = node.value
+            if not isinstance(node, ast.Name):
+                return None
+            parts.append(node.id)
+            return ".".join(reversed(parts))
+
+        assigned_attributes = {
+            name
+            for node in ast.walk(smoke_tree)
+            if isinstance(node, ast.Assign | ast.AnnAssign | ast.AugAssign)
+            for target in (
+                node.targets if isinstance(node, ast.Assign) else (node.target,)
+            )
+            if (name := dotted_attribute(target)) is not None
+        }
+        self.assertNotIn("command.cfg.enabled", assigned_attributes)
 
     def _run_prevalidated_without_scalar_extraction(self, device: torch.device) -> None:
         try:
@@ -903,12 +1354,197 @@ class HotPathHostSyncTest(unittest.TestCase):
             profile_keys,
         )
 
+    def _run_bound_compute_without_dynamic_indices(self, device: torch.device) -> None:
+        try:
+            from torch.utils._python_dispatch import TorchDispatchMode
+        except ImportError:
+            self.skipTest("TorchDispatchMode unavailable")
+
+        seen_forbidden = []
+
+        class RejectDynamicCudaSync(TorchDispatchMode):
+            def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+                del types
+                function_name = str(func)
+                if "_local_scalar_dense" in function_name or "nonzero" in function_name:
+                    seen_forbidden.append(function_name)
+                    raise AssertionError(f"dynamic CUDA sync operation: {func}")
+                return func(*args, **(kwargs or {}))
+
+        num_envs = 4096
+        site_names = tuple(f"site_{index}" for index in range(14))
+        state = _make_state(
+            device=device,
+            num_envs=num_envs,
+            num_future=2,
+            site_names=site_names,
+        )
+        application_positions_w = torch.zeros(num_envs, 14, 3, device=device)
+        application_positions_w[:, :, 0] = torch.linspace(
+            -0.65,
+            0.65,
+            14,
+            device=device,
+        )
+        current_eef_common = application_positions_w.unsqueeze(1).expand(
+            num_envs,
+            2,
+            14,
+            3,
+        ).clone()
+        state.reset(current_eef_common)
+
+        body_positions_w = torch.zeros(num_envs, 16, 3, device=device)
+        body_quaternions_wxyz = torch.zeros(num_envs, 14, 4, device=device)
+        body_quaternions_wxyz[..., 0] = 1.0
+        application_offsets_local = torch.zeros(num_envs, 14, 3, device=device)
+
+        class FakeComposer:
+            def set_forces_and_torques(self, **kwargs) -> None:
+                self.last = kwargs
+
+        class FakeArticulation:
+            def __init__(self) -> None:
+                self.permanent_wrench_composer = FakeComposer()
+
+        fake_articulation = FakeArticulation()
+        wrench = ArticulationWrenchAdapter(
+            fake_articulation,
+            body_selection=state.sites.articulation,
+            num_envs=num_envs,
+            device=device,
+            dtype=torch.float32,
+        )
+
+        runtime = ComplianceOperationalControl()
+        runtime.state = state
+        runtime.sites = state.sites
+        runtime.cfg = SimpleNamespace(
+            enabled_probability=1.0,
+            site_probability=1.0,
+            force_magnitude_range_n=(0.0, 40.0),
+            force_duration_range_s=(1.0, 3.0),
+            pulse_interval_range_s=(3.5, 6.0),
+            max_active_sites=3,
+            max_net_force_n=30.0,
+            max_net_torque_nm=20.0,
+            target_damper_enabled=True,
+            force_rise_end=0.2,
+            force_fall_start=0.8,
+        )
+        runtime.robot = SimpleNamespace(
+            data=SimpleNamespace(body_pos_w=body_positions_w),
+        )
+        runtime.anchor_body_index = 15
+        runtime.current_site_positions_w = lambda: application_positions_w
+        runtime.current_eef_common_future = lambda positions=None: current_eef_common
+        runtime.current_site_quaternions_wxyz = lambda: body_quaternions_wxyz
+        runtime._application_offsets_local = application_offsets_local
+        runtime.wrench = wrench
+        runtime._wrench_write_gate = WrenchWriteGate()
+        runtime._update_metrics = lambda: None
+        runtime._operational_enabled = False
+        runtime._operational_enabled_last_update = True
+        runtime._sampling_generator = torch.Generator(device=device).manual_seed(937)
+        runtime._compliance_values_m_per_n = torch.tensor(
+            [0.0, 0.02, 0.05],
+            device=device,
+        )
+        runtime._time_to_next_pulse = torch.zeros(num_envs, device=device)
+        runtime._all_env_ids = torch.arange(num_envs, device=device)
+
+        disabled_private_rng = runtime._sampling_generator.get_state().clone()
+        disabled_cpu_rng = torch.random.get_rng_state().clone()
+        disabled_cuda_rng = (
+            torch.cuda.get_rng_state(device).clone() if device.type == "cuda" else None
+        )
+        with RejectDynamicCudaSync():
+            runtime.compute(0.02)
+        self.assertEqual(seen_forbidden, [])
+        self.assertTrue(torch.isinf(runtime._time_to_next_pulse).all())
+        self.assertTrue(
+            torch.equal(runtime._sampling_generator.get_state(), disabled_private_rng)
+        )
+        self.assertTrue(torch.equal(torch.random.get_rng_state(), disabled_cpu_rng))
+        if disabled_cuda_rng is not None:
+            self.assertTrue(
+                torch.equal(torch.cuda.get_rng_state(device), disabled_cuda_rng)
+            )
+
+        runtime._operational_enabled = True
+        runtime._operational_enabled_last_update = True
+        runtime._time_to_next_pulse.zero_()
+        private_rng_before = runtime._sampling_generator.get_state().clone()
+        cpu_rng_before = torch.random.get_rng_state().clone()
+        cuda_rng_before = (
+            torch.cuda.get_rng_state(device).clone() if device.type == "cuda" else None
+        )
+        activities = [torch.profiler.ProfilerActivity.CPU]
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+            activities.append(torch.profiler.ProfilerActivity.CUDA)
+        with torch.profiler.profile(activities=activities) as hot_path_profile:
+            with RejectDynamicCudaSync():
+                runtime.compute(0.02)
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+
+        self.assertTrue(state.pulse_active.all())
+        torch.testing.assert_close(
+            state.site_mask.sum(dim=-1),
+            torch.full((num_envs,), 3, device=device),
+        )
+        self.assertTrue(torch.isfinite(runtime._time_to_next_pulse).all())
+        self.assertTrue((runtime._time_to_next_pulse >= 3.5).all())
+        self.assertTrue((runtime._time_to_next_pulse <= 6.0).all())
+        self.assertFalse(
+            torch.equal(runtime._sampling_generator.get_state(), private_rng_before)
+        )
+        self.assertTrue(torch.equal(torch.random.get_rng_state(), cpu_rng_before))
+        if cuda_rng_before is not None:
+            self.assertTrue(torch.equal(torch.cuda.get_rng_state(device), cuda_rng_before))
+        self.assertTrue(runtime._wrench_write_gate.was_written)
+        self.assertEqual(
+            tuple(fake_articulation.permanent_wrench_composer.last["forces"].shape),
+            (num_envs, 14, 3),
+        )
+        self.assertEqual(seen_forbidden, [])
+        profile_keys = {event.key for event in hot_path_profile.key_averages()}
+        forbidden_events = [
+            (
+                event.name,
+                event.cpu_parent.name if event.cpu_parent is not None else None,
+                (
+                    event.cpu_parent.cpu_parent.name
+                    if event.cpu_parent is not None
+                    and event.cpu_parent.cpu_parent is not None
+                    else None
+                ),
+            )
+            for event in hot_path_profile.events()
+            if "_local_scalar_dense" in event.name or "nonzero" in event.name
+        ]
+        self.assertFalse(
+            any(
+                "_local_scalar_dense" in key or "nonzero" in key
+                for key in profile_keys
+            ),
+            (profile_keys, forbidden_events),
+        )
+
     def test_cpu_prevalidated_hot_path_does_not_extract_scalars(self) -> None:
         self._run_prevalidated_without_scalar_extraction(torch.device("cpu"))
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA unavailable")
     def test_cuda_prevalidated_hot_path_does_not_extract_scalars(self) -> None:
         self._run_prevalidated_without_scalar_extraction(torch.device("cuda:0"))
+
+    def test_cpu_bound_compute_has_no_dynamic_indices_or_scalar_extraction(self) -> None:
+        self._run_bound_compute_without_dynamic_indices(torch.device("cpu"))
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA unavailable")
+    def test_cuda_bound_compute_has_no_dynamic_indices_or_scalar_extraction(self) -> None:
+        self._run_bound_compute_without_dynamic_indices(torch.device("cuda:0"))
 
 
 if __name__ == "__main__":

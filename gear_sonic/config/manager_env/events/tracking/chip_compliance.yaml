@@ -6,7 +6,6 @@ defaults:
   - terms/base_com@_here_
   - terms/push_robot@_here_
   - terms/randomize_rigid_body_mass@_here_
-  - terms/chip_compliance_force_push@_here_
   - terms/chip_compliance_force_reset@_here_
 
 _target_: gear_sonic.compliance_control.adapters.sonic.isaaclab.configs.ComplianceEventsCfg
