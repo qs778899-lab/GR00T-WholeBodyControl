@@ -33,7 +33,7 @@ The core must import and run in an environment without Isaac Lab. No Isaac Lab c
 
 ### Phase 2 — Simulator command/event and observation integration
 
-Add a separate compliance experiment config, force/compliance sampling events, same-frame force projection, per-environment target-damper state/reset, and a non-mutating SONIC MDP observation adapter that consumes the Phase 1 core. Resolve reference-motion and articulation sites independently from Hydra/runtime body-name fields. Apply the declared full/yaw rotation into the structured common frame before hindsight math; never pass indices between spaces.
+Add a separate compliance experiment config, force/compliance sampling events, same-frame force projection, per-environment target-damper state/reset, and a non-mutating SONIC MDP observation adapter that consumes the Phase 1 core. Resolve reference-motion and articulation sites independently from Hydra/runtime body-name fields. Apply the declared full/yaw rotation into the structured common frame before hindsight math; never pass indices between spaces. Match CHIP's training disturbance envelope with `0–40 N`, `1–3 s` pulses and discrete inverse-stiffness values `{0, 0.02, 0.05} m/N`. Retain SONIC-specific `30 N` resultant-force and `20 N·m` resultant-torque caps; therefore multi-site or single-site samples above the safe resultant limit may be uniformly scaled before application.
 
 ### Phase 3 — Checkpoint-compatible policy/critic integration
 

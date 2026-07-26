@@ -1,0 +1,7 @@
+# Opt-in command composition. The released tracking/base group remains unchanged.
+
+defaults:
+  - terms/motion@_here_
+  - terms/chip_compliance@_here_
+
+_target_: gear_sonic.envs.manager_env.mdp.commands.CommandsCfg

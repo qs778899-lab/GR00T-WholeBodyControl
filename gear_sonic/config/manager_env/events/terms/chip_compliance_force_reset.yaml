@@ -1,0 +1,6 @@
+compliance_force_reset:
+  _target_: isaaclab.managers.EventTermCfg
+  func: gear_sonic.compliance_control.adapters.sonic.isaaclab.events:reset_compliance_force
+  mode: reset
+  params:
+    command_name: force

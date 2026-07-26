@@ -1,0 +1,8 @@
+# Release tokenizer plus one unique, unconsumed Phase-2 compliance target.
+# Phase 3 decides how the residual actor branch consumes this term.
+
+defaults:
+  - /manager_env/observations/tokenizer/unitoken_all_noz@_here_
+  - ../terms/chip_compliance_target@_here_
+
+_target_: gear_sonic.compliance_control.adapters.sonic.isaaclab.configs.ComplianceTokenizerCfg

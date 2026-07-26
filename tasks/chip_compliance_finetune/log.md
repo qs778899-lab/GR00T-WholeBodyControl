@@ -53,3 +53,21 @@
 - The first expanded hygiene run found extra EOF blank lines in two marker `__init__.py` files; both were fixed and the same matrix was rerun.
 - Final Phase 1 matrix: 23 unit tests, compile/import smoke without Isaac Lab, portability AST audit, exact-one-newline/trailing-whitespace/cache audit, `git diff --check`, staging of only Phase 1 scope, and `git diff --cached --check`; all passed.
 - Phase 1 is `PASSED`; `current_phase` is 2 and remains paused. No Phase 2 implementation, commit, or push was performed.
+
+## 2026-07-27 — Phase 2 started
+
+- Confirmed `current_phase: 2` and Phase 1 `PASSED` before beginning.
+- Scope is limited to a portable SONIC/IsaacLab boundary adapter, force event/reset, non-mutating observation, structured-frame transforms, target-damper lifecycle, and a separate opt-in Hydra composition. Released configuration and Phase 3 policy/checkpoint work remain out of scope.
+
+## 2026-07-27 — Phase 2 passed
+
+- Added independent name-resolved reference/articulation site selection; common-frame position/vector transforms; non-mutating current-force hindsight targets; per-environment pulse/damper state; opt-in command/events/observation Hydra groups; and a bounded one-environment simulator smoke. The released `sonic_release.yaml` remains unchanged.
+- Matched CHIP's training sampling envelope: uniformly sampled `0–40 N`, `1–3 s` pulses and discrete compliance `{0, 0.02, 0.05} m/N`. Retained SONIC-specific `30 N` resultant-force and `20 N·m` resultant-torque caps, applied again from current lever arms every step; state and hindsight use the final applied force.
+- Converted every world force with the current link quaternion and wrote link-local force plus link-local site offset using `is_global=False`. Numeric tests and the real smoke reconstruct composer force/offset torque back to the world contract.
+- Added strict writer ownership: disabled-from-start never touches the composer; active-to-off clears once; a disabled reset consumes ownership before the next update; steady disabled steps do not rewrite. Cached the full-environment ID tensor to avoid a per-policy-step allocation at large environment counts.
+- Seeded only newly active damper sites from the current end effector, retained exact inactive/reference identity, and documented that current force is repeated across future target frames for alignment rather than predicted.
+- Split public checked functions from explicit prevalidated simulator boundaries. CPU/CUDA `TorchDispatchMode` plus profiler tests found no `aten::_local_scalar_dense` in the production hot path.
+- Final local matrix: portable suite PASSED (45 tests, four expected CUDA/Hydra skips); `sonic_backup` compatibility-driver suite PASSED (45/45, no skips); dedicated CUDA profiler PASSED (1/1); import/syntax/hygiene and release-config diff checks PASSED.
+- Final real smokes PASSED: disabled 100 steps reported `0 N / 0 N·m`; enabled 100 steps reported `8.457119 N / 2.564395 N·m`, below `30 N / 20 N·m`, then passed two same-process disabled steps and reset checks. The smoke failure path was separately verified to return exit status 1.
+- Independent rerun also PASSED: CPU 45 tests with only two CUDA skips, full compatibility-driver CUDA/Hydra 45/45, disabled 100-step smoke, and enabled 100-step plus active-to-off two-step smoke with the same peak metrics.
+- Phase 2 is marked `PASSED`; `current_phase` advances to 3, but no Phase 3 policy/critic/checkpoint work was executed in this handoff.

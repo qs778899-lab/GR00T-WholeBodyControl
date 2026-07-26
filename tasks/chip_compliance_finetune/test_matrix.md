@@ -61,15 +61,77 @@ The training entrypoint `--help` smoke requires Isaac Lab, which is not installe
 
 ## Phase 2 — Simulator command/event and observation integration
 
-- Phase 1 matrix.
-- Isaac Lab config composition for the new compliance experiment only.
-- CPU/GPU tensor tests for `[env, future, site, xyz]` force/target alignment.
-- Resolve the same ordered sites from deliberately different reference-motion and articulation body orders; assert each consumer receives only its typed index space.
-- With a known non-zero yaw/full rotation, transform a basis force and reference target into the declared common frame and numerically verify CHIP sign and axis; identity-only tests do not satisfy this check.
-- Target-damper state/update plus full and partial environment reset tests; no stale goal may survive reset.
-- One-environment simulator smoke with force disabled, then enabled.
-- Assertions that reference buffers are unchanged after observation construction.
-- Hydra body-name resolver tests for full and partial reference-body sets without fixed indices.
+Run from the repository root. These commands include the inherited Phase 1 checks.
+
+1. Portable CPU suite
+
+   ```bash
+   PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s gear_sonic/tests/compliance -p 'test_*.py' -v
+   ```
+
+   Required result: 45 tests pass. The repository's portable `.venv_sim` run has four expected CUDA/Hydra skips; a CPU environment with Hydra installed has only the two CUDA skips. The suite covers CPU shape alignment, separate typed index spaces, arbitrary site sets, deterministic CHIP-faithful discrete compliance sampling, non-zero yaw/full-rotation frame and CHIP-sign checks, non-mutation, pulse scheduling, activation-edge damper seeding, full/partial reset, inactive-site masking, per-step net-wrench limiting, body-local wrench conversion, disabled writer ownership, and production-source fast-path routing.
+
+2. Full `sonic_backup` CPU/CUDA/Hydra suite
+
+   ```bash
+   _CHIP_PHASE2_CUDA_LIB=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu
+   _CHIP_PHASE2_CUDA_PRELOAD="${_CHIP_PHASE2_CUDA_LIB}/libnvidia-ml.so.580.159.03:${_CHIP_PHASE2_CUDA_LIB}/libcuda.so.580.159.03"
+   _CHIP_PHASE2_VK_ICD=/tmp/nvidia_580_159_compat/extracted/usr/share/vulkan/icd.d/nvidia_icd.json
+   env LD_LIBRARY_PATH="${_CHIP_PHASE2_CUDA_LIB}" \
+       LD_PRELOAD="${_CHIP_PHASE2_CUDA_PRELOAD}" \
+       VK_ICD_FILENAMES="${_CHIP_PHASE2_VK_ICD}" \
+       PYTHONDONTWRITEBYTECODE=1 \
+       /home/lab/miniconda3/envs/sonic_backup/bin/python \
+       -m unittest discover -s gear_sonic/tests/compliance -p 'test_*.py' -v
+   ```
+
+   Required result: all 45 tests pass with no skip. The Hydra tests must compose only the derived compliance experiment and resolve both full and partial runtime body-name sets without fixed indices.
+
+3. Dedicated CUDA host-sync profiler assertion
+
+   ```bash
+   env LD_LIBRARY_PATH="${_CHIP_PHASE2_CUDA_LIB}" \
+       LD_PRELOAD="${_CHIP_PHASE2_CUDA_PRELOAD}" \
+       VK_ICD_FILENAMES="${_CHIP_PHASE2_VK_ICD}" \
+       PYTHONDONTWRITEBYTECODE=1 \
+       /home/lab/miniconda3/envs/sonic_backup/bin/python \
+       -m unittest \
+       gear_sonic.tests.compliance.test_sonic_phase2_adapter.HotPathHostSyncTest.test_cuda_prevalidated_hot_path_does_not_extract_scalars \
+       -v
+   ```
+
+   Required result: one test passes. Both `TorchDispatchMode` and `torch.profiler` must observe no `aten::_local_scalar_dense` in the prevalidated production path.
+
+4. One-environment disabled and enabled simulator smokes
+
+   ```bash
+   _CHIP_PHASE2_MOTION=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sample_data/robot_filtered/210531/walk_forward_amateur_001__A001.pkl
+   _CHIP_PHASE2_SMPL=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sample_data/smpl_filtered
+   env LD_LIBRARY_PATH="${_CHIP_PHASE2_CUDA_LIB}" \
+       LD_PRELOAD="${_CHIP_PHASE2_CUDA_PRELOAD}" \
+       VK_ICD_FILENAMES="${_CHIP_PHASE2_VK_ICD}" \
+       PYTHONDONTWRITEBYTECODE=1 \
+       /home/lab/miniconda3/envs/sonic_backup/bin/python \
+       gear_sonic/scripts/run_chip_compliance_smoke.py \
+       --headless --device cuda:0 --no-enabled --steps 100 \
+       --motion-file "${_CHIP_PHASE2_MOTION}" \
+       --smpl-motion-dir "${_CHIP_PHASE2_SMPL}"
+   env LD_LIBRARY_PATH="${_CHIP_PHASE2_CUDA_LIB}" \
+       LD_PRELOAD="${_CHIP_PHASE2_CUDA_PRELOAD}" \
+       VK_ICD_FILENAMES="${_CHIP_PHASE2_VK_ICD}" \
+       PYTHONDONTWRITEBYTECODE=1 \
+       /home/lab/miniconda3/envs/sonic_backup/bin/python \
+       gear_sonic/scripts/run_chip_compliance_smoke.py \
+       --headless --device cuda:0 --enabled --steps 100 \
+       --motion-file "${_CHIP_PHASE2_MOTION}" \
+       --smpl-motion-dir "${_CHIP_PHASE2_SMPL}"
+   ```
+
+   Both runs must print `CHIP_PHASE2_SMOKE_PASS`. Disabled mode must keep the writer inactive and report zero applied wrench. Enabled mode must observe a non-zero wrench, reconstruct the world force from the composer's current body-local rows, verify local offset torque, and report actual peak net force/torque below configured limits. After 100 enabled steps it must switch the same command to disabled for two steps: the first clears ownership/selected composer rows, the second keeps ownership false and those rows zero. Reset must then clear all command and damper state.
+
+5. Import, syntax, and patch hygiene
+
+   Run the Phase 1 import/syntax and patch-hygiene commands unchanged. The released `sonic_release.yaml` must have no diff, and no generated cache or temporary result may remain in the task scope.
 
 ## Phase 3 — Checkpoint-compatible policy/critic integration
 

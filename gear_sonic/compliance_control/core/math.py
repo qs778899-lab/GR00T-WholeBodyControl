@@ -11,7 +11,7 @@ from .schema import (
 )
 
 
-def _expand_forces(
+def _expand_forces_prevalidated(
     external_forces: torch.Tensor,
     reference_positions: torch.Tensor,
     *,
@@ -19,7 +19,6 @@ def _expand_forces(
     future: int,
     sites: int,
 ) -> torch.Tensor:
-    validate_tensor_compatibility(external_forces, reference_positions, name="external_forces")
     if external_forces.ndim == 3 and tuple(external_forces.shape) == (batch, sites, 3):
         return external_forces.view(batch, 1, sites, 3).expand(batch, future, sites, 3)
     if external_forces.ndim == 4 and tuple(external_forces.shape) == (
@@ -35,7 +34,25 @@ def _expand_forces(
     )
 
 
-def expand_compliance(
+def _expand_forces(
+    external_forces: torch.Tensor,
+    reference_positions: torch.Tensor,
+    *,
+    batch: int,
+    future: int,
+    sites: int,
+) -> torch.Tensor:
+    validate_tensor_compatibility(external_forces, reference_positions, name="external_forces")
+    return _expand_forces_prevalidated(
+        external_forces,
+        reference_positions,
+        batch=batch,
+        future=future,
+        sites=sites,
+    )
+
+
+def expand_compliance_prevalidated(
     compliance: torch.Tensor,
     reference_positions: torch.Tensor,
     *,
@@ -43,9 +60,9 @@ def expand_compliance(
     future: int,
     sites: int,
 ) -> torch.Tensor:
-    validate_tensor_compatibility(compliance, reference_positions, name="compliance")
-    if (compliance < 0.0).any():
-        raise ValueError("compliance must be non-negative inverse stiffness")
+    """Expand lifecycle-validated compliance without CUDA scalar extraction."""
+
+    del reference_positions
     shape = tuple(compliance.shape)
     if compliance.ndim == 2 and shape == (batch, sites):
         return compliance.view(batch, 1, sites, 1).expand(batch, future, sites, 1)
@@ -73,11 +90,91 @@ def expand_compliance(
     )
 
 
+def expand_compliance(
+    compliance: torch.Tensor,
+    reference_positions: torch.Tensor,
+    *,
+    batch: int,
+    future: int,
+    sites: int,
+) -> torch.Tensor:
+    validate_tensor_compatibility(compliance, reference_positions, name="compliance")
+    if (compliance < 0.0).any():
+        raise ValueError("compliance must be non-negative inverse stiffness")
+    return expand_compliance_prevalidated(
+        compliance,
+        reference_positions,
+        batch=batch,
+        future=future,
+        sites=sites,
+    )
+
+
 def _limit_vector_norm(vectors: torch.Tensor, max_norm: float) -> torch.Tensor:
     norms = torch.linalg.vector_norm(vectors, dim=-1, keepdim=True)
     safe_norms = norms.clamp_min(torch.finfo(vectors.dtype).tiny)
     scale = (max_norm / safe_norms).clamp(max=1.0)
     return vectors * scale
+
+
+def apply_hindsight_target_prevalidated(
+    reference_positions: torch.Tensor,
+    external_forces: torch.Tensor,
+    compliance: torch.Tensor,
+    *,
+    spec: ComplianceTargetSpec,
+    enabled: bool | torch.Tensor = True,
+    site_mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Apply CHIP math to lifecycle-validated tensors without host synchronization.
+
+    This function is only for simulator hot paths whose shape, dtype, device,
+    finiteness, sign, and frame contracts were checked when command state was
+    created or sampled. Public callers should use :func:`apply_hindsight_target`.
+    """
+
+    if isinstance(enabled, bool) and not enabled:
+        return reference_positions.clone()
+    batch, future, sites, _ = reference_positions.shape
+    forces = _expand_forces_prevalidated(
+        external_forces,
+        reference_positions,
+        batch=batch,
+        future=future,
+        sites=sites,
+    )
+    compliance_expanded = expand_compliance_prevalidated(
+        compliance,
+        reference_positions,
+        batch=batch,
+        future=future,
+        sites=sites,
+    )
+    displacement = compliance_expanded * forces
+
+    if site_mask is not None:
+        mask = expand_site_mask(
+            site_mask,
+            batch=batch,
+            future=future,
+            sites=sites,
+            device=reference_positions.device,
+        )
+        displacement = torch.where(mask.unsqueeze(-1), displacement, 0.0)
+    if spec.max_displacement_m is not None:
+        displacement = _limit_vector_norm(displacement, spec.max_displacement_m)
+
+    candidate = reference_positions - displacement
+    if isinstance(enabled, torch.Tensor):
+        hard_gate = expand_hard_gate(
+            enabled,
+            batch=batch,
+            future=future,
+            sites=sites,
+            device=reference_positions.device,
+        )
+        return torch.where(hard_gate.unsqueeze(-1), candidate, reference_positions)
+    return candidate
 
 
 def apply_hindsight_target(
@@ -137,28 +234,11 @@ def apply_hindsight_target(
         future=future,
         sites=sites,
     )
-    displacement = compliance_expanded * forces
-
-    if site_mask is not None:
-        mask = expand_site_mask(
-            site_mask,
-            batch=batch,
-            future=future,
-            sites=sites,
-            device=reference_positions.device,
-        )
-        displacement = torch.where(mask.unsqueeze(-1), displacement, 0.0)
-    if spec.max_displacement_m is not None:
-        displacement = _limit_vector_norm(displacement, spec.max_displacement_m)
-
-    candidate = reference_positions - displacement
-    if isinstance(enabled, torch.Tensor):
-        hard_gate = expand_hard_gate(
-            enabled,
-            batch=batch,
-            future=future,
-            sites=sites,
-            device=reference_positions.device,
-        )
-        return torch.where(hard_gate.unsqueeze(-1), candidate, reference_positions)
-    return candidate
+    return apply_hindsight_target_prevalidated(
+        reference_positions,
+        forces,
+        compliance_expanded,
+        spec=spec,
+        enabled=enabled,
+        site_mask=site_mask,
+    )

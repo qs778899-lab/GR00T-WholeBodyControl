@@ -1,0 +1,7 @@
+chip_compliance_target:
+  _target_: isaaclab.managers.ObservationTermCfg
+  func: gear_sonic.compliance_control.adapters.sonic.isaaclab.observations:sonic_compliance_target
+  params:
+    motion_command_name: motion
+    compliance_command_name: force
+    non_flatten: true

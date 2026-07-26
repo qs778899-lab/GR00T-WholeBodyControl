@@ -89,6 +89,18 @@ class TargetDamper:
         self._previous_target = damped_target.detach().clone()
         return damped_target
 
+    def update_prevalidated(self, current_eef_positions: torch.Tensor) -> torch.Tensor:
+        """Update lifecycle-validated simulator state without CUDA host sync."""
+
+        if self._previous_target is None:
+            raise RuntimeError("target damper is not initialized; call reset first")
+        damped_target = (
+            self.alpha * current_eef_positions
+            + (1.0 - self.alpha) * self._previous_target
+        )
+        self._previous_target = damped_target.detach().clone()
+        return damped_target
+
     def _validate_state_compatibility(self, current_eef_positions: torch.Tensor) -> None:
         assert self._previous_target is not None
         if self._previous_target.shape != current_eef_positions.shape:

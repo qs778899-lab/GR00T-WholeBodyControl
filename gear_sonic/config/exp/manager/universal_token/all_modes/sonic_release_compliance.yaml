@@ -1,0 +1,15 @@
+# @package _global_
+# Opt-in Phase-2 compliance experiment. The released sonic_release config is unchanged.
+
+defaults:
+  - /exp/manager/universal_token/all_modes/sonic_release
+  - override /manager_env/commands: tracking/chip_compliance
+  - override /manager_env/events: tracking/chip_compliance
+  - override /manager_env/observations/tokenizer: unitoken_all_noz_chip_compliance
+  - _self_
+
+manager_env:
+  commands:
+    force:
+      enabled: false
+      target_damper_enabled: false
