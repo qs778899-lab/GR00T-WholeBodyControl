@@ -1,0 +1,15 @@
+motion_compliance_apply:
+  _target_: isaaclab.managers.EventTermCfg
+  func: gear_sonic.compliance_control.adapters.sonic.mdp:apply_compliance_wrench
+  mode: interval
+  interval_range_s: [0.0, 0.0]
+  params:
+    command_name: motion_compliance
+
+motion_compliance_reset:
+  _target_: isaaclab.managers.EventTermCfg
+  func: gear_sonic.compliance_control.adapters.sonic.mdp:reset_compliance_wrench
+  mode: reset
+  min_step_count_between_reset: 0
+  params:
+    command_name: motion_compliance

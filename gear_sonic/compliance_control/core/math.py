@@ -139,6 +139,21 @@ def clamp_vector_norm(
     limit = _floating_tensor(max_norm, device=vectors.device).to(vectors.dtype)
     if not torch.isfinite(limit).all() or (limit < 0.0).any():
         raise ValueError("max_norm must be finite and non-negative")
+    return _clamp_vector_norm_unchecked(vectors, limit, eps=eps)
+
+
+def _clamp_vector_norm_unchecked(
+    vectors: torch.Tensor,
+    max_norm: torch.Tensor | Real,
+    *,
+    eps: float = 1.0e-6,
+) -> torch.Tensor:
+    """Adapter-internal clamp without value reductions; caller owns validation."""
+
+    if isinstance(max_norm, torch.Tensor):
+        limit = max_norm.to(device=vectors.device, dtype=vectors.dtype)
+    else:
+        limit = torch.as_tensor(max_norm, device=vectors.device, dtype=vectors.dtype)
     while limit.ndim < vectors.ndim:
         limit = limit.unsqueeze(-1)
 

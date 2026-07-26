@@ -68,6 +68,26 @@ Baseline: NVLabs upstream `main` at
 - Implement persistent per-environment state, independent/simultaneous site
   masks, event timing, threshold sampling, force application/reset, and net
   wrench limiting.
+- Resolve the tracking-reference and articulation body indices independently;
+  neither index space may be inferred from the other.  Convert reference and
+  measured points into an explicit current-anchor common frame, and convert the
+  resulting `force_on_robot` vectors into world coordinates for offset-torque
+  reconstruction and residual limiting.  Convert the final wrench using each
+  body's current quaternion and write it in link-local coordinates at the
+  simulator boundary, avoiding stale global-pose caching in the composer.
+- Preserve each requested site wrench while a replaceable residual-wrench
+  limiter adds anchor compensation so the resulting whole-robot residual is no
+  larger than 20 N / 10 Nm.  Site-force synthesis, whole-body limiting, and
+  PhysX writing remain separate responsibilities.
+- Apply the persistent wrench after command computation at every policy step.
+  Prefer IsaacLab's modern `permanent_wrench_composer`; keep the deprecated
+  articulation setter only as an isolated feature-detected fallback.  Reset
+  events clear both command-owned tensors and the composer before reuse.
+- Keep the host-side operational switch `false` by default.  Disabled mode
+  skips per-step compliance math and does not touch an already-clean composer;
+  disabling after application clears it exactly once.  Validate static tensor
+  contracts outside the CUDA hot path and use adapter-private no-sync kernels
+  only after that validation boundary.
 - Default physical sites are resolved by body name in the SONIC adapter; the
   core remains site-count agnostic and the configuration supports more sites
   without changing the policy contract.
@@ -76,6 +96,9 @@ Baseline: NVLabs upstream `main` at
 - Add an opt-in command composition under
   `config/manager_env/commands/`; leave the standard command composition
   unchanged.
+- Validate the real lifecycle in one headless CUDA environment: 100 disabled
+  policy steps with an inactive composer, 100 forced-on/all-site policy steps,
+  finite state/composer checks, and an explicit stale-wrench reset assertion.
 
 ### Phase 3 — Observation, reward, and experiment composition
 

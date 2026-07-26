@@ -36,16 +36,30 @@ does not leave repository caches.
 
 ## Phase 2 — IsaacLab virtual-force command adapter
 
-1. Run all Phase-1 tests.
-2. Unit-test the thin adapter's reset clearing, deterministic seeded sampling, independent and
-   simultaneous masks, threshold/Kp coupling, per-site force clamp, and net
-   wrench clamp.
-3. Assert the adapter is the only layer importing IsaacLab or containing SONIC
-   body-name mappings, then Hydra compose the opt-in command with 1 environment.
-4. IsaacLab headless smoke: 100 policy steps with `enable_probability=0` and
-   100 steps with forced-on events; assert finite state and no stale wrench
-   after reset.
-5. `git diff --check`.
+1. Run the combined Phase-1/Phase-2 pure suite:
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B -m pytest -p no:cacheprovider -q gear_sonic/tests/test_compliance_core.py gear_sonic/tests/test_compliance_sonic_adapter.py`.
+2. The suite must cover deterministic seeded sampling, disabled/single-site/
+   simultaneous masks, threshold/Kp coupling, partial reset clearing every
+   dynamic tensor, full per-site formula over multiple future frames, separate
+   reference/articulation body-index spaces, non-identity frame rotation and
+   sign, a changing-body quaternion for current world-to-local wrench
+   conversion, and 1/2/5-site residual-wrench reconstruction/clamping.
+3. The suite must assert that only the SONIC adapter imports IsaacLab or owns
+   SONIC body names, exercise both modern-composer and deprecated-setter feature
+   paths with body-local fakes, reject scalar extraction/value validation in the
+   per-step unchecked tensor path, verify disabled-clean writer calls are zero,
+   and Hydra-compose the opt-in command/event groups with one environment.
+4. Run the real one-environment headless smoke with the NVIDIA 580.159
+   compatibility libraries:
+   `env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu LD_PRELOAD=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.580.159.03:/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libcuda.so.580.159.03 VK_ICD_FILENAMES=/tmp/nvidia_580_159_compat/extracted/usr/share/vulkan/icd.d/nvidia_icd.json PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase2_isaaclab_smoke.py`.
+   It must instantiate the real manager environment with the audited sample,
+   execute exactly 100 disabled and 100 forced-on policy steps, use the modern
+   composer, prove it remains inactive throughout disabled mode, keep every
+   checked tensor finite, observe a nonzero forced wrench, and clear
+   command/composer force and torque on reset.
+5. `git diff --check` and, after staging only Phase-1/Phase-2 files,
+   `git diff --cached --check`.
+6. Confirm no `__pycache__`, `.pytest_cache`, `.pyc`, or `.pyo` remains.
 
 ## Phase 3 — Observation, reward, and experiment composition
 

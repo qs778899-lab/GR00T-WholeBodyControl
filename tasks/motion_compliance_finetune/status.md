@@ -6,12 +6,12 @@ baseline: `NVlabs/GR00T-WholeBodyControl@4141c34280abb67c82e115342a8720f4a83d750
 
 overall_status: `IN_PROGRESS`
 
-current_phase: `2`
+current_phase: `3`
 
 | Phase | Name | Status |
 |---|---|---|
 | 1 | Baseline contract and tracker-agnostic core skeleton | PASSED |
-| 2 | IsaacLab virtual-force command adapter | PENDING |
+| 2 | IsaacLab virtual-force command adapter | PASSED |
 | 3 | Observation, reward, and experiment composition | PENDING |
 | 4 | Checkpoint migration and finetune workflow | PENDING |
 | 5 | Export and deployment switch | PENDING |

@@ -1,0 +1,7 @@
+# Opt-in command composition; the standard tracking/base composition is unchanged.
+
+defaults:
+  - terms/motion@_here_
+  - terms/motion_compliance@_here_
+
+_target_: gear_sonic.compliance_control.adapters.sonic.manager_cfg.ComplianceCommandsCfg

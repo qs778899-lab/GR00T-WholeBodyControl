@@ -11,7 +11,12 @@ from numbers import Real
 
 import torch
 
-from .math import _binary_enabled_tensor, clamp_vector_norm, stiffness_from_threshold
+from .math import (
+    _binary_enabled_tensor,
+    _clamp_vector_norm_unchecked,
+    clamp_vector_norm,
+    stiffness_from_threshold,
+)
 
 
 def _validate_reference_pair(
@@ -259,6 +264,97 @@ def virtual_force_from_reference_delta(
 
     mask = _expanded_site_mask(active_mask, original_reference)
     mask = mask & _expanded_enabled_mask(enabled, original_reference)
+    return torch.where(
+        mask.unsqueeze(-1),
+        force_on_robot,
+        torch.zeros_like(force_on_robot),
+    )
+
+
+def _expanded_site_data_unchecked(
+    value: torch.Tensor | Real,
+    reference: torch.Tensor,
+) -> torch.Tensor:
+    if isinstance(value, torch.Tensor):
+        tensor = value
+    else:
+        tensor = torch.as_tensor(value, device=reference.device, dtype=reference.dtype)
+    return _reshape_site_data(tensor, reference, name="unchecked_site_data")
+
+
+def _expanded_enabled_unchecked(
+    enabled: torch.Tensor | bool,
+    reference: torch.Tensor,
+) -> torch.Tensor:
+    if isinstance(enabled, torch.Tensor):
+        gate = enabled
+    else:
+        gate = torch.as_tensor(enabled, device=reference.device)
+    target_shape = reference.shape[:-1]
+    batch_size = reference.shape[0]
+    if gate.ndim == 0:
+        gate = gate.reshape(*([1] * len(target_shape)))
+    elif gate.ndim == 1 and gate.shape[0] == batch_size:
+        gate = gate.reshape(batch_size, *([1] * (len(target_shape) - 1)))
+    elif gate.shape == (batch_size, 1):
+        gate = gate.reshape(batch_size, *([1] * (len(target_shape) - 1)))
+    else:
+        raise ValueError("enabled must be scalar, [batch], or [batch, 1]")
+    return torch.broadcast_to(gate, target_shape)
+
+
+def _virtual_force_from_reference_delta_unchecked(
+    original_reference: torch.Tensor,
+    compliant_reference: torch.Tensor,
+    active_mask: torch.Tensor,
+    force_threshold_n: torch.Tensor | Real,
+    *,
+    current_reference: torch.Tensor | None = None,
+    reference_displacement_m: float = 0.05,
+    tracking_gain_n_per_m: torch.Tensor | Real = 100.0,
+    tracking_force_cap_n: torch.Tensor | Real = 5.0,
+    include_tracking_term: bool = True,
+    enabled: torch.Tensor | bool = True,
+) -> torch.Tensor:
+    """Adapter-internal force path with no reductions or host synchronization.
+
+    This has the same formula and broadcasting contract as
+    :func:`virtual_force_from_reference_delta`, but assumes the caller already
+    established shape, dtype, device, finite-value, binary-mask, and positive-
+    configuration invariants.  Simulator adapters may use it after validating
+    their construction-time configuration; external callers should use the
+    checked function above.
+    """
+
+    threshold = _expanded_site_data_unchecked(
+        force_threshold_n,
+        original_reference,
+    ).unsqueeze(-1)
+    stiffness = threshold / reference_displacement_m
+    nominal_force = _clamp_vector_norm_unchecked(
+        (compliant_reference - original_reference) * stiffness,
+        threshold,
+    )
+
+    force_on_robot = nominal_force
+    if include_tracking_term and current_reference is not None:
+        current = _expanded_current_reference(current_reference, original_reference)
+        tracking_gain = _expanded_site_data_unchecked(
+            tracking_gain_n_per_m,
+            original_reference,
+        ).unsqueeze(-1)
+        tracking_cap = _expanded_site_data_unchecked(
+            tracking_force_cap_n,
+            original_reference,
+        ).unsqueeze(-1)
+        tracking_force = _clamp_vector_norm_unchecked(
+            (compliant_reference - current) * tracking_gain,
+            tracking_cap,
+        )
+        force_on_robot = force_on_robot + tracking_force
+
+    mask = _reshape_site_data(active_mask, original_reference, name="active_mask")
+    mask = mask & _expanded_enabled_unchecked(enabled, original_reference)
     return torch.where(
         mask.unsqueeze(-1),
         force_on_robot,

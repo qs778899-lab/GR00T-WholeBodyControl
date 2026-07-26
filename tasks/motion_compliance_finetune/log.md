@@ -94,3 +94,90 @@
 - No unstaged source change, `__pycache__`, `.pytest_cache`, `.pyc`, or `.pyo`
   remains.  Phase 1 returns to `PASSED`; `current_phase` advances to 2, which is
   still `PENDING` and was not executed.
+
+## 2026-07-27 — Phase 2 started
+
+- Marked only Phase 2 `IN_PROGRESS`; Phase 1 remains staged and passed.
+- Added an additive thin adapter without editing the large tracking command or
+  any release configuration.  Reference-motion and articulation index spaces
+  resolve independently from names.
+- Added explicit current-anchor common/world transforms, persistent seeded
+  per-environment sampling, full multi-future site-force state, replaceable
+  20 N / 10 Nm residual-wrench limiting with anchor compensation, and a narrow
+  PhysX event boundary with modern-composer feature detection.
+- Added opt-in Hydra command and event compositions.  The interval writer runs
+  after command computation every policy step; reset clears command buffers and
+  the permanent composer.
+- The combined pure suite passed preliminarily: `36 passed in 1.13s`.  It also
+  composes the one-environment opt-in Hydra configuration and exercises modern
+  and fallback writer paths without starting IsaacSim.
+- Added a real one-environment headless acceptance script using the audited
+  official robot/SMPL sample.  It performs 100 disabled and 100 forced-on
+  policy steps and checks finite state, real permanent-composer application,
+  and stale-wrench reset.  Phase 2 remains `IN_PROGRESS` until this CUDA smoke
+  and the final matrix pass.
+
+## 2026-07-27 — Phase 2 passed
+
+- Fixed the standalone smoke import root explicitly so it loads the experiment
+  worktree rather than the main workspace's editable package.  Its failure path
+  emits a traceback and exits nonzero instead of allowing IsaacSim shutdown to
+  mask an import error.
+- The final combined pure matrix passed: `36 passed in 1.11s`.  This includes
+  all 23 Phase-1 tests and 13 adapter/config/writer tests.
+- The final real CUDA smoke passed in 22.4 seconds on one RTX 4090 environment
+  using IsaacSim's modern `permanent_wrench_composer`.  It completed 100/100
+  disabled steps with exactly `0.0 N` peak, then 100/100 forced-on steps with
+  finite state and `8.329804 N` site / `8.329803 N` composer peak force.
+- The registered reset event cleared command and composer force and torque;
+  the smoke emitted `"reset_zero": true`.  It used the NVIDIA 580.159
+  compatibility libraries against the audited official sample and exited 0.
+- IsaacSim emitted non-fatal platform-info/NVML warnings while nevertheless
+  reporting driver `580.159.03`, RTX 4090 active, constructing the real manager
+  environment, and completing every acceptance assertion.
+- `git diff --check` passed and repository-local Python/pytest caches were
+  removed.  Phase 2 is `PASSED`; `current_phase` advances to 3.  No Phase-3
+  implementation or test was executed.
+
+## 2026-07-27 — Phase 2 reopened after boundary review
+
+- Independent review found two construction-boundary hardening gaps, so Phase
+  2 returned to `IN_PROGRESS` without beginning Phase 3.
+- Body-name resolvers now reject scalar strings/bytes, empty sequences/names,
+  non-string elements, duplicate available names, and an empty anchor instead
+  of accidentally iterating characters or deferring an ambiguous mapping.
+- Site body offsets now pass through a pure, unit-testable construction helper
+  that requires exact `[num_sites, 3]` shape, real numeric data, and finite
+  values before the command allocates runtime state.
+
+## 2026-07-27 — Phase 2 review fixes passed
+
+- Kept the portable checked APIs intact and added private, adapter-only
+  unchecked tensor kernels after construction/resampling validation.  The
+  per-step command path and cached condition avoid CUDA scalar extraction;
+  static tests reject value-validation and scalar-sync operations there.
+- Corrected the physical writer boundary for a moving robot.  Endpoint torque,
+  net residual limiting, and anchor compensation remain in world coordinates;
+  the final site/anchor force and torque use each body's current quaternion and
+  are written in link-local coordinates with `is_global=false`.  This avoids
+  reuse of the modern composer's first-write link pose.  A 90-degree changing-
+  body test verifies both force and torque coordinates.
+- Made the opt-in command operationally off by default.  It skips compliance
+  math and leaves a clean composer untouched for all disabled steps; switching
+  off after application writes zero once.  The public three-value condition is
+  cached and exactly zero while disabled.
+- The final combined pure matrix passed: `48 passed in 1.20s`.  It includes the
+  23 Phase-1 tests plus strict mapping/offset validation, full future/site force
+  math, no-sync boundary checks, moving-frame wrench conversion, 1/2/5-site net
+  limiting, both writer API paths, opt-out behavior, and Hydra composition.
+- The final real CUDA smoke exited 0 after exactly 100 disabled and 100 forced
+  policy steps in the real one-environment RTX 4090 manager environment.  The
+  disabled composer stayed inactive with `0.0 N` peak.  Forced mode reached
+  `8.320412 N` site and `8.320410 N` composer peak force; reset cleared command
+  and composer force/torque (`"reset_zero": true`).
+- IsaacSim's platform/NVML diagnostics remained non-fatal.  The smoke used the
+  specified NVIDIA 580.159 compatibility libraries and the audited official
+  robot/SMPL sample; all finite-state and lifecycle assertions passed.
+- Final source/cached diff checks and repository cache hygiene passed.  Phase 2
+  is `PASSED`; `current_phase` advances to 3.  No Phase-3 implementation or
+  test was executed.

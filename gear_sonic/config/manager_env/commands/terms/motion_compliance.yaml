@@ -1,0 +1,25 @@
+motion_compliance:
+  _target_: gear_sonic.compliance_control.adapters.sonic.manager_cfg.MotionComplianceCommandCfg
+  enabled: false
+  asset_name: robot
+  tracking_command_name: motion
+  reference_body_names: ${manager_env.commands.motion.body_names}
+  site_body_names: [left_wrist_yaw_link, right_wrist_yaw_link]
+  anchor_body_name: torso_link
+  site_body_offsets:
+    - [0.18, -0.025, 0.0]
+    - [0.18, 0.025, 0.0]
+  common_frame: current_anchor
+  num_future_frames: ${manager_env.commands.motion.num_future_frames}
+  seed: ${seed}
+  enable_probability: 0.75
+  site_activation_probability: 0.5
+  force_threshold_range_n: [10.0, 20.0]
+  reference_displacement_m: 0.05
+  reference_offset_range_m: [0.02, 0.05]
+  tracking_gain_n_per_m: 100.0
+  tracking_force_cap_n: 5.0
+  max_net_force_n: 20.0
+  max_net_torque_nm: 10.0
+  resampling_time_range: [2.0, 16.0]
+  debug_vis: false
