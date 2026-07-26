@@ -8,6 +8,8 @@ from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.utils import configclass
 import torch
 
+from gear_sonic.envs.manager_env.mdp.observations import ObservationsCfg
+
 from .contracts import (
     condition_from_command,
     current_site_force_from_command,
@@ -20,37 +22,27 @@ if TYPE_CHECKING:
 
 
 @configclass
-class MotionCompliancePolicyCfg(ObsGroup):
-    """Released proprioception plus one public three-value condition."""
+class MotionComplianceConditionCfg(ObsGroup):
+    """Actor-visible condition kept separate from released proprioception."""
 
-    # Keep the selected release PolicyCfg declaration order exactly; condition
-    # is appended so the original 930 proprioceptive columns do not move.
-    base_ang_vel = None
-    joint_pos = None
-    joint_vel = None
-    actions = None
-    gravity_dir = None
     motion_compliance_condition = None
 
 
 @configclass
 class MotionCompliancePrivilegedCfg(ObsGroup):
-    """Released critic state plus configurable-site compliance state."""
+    """Critic-only site state kept separate from released critic input."""
 
-    command_multi_future = None
-    motion_anchor_pos_b = None
-    motion_anchor_ori_b = None
-    body_pos = None
-    body_ori = None
-    base_lin_vel = None
-    base_ang_vel = None
-    joint_pos = None
-    joint_vel = None
-    actions = None
-    motion_compliance_condition = None
     motion_compliance_threshold = None
     motion_compliance_site_force = None
     motion_compliance_site_mask = None
+
+
+@configclass
+class MotionComplianceObservationsCfg(ObservationsCfg):
+    """Add two groups without changing released policy/critic groups."""
+
+    motion_compliance_condition: MotionComplianceConditionCfg = None
+    motion_compliance_privileged: MotionCompliancePrivilegedCfg = None
 
 
 def _compliance_command(env: ManagerBasedEnv, command_name: str):

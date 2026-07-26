@@ -81,11 +81,12 @@ does not leave repository caches.
    remain `command_multi_future_nonflat [10,58]` and
    `motion_anchor_ori_b_mf_nonflat [10,6]`, in that order.
    The resolved termination subtree must also remain fully equal.
-3. Assert the policy group keeps all 930 released columns as a prefix and adds
-   only the final 3D public condition.  The critic adds the public condition,
-   scalar threshold, `3*S` current-frame applied site force, and `S` mask,
-   where `S` comes from command configuration; privileged fields must not enter
-   the actor.
+3. Assert released policy/critic observation subtrees remain fully equal at
+   widths 930/1645.  The actor-visible condition is a separate 3D group; the
+   critic-only group contains scalar threshold, `3*S` current-frame applied
+   site force, and `S` mask for width `1+4*S`, where `S` comes from command
+   configuration.  Privileged fields must not enter direct actor input or its
+   temporal history.
 4. Off-mode golden: the active mask and condition are zero, selection preserves
    every original reference bitwise, both new rewards contribute exactly zero,
    all released dense reward configs remain equal, and the inline
@@ -100,21 +101,34 @@ does not leave repository caches.
    locally rather than consume the prior command-update cache.  Orientation
    always uses original future-zero reference and is independently reportable
    per site.
-6. Rerun the Phase-2 real 100-disabled/100-forced smoke after the command cache
+6. Run the pinned official CPU residual-contract smoke:
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase3_official_residual_contract_smoke.py`.
+   Require SHA-256 ending `d8909`, actor input `2048x994`, critic input
+   `2048x1645`, critic RMS width 1645, exact release policy/critic observation
+   groups, and separate condition/privileged widths 3/9 for two sites.  The
+   official checkpoint contains no residual keys; residual keys are initialized
+   from the target model, never by expanding official tensors.
+7. Rerun the Phase-2 real 100-disabled/100-forced smoke after the command cache
    refactor using the exact Phase-2 command above.
-7. Run the real Phase-3 resolved-shape/off-golden smoke:
+8. Run the real Phase-3 resolved-shape/off-golden smoke:
    `env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu LD_PRELOAD=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.580.159.03:/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libcuda.so.580.159.03 VK_ICD_FILENAMES=/tmp/nvidia_580_159_compat/extracted/usr/share/vulkan/icd.d/nvidia_icd.json PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase3_isaaclab_smoke.py`.
    It must instantiate one real manager environment, observe policy/critic
-   shapes `[1,933]`/`[1,1657]` for the default two sites, preserve the two G1
-   tokenizer shapes, independently reconstruct the tracking command's
-   future-zero endpoint reference, return exact-zero new rewards while
-   host-disabled, and prove the manager total is bitwise equal to the sum of
-   released shared reward contributions.  Then set sampled enable/mask/offset
-   on the real command, poison its prior cache, and prove the production reward
-   re-reads current physics state without mutating cache or wrench buffers.
-8. `git diff --check` and, after staging only task-scoped Phase-3 files,
+   shapes `[1,930]`/`[1,1645]` and separate condition/privileged shapes
+   `[1,3]`/`[1,9]` for two sites, and preserve both G1 tokenizer shapes.  It
+   must instantiate the resolved actor/value, retain `g1_dyn=994`,
+   critic/RMS=1645, load every official tensor byte-exact with only new residual
+   keys missing, and cover zero-init off parity, mixed `[off,on,off]`, poisoned
+   rejected rows with finite residual-only gradients, privileged actor
+   isolation, aux and external-token paths, bounded deltas, and out-of-place
+   frozen-noise clamping.  It also independently reconstructs the tracking
+   command's future-zero endpoint reference, returns exact-zero new rewards
+   while host-disabled, proves the manager total is bitwise equal to released
+   shared contributions, then poisons the prior command cache and proves the
+   reward re-reads current physics state without mutating cache or wrench
+   buffers.
+9. `git diff --check` and, after staging only task-scoped Phase-3 files,
    `git diff --cached --check`.
-9. Confirm no `__pycache__`, `.pytest_cache`, `.pyc`, or `.pyo` remains.
+10. Confirm no `__pycache__`, `.pytest_cache`, `.pyc`, or `.pyo` remains.
 
 ## Phase 4 — Checkpoint migration and finetune workflow
 

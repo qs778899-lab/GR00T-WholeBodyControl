@@ -111,9 +111,17 @@ Baseline: NVLabs upstream `main` at
 
 ### Phase 3 — Observation, reward, and experiment composition
 
-- Append the 3D public compliance condition to policy proprioception and expose
-  the same public condition plus raw threshold/current applied site force/site
-  mask to the critic.  Privileged widths follow the configured site count.
+- Keep the released policy and critic observation groups exactly 930 and 1645
+  columns.  Expose the 3D public compliance condition as a separate actor
+  group, and raw threshold/current applied site force/site mask as a separate
+  critic-only group of width `1 + 4*S`; `S` follows configured site count.
+- Wrap the released actor and critic with independent zero-initialized residual
+  heads.  The frozen `g1_dyn` input remains `64+930=994`; the frozen critic and
+  its running statistics remain 1645.  Residual heads may read separate
+  condition/context but must be selected through a hard per-row gate so an off
+  row is byte-exact to release even in a mixed batch.  Bound the action delta,
+  isolate residual initialization RNG, freeze release noise, and allowlist
+  actor-visible groups before direct or temporal rollout.
 - Keep the complete tokenizer subtree and robot-motion encoder term names,
   shapes, order, functions, parameters, and noise unchanged.
 - Add a position reward that uses future frame zero and yielded targets only at
@@ -129,8 +137,9 @@ Baseline: NVLabs upstream `main` at
   `weight=0.5/std=0.4`.
 - Add an opt-in `sonic_release_motion_compliance.yaml` experiment that defaults
   physically off.  Verify resolved off-mode behavior against `sonic_release`
-  and in one real manager environment, including identical interval-event and
-  global-RNG contracts.
+  and in one real manager environment, including official same-shape checkpoint
+  loading, mixed off/on gates, residual-only gradients, identical interval-event
+  structure, and global-RNG contracts.
 
 ### Phase 4 — Released-checkpoint migration and finetune workflow
 

@@ -467,3 +467,54 @@
   The existing real step-5/6 artifacts were re-audited under the stronger byte
   comparison.  Phase 4 returns to `PASSED`; `current_phase` advances to Phase 5,
   which remains unexecuted in this repair.
+
+## 2026-07-27 — Phase 3 reopened: expanded-input design invalidated
+
+- Phase 5 was stopped before execution after a P0 architecture review.  The
+  prior 933/1657 design trained the released `g1_dyn` and whole critic, so
+  `enable=0` was only a zero-tail initialization property and could not remain
+  structurally identical to the official tracker after finetuning.  Phase 3 is
+  reopened; Phases 4 and 5 are pending redesign.  The prior GPU training and
+  audit outputs remain preserved as invalidated-design evidence and will not be
+  used as an initialization/resume source.
+- The replacement Phase-3 contract keeps released policy/critic groups at
+  930/1645, `g1_dyn` at 994, and critic/RMS at 1645.  Public condition width 3
+  and privileged width `1+4*S` are separate observation groups.  Frozen
+  release actor/value paths are composed with independent, zero-initialized,
+  bounded/hard-gated residual heads; only those heads may own gradients.
+- Disabled rows are sanitized before the residual MLP and selected with
+  `torch.where`, preventing rejected NaN values from contaminating shared
+  mixed-batch gradients.  The actor uses an explicit observation allowlist for
+  direct and temporal paths, residual initialization preserves caller RNG, and
+  external-token rollout reuses the out-of-place release noise clamp.
+
+## 2026-07-27 — Reopened Phase 3 passed
+
+- The final combined Phase-1/2/3 pure suite passed with `68 passed, 1 skipped
+  in 5.21s`; the skip is the existing ordinary-process CUDA parametrization.
+  It covers separate observations for 1/2/5 sites, same-shape release model
+  construction, zero-init byte parity, mixed `[off,on,off]` gating with rejected
+  NaN rows, residual-only finite gradients/optimizer ownership, actor privacy,
+  non-g1/aux paths, external tokens, RNG preservation, and bounded deltas.
+- The pinned official CPU audit passed with SHA-256
+  `e6bdab3f64a39336b3d41877d4f497d05f58af275f288ec0e6746c283ded8909`.
+  It confirmed actor input `2048x994`, critic input `2048x1645`, critic RMS width
+  1645, unchanged release policy/critic observation subtrees, and separate
+  condition/privileged widths 3/9.  Official state contains no residual keys.
+- The mandatory Phase-2 real regression passed serially on RTX 4090 with 100
+  disabled and 100 forced steps, zero disabled force, command/composer peaks
+  `8.3204117/8.3204098 N`, reset clearing, RNG neutrality, and scalar/nonzero-
+  free traced command compute.
+- The final Phase-3 real smoke passed with actual observation shapes
+  policy/critic `930/1645`, condition/privileged `3/9`, and unchanged G1
+  tokenizer shapes `[10,58]`/`[10,6]`.  The resolved actor/value retained
+  `g1_dyn=994` and critic/RMS=1645, loaded every official tensor byte-exact with
+  only six action-residual and six value-residual tensors missing, and passed
+  off-byte parity, mixed gates, privileged poisoning, aux/external-token paths,
+  frozen-noise clamping, the 0.25 action-delta bound, and four nonzero finite
+  gradient tensors.  Reward freshness remained `1.0`; both disabled new rewards
+  were zero and the released shared reward total was bitwise exact.
+- IsaacSim repeated its known non-fatal platform-info/NVML/CPU-governor warnings
+  while reporting driver `580.159.03`; both real commands exited 0.  `git diff
+  --check` and cache hygiene passed.  Phase 3 is `PASSED`; Phase 4 is now the
+  current phase but no Phase-4 migration, training, or export command was run.

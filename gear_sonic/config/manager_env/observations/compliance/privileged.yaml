@@ -1,0 +1,8 @@
+defaults:
+  - /manager_env/observations/terms/motion_compliance_threshold@_here_
+  - /manager_env/observations/terms/motion_compliance_site_force@_here_
+  - /manager_env/observations/terms/motion_compliance_site_mask@_here_
+
+_target_: gear_sonic.compliance_control.adapters.sonic.observation.MotionCompliancePrivilegedCfg
+enable_corruption: false
+concatenate_terms: true

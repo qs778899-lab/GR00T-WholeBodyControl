@@ -16,6 +16,7 @@ from gear_sonic.compliance_control.core import (
     compute_compliance_metrics,
     encode_compliance_condition,
     event_envelope,
+    hard_gate_residual,
     sample_site_mask,
     select_reference,
     stiffness_from_threshold,
@@ -24,6 +25,39 @@ from gear_sonic.compliance_control.core import (
 
 
 CORE_DIR = Path(__file__).parents[1] / "compliance_control" / "core"
+
+
+def test_hard_gated_residual_is_bitwise_off_per_row_and_differentiable_when_on():
+    base = torch.tensor(
+        [[-0.0, 1.0, -2.0], [3.0, 4.0, 5.0]],
+        requires_grad=True,
+    )
+    residual = torch.tensor(
+        [[float("nan"), float("inf"), -float("inf")], [0.5, -1.0, 2.0]],
+        requires_grad=True,
+    )
+    enabled = torch.tensor([False, True])
+    selected = hard_gate_residual(base, residual, enabled)
+    assert torch.equal(selected[0], base[0])
+    assert torch.signbit(selected[0, 0]) == torch.signbit(base[0, 0])
+    torch.testing.assert_close(selected[1], base[1] + residual[1])
+
+    selected[1].sum().backward()
+    assert torch.equal(base.grad, torch.tensor([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]))
+    assert torch.equal(
+        residual.grad,
+        torch.tensor([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]),
+    )
+
+
+def test_hard_gated_residual_rejects_implicit_or_mismatched_contracts():
+    base = torch.zeros(2, 3)
+    with pytest.raises(TypeError, match="boolean"):
+        hard_gate_residual(base, base, torch.tensor([0.0, 1.0]))
+    with pytest.raises(ValueError, match="shapes must match"):
+        hard_gate_residual(base, torch.zeros(2, 4), torch.tensor([False, True]))
+    with pytest.raises(ValueError, match="leading dimensions"):
+        hard_gate_residual(base, base, torch.zeros(3, dtype=torch.bool))
 
 
 def test_core_has_no_simulator_robot_layout_or_concrete_frame_dependency():

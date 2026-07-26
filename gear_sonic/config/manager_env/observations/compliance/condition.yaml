@@ -1,0 +1,6 @@
+defaults:
+  - /manager_env/observations/terms/motion_compliance_condition@_here_
+
+_target_: gear_sonic.compliance_control.adapters.sonic.observation.MotionComplianceConditionCfg
+enable_corruption: false
+concatenate_terms: true

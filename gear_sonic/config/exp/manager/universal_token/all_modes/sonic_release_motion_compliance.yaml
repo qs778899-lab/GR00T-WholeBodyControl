@@ -3,16 +3,29 @@
 
 defaults:
   - /exp/manager/universal_token/all_modes/sonic_release
+  - /manager_env/observations/compliance/condition@manager_env.observations.motion_compliance_condition
+  - /manager_env/observations/compliance/privileged@manager_env.observations.motion_compliance_privileged
   - override /manager_env/commands: tracking/motion_compliance
   - override /manager_env/events: tracking/motion_compliance
-  - override /manager_env/observations/policy: local_dir_hist_motion_compliance
-  - override /manager_env/observations/critic: privileged_mf_hist_motion_compliance
   - override /manager_env/rewards: tracking/base_5point_local_feet_acc_motion_compliance
   - _self_
 
 exp_var: motion_compliance
 
 manager_env:
+  observations:
+    _target_: gear_sonic.compliance_control.adapters.sonic.observation.MotionComplianceObservationsCfg
   commands:
     motion_compliance:
       enabled: false
+
+algo:
+  config:
+    freeze_noise_std: true
+    actor:
+      _target_: gear_sonic.compliance_control.training.actor.MotionComplianceFrozenNoiseActor
+      backbone:
+        _target_: gear_sonic.compliance_control.training.residual_policy.MotionComplianceUniversalTokenModule
+        motion_compliance_action_delta_limit: 0.25
+    critic:
+      _target_: gear_sonic.compliance_control.training.residual_policy.MotionComplianceResidualCritic

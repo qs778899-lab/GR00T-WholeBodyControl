@@ -1,7 +1,0 @@
-# Additive policy composition: released proprioception plus one public 3D condition.
-
-defaults:
-  - /manager_env/observations/policy/local_dir_hist@_here_
-  - ../terms/motion_compliance_condition@_here_
-
-_target_: gear_sonic.compliance_control.adapters.sonic.observation.MotionCompliancePolicyCfg
