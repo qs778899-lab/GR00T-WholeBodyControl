@@ -12,6 +12,10 @@ import torch
 
 from ...core import ComplianceSpec
 from ...core.reference_modifier import _virtual_force_from_reference_delta_unchecked
+from .event import (
+    transition_compliance_operational_state,
+    write_compliance_command_wrench,
+)
 from .frames import (
     _common_to_world_vectors_unchecked,
     _rotate_vectors_wxyz_unchecked,
@@ -170,16 +174,7 @@ class MotionComplianceCommand(CommandTerm):
     def set_operational_enabled(self, enabled: bool) -> None:
         """Change the host-side switch without inspecting CUDA tensor values."""
 
-        if type(enabled) is not bool:
-            raise TypeError("enabled must be bool")
-        if enabled == self.operational_enabled:
-            return
-        self.operational_enabled = enabled
-        if enabled:
-            self.state.reset()
-        else:
-            self.state.disable()
-            self._clear_application_buffers()
+        transition_compliance_operational_state(self, enabled)
 
     def _resolved_env_ids(self, env_ids):
         if env_ids is None:
@@ -341,10 +336,25 @@ class MotionComplianceCommand(CommandTerm):
             self.state.disable(ids)
         self._clear_application_buffers(ids)
 
+    def _resample(self, env_ids: Sequence[int] | torch.Tensor | slice) -> None:
+        """Use only command-owned RNG and make host-off timing deterministic."""
+
+        ids = self.state._env_ids_tensor(env_ids)
+        if ids.numel() == 0:
+            return
+        if self.operational_enabled:
+            self.time_left[ids] = self.state.sample_resampling_time(
+                ids.numel(),
+                tuple(self.cfg.resampling_time_range),
+            )
+        else:
+            self.time_left[ids] = torch.finfo(self.time_left.dtype).max
+        self._resample_command(ids)
+        self.command_counter[ids] += 1
+
     def _update_command(self) -> None:
         if not self.operational_enabled:
-            if self._wrench_dirty:
-                self.clear_wrench()
+            write_compliance_command_wrench(self)
             return
         site_state = self._site_tracking_state()
         force_common_future = _virtual_force_from_reference_delta_unchecked(
@@ -403,3 +413,4 @@ class MotionComplianceCommand(CommandTerm):
                 application_quaternion_world,
             )
         )
+        write_compliance_command_wrench(self)

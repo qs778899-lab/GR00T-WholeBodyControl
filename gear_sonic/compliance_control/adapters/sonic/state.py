@@ -238,6 +238,26 @@ class ComplianceCommandState:
             torch.zeros_like(sampled_offset),
         )
 
+    def sample_resampling_time(
+        self,
+        num_samples: int,
+        resampling_time_range: tuple[float, float],
+    ) -> torch.Tensor:
+        """Sample command durations without consuming PyTorch's global RNG."""
+
+        if num_samples < 0:
+            raise ValueError("num_samples must be non-negative")
+        low, high = resampling_time_range
+        if not math.isfinite(low) or not math.isfinite(high) or low <= 0.0 or high < low:
+            raise ValueError("resampling_time_range must be finite, positive, and ordered")
+        samples = torch.rand(
+            num_samples,
+            device=self.device,
+            dtype=self.dtype,
+            generator=self.generator,
+        )
+        return samples * (high - low) + low
+
     def reset(
         self,
         env_ids: Sequence[int] | torch.Tensor | slice | None = None,

@@ -6,12 +6,14 @@
 - `adapters/sonic/mapping.py` is the sole owner of configured SONIC body names.
   Reference-motion indices and articulation indices are resolved independently
   by exact, unique body name.
-- `command.py` owns persistent per-environment sampling/reference/wrench state
-  and calls the portable force formula.  It never writes to PhysX.
+- `command.py` owns persistent per-environment sampling/reference/wrench state,
+  calls the portable force formula, and invokes the narrow writer immediately
+  after its command update.
 - `wrench.py` owns replaceable whole-robot residual limiting.  It leaves all
   requested site wrenches intact and adds an anchor compensation wrench.
-- `event.py` is the only physical-writer/reset boundary.  It feature-detects
-  `permanent_wrench_composer` first and isolates the deprecated setter fallback.
+- `event.py` owns the physical writer/reset primitives.  It feature-detects
+  `permanent_wrench_composer` first and isolates the deprecated setter fallback;
+  command update reuses this boundary rather than duplicating writer logic.
 
 ## Frames and sign
 
@@ -33,15 +35,22 @@ multi-future broadcasting are covered by pure tests.
 The host-side operational switch defaults to `false`.  In that state the
 command skips reference/force computation, exposes an exactly zero cached
 condition, and leaves an already-clean composer untouched.  If it is switched
-off after a wrench was applied, the event writes zero once and then becomes
-inert.  When enabled, each environment samples one persistent enable bit, an
-independent site mask, a force threshold, derived `Kp`, and per-site reference
-offset.  The tracking command updates first; the compliance command computes
-its tensors; the zero-period interval event writes them for the next physics
-loop.  Static configuration is validated at construction/resampling boundaries;
-private adapter-only unchecked tensor kernels avoid CUDA scalar extraction in
-the per-step command path.  Reset clears every dynamic command tensor and the
-composer, so a previous episode cannot leak a wrench.
+off after a wrench was applied, the setter immediately zeros only its owned
+body rows and then becomes inert before another physics step.  It never resets
+another module's composer rows outside environment reset.  When enabled, each environment
+samples one persistent enable bit, an independent site mask, a force threshold,
+derived `Kp`, per-site reference offset, and duration using its command-owned
+generator.  Host-off reset uses a stable finite timer and no random operation.
+The tracking command updates first; the compliance command computes and writes
+its tensors for the next physics loop.  No additional interval event exists,
+so the release interval-event names, ranges, order, and global RNG sequence stay
+unchanged.  Static configuration is validated at construction/resampling
+boundaries; private adapter-only unchecked tensor kernels avoid CUDA scalar
+extraction in the per-step command path.  Environment reset clears every
+dynamic command tensor and the composer, so a previous episode cannot leak a
+wrench.  A full-environment reset while host-disabled releases the global dirty
+ownership flag; partial or active reset retains it for environments that may
+still need a later write.
 
 ## Physical-force contract
 
@@ -66,7 +75,10 @@ explicitly sets the host-side command switch to `enabled=true`.
 `phase2_isaaclab_smoke.py` instantiates a raw `ManagerBasedRLEnv` with one
 official robot-motion PKL and its official SMPL directory.  It runs 100 policy
 steps with the host-side switch disabled and asserts the composer remains
-inactive, then enables the command and forces probability one/all sites for
+inactive.  Before stepping, it proves real disabled reset, repeated compute,
+and reset-event calls preserve the next CPU and CUDA global RNG samples bit for
+bit.  It then enables the command and forces probability one/all sites for
 another 100 steps.  It checks returned and command/composer tensors for
 finiteness, requires nonzero applied force, and verifies reset clears force and
-torque in both command and composer buffers.
+torque in both command and composer buffers.  The enabled-to-disabled setter is
+also checked to clear the real composer immediately, before another step.

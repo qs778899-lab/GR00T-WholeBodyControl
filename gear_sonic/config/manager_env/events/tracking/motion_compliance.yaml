@@ -1,4 +1,4 @@
-# Opt-in event composition; application happens after command update each policy step.
+# Opt-in event composition; command update writes, while reset owns cleanup.
 
 defaults:
   - terms/physics_material@_here_

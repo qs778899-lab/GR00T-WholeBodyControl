@@ -111,12 +111,38 @@ def _compose_config(
     # so unrelated randomization and task termination cannot mask its result.
     with open_dict(cfg):
         for name in list(cfg.manager_env.events):
-            if name not in {"_target_", "motion_compliance_apply", "motion_compliance_reset"}:
+            if name not in {"_target_", "motion_compliance_reset"}:
                 cfg.manager_env.events[name] = None
         for name in list(cfg.manager_env.terminations):
             if name != "_target_":
                 cfg.manager_env.terminations[name] = None
     return cfg
+
+
+def _assert_disabled_rng_neutral(command: Any, env: Any, torch_module: Any) -> None:
+    """Compare the next CPU/CUDA samples across real disabled lifecycle calls."""
+
+    cpu_state = torch_module.random.get_rng_state()
+    cuda_state = torch_module.cuda.get_rng_state(env.device)
+    expected_cpu = torch_module.rand(8)
+    expected_cuda = torch_module.rand(8, device=env.device)
+    torch_module.random.set_rng_state(cpu_state)
+    torch_module.cuda.set_rng_state(cuda_state, env.device)
+
+    env_ids = torch_module.arange(env.num_envs, device=env.device, dtype=torch_module.long)
+    command.reset(env_ids)
+    for _ in range(8):
+        command.compute(dt=env.step_dt)
+    env.event_manager.apply(
+        mode="reset",
+        env_ids=env_ids,
+        global_env_step_count=env.common_step_counter,
+    )
+
+    actual_cpu = torch_module.rand(8)
+    actual_cuda = torch_module.rand(8, device=env.device)
+    torch_module.testing.assert_close(actual_cpu, expected_cpu, rtol=0.0, atol=0.0)
+    torch_module.testing.assert_close(actual_cuda, expected_cuda, rtol=0.0, atol=0.0)
 
 
 def _run() -> None:
@@ -155,6 +181,9 @@ def _run() -> None:
             raise AssertionError("smoke requires the modern permanent_wrench_composer API")
         if composer.active:
             raise AssertionError("operationally disabled adapter activated the composer at reset")
+        _assert_disabled_rng_neutral(command, env, torch)
+        if composer.active:
+            raise AssertionError("disabled RNG check activated the composer")
         action = torch.zeros(
             (env.num_envs, env.action_manager.total_action_dim),
             dtype=torch.float32,
@@ -212,6 +241,19 @@ def _run() -> None:
                 raise AssertionError("forced-on mode never produced/applied a nonzero wrench")
             _stage("forced_100_complete")
 
+            command.set_operational_enabled(False)
+            if command.wrench_dirty:
+                raise AssertionError("disable transition retained compliance wrench ownership")
+            if torch.count_nonzero(composer.composed_force_as_torch).item() != 0:
+                raise AssertionError("disable transition did not immediately clear composer force")
+            if torch.count_nonzero(composer.composed_torque_as_torch).item() != 0:
+                raise AssertionError("disable transition did not immediately clear composer torque")
+
+            command.set_operational_enabled(True)
+            command.state.reference_offset_common.zero_()
+            command.state.reference_offset_common[..., 0] = 0.05
+            command.time_left.fill_(1.0e9)
+            command.compute(dt=env.step_dt)
             stale_force = composer.composed_force_as_torch.clone()
             if torch.count_nonzero(stale_force).item() == 0:
                 raise AssertionError("reset check requires a pre-existing composer wrench")
@@ -240,6 +282,7 @@ def _run() -> None:
                 {
                     "composer_api": "permanent_wrench_composer",
                     "disabled_peak_force_n": disabled_peak,
+                    "disabled_rng_neutral": True,
                     "disabled_composer_active": False,
                     "disabled_steps": args.steps_per_mode,
                     "forced_composer_peak_force_n": composer_peak,

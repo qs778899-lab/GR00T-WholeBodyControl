@@ -79,15 +79,18 @@ Baseline: NVLabs upstream `main` at
   limiter adds anchor compensation so the resulting whole-robot residual is no
   larger than 20 N / 10 Nm.  Site-force synthesis, whole-body limiting, and
   PhysX writing remain separate responsibilities.
-- Apply the persistent wrench after command computation at every policy step.
-  Prefer IsaacLab's modern `permanent_wrench_composer`; keep the deprecated
+- Apply the persistent wrench directly after compliance-command computation at
+  every policy step, without adding an RNG-consuming interval event.  Prefer
+  IsaacLab's modern `permanent_wrench_composer`; keep the deprecated
   articulation setter only as an isolated feature-detected fallback.  Reset
   events clear both command-owned tensors and the composer before reuse.
 - Keep the host-side operational switch `false` by default.  Disabled mode
   skips per-step compliance math and does not touch an already-clean composer;
-  disabling after application clears it exactly once.  Validate static tensor
+  disabling after application clears owned composer rows immediately, before
+  the next physics step.  Validate static tensor
   contracts outside the CUDA hot path and use adapter-private no-sync kernels
-  only after that validation boundary.
+  only after that validation boundary.  Disabled reset/compute must not consume
+  global CPU/CUDA RNG; enabled durations and state use a command-owned generator.
 - Default physical sites are resolved by body name in the SONIC adapter; the
   core remains site-count agnostic and the configuration supports more sites
   without changing the policy contract.
@@ -120,7 +123,8 @@ Baseline: NVLabs upstream `main` at
   `weight=0.5/std=0.4`.
 - Add an opt-in `sonic_release_motion_compliance.yaml` experiment that defaults
   physically off.  Verify resolved off-mode behavior against `sonic_release`
-  and in one real manager environment.
+  and in one real manager environment, including identical interval-event and
+  global-RNG contracts.
 
 ### Phase 4 — Released-checkpoint migration and finetune workflow
 

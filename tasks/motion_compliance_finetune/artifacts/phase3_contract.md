@@ -49,6 +49,9 @@ one hand from being hidden by the cross-site reward mean.
 the command, event, policy observation, critic observation, and reward groups.
 It explicitly defaults `motion_compliance.enabled=false`; no release YAML is
 modified.  The resolved termination subtree remains exactly equal to release.
+Its resolved interval-event names and ranges also exactly match release: wrench
+application is part of command update, and the only additional event is reset
+cleanup.  Disabled command reset/compute uses no global CPU or CUDA RNG.
 The one-environment Phase-3 smoke resolves actual policy/critic shapes,
 tokenizer tensor shapes, an independently reconstructed tracking future-zero
 reference, hard-off rewards, bitwise original target selection, and exact

@@ -60,14 +60,24 @@ def _reset_wrench_composer(
     )
 
 
-def apply_compliance_wrench(
-    env: Any,
-    env_ids: Sequence[int] | torch.Tensor | None,
-    command_name: str = "motion_compliance",
-) -> None:
-    """Write current link-frame wrenches, avoiding composer pose caching."""
+def _covers_all_environments(command: Any, env_ids: Any) -> bool:
+    """Check reset coverage from index metadata without reading device values."""
 
-    command = env.command_manager.get_term(command_name)
+    if env_ids is None:
+        return True
+    if isinstance(env_ids, slice):
+        return env_ids == slice(None)
+    if isinstance(env_ids, torch.Tensor):
+        return env_ids.numel() == command.num_envs
+    return len(env_ids) == command.num_envs
+
+
+def write_compliance_command_wrench(
+    command: Any,
+    env_ids: Sequence[int] | torch.Tensor | slice | None = None,
+) -> None:
+    """Write command-owned link-frame wrenches without scheduling an event."""
+
     if not command.operational_enabled:
         if not command.wrench_dirty:
             return
@@ -80,7 +90,8 @@ def apply_compliance_wrench(
             command.application_body_ids,
             resolved_env_ids,
         )
-        command.mark_wrench_cleared()
+        if _covers_all_environments(command, resolved_env_ids):
+            command.mark_wrench_cleared()
         return
     forces, torques, resolved_env_ids = command.body_wrench_for_envs(env_ids)
     _set_body_wrench(
@@ -91,6 +102,34 @@ def apply_compliance_wrench(
         resolved_env_ids,
     )
     command.mark_wrench_applied()
+
+
+def transition_compliance_operational_state(command: Any, enabled: bool) -> None:
+    """Switch mode and synchronously retire an owned wrench when disabling."""
+
+    if type(enabled) is not bool:
+        raise TypeError("enabled must be bool")
+    if enabled == command.operational_enabled:
+        if not enabled:
+            write_compliance_command_wrench(command)
+        return
+    command.operational_enabled = enabled
+    command._resample(slice(None))
+    if not enabled:
+        write_compliance_command_wrench(command)
+
+
+def apply_compliance_wrench(
+    env: Any,
+    env_ids: Sequence[int] | torch.Tensor | None,
+    command_name: str = "motion_compliance",
+) -> None:
+    """Compatibility wrapper; production writes directly after command update."""
+
+    write_compliance_command_wrench(
+        env.command_manager.get_term(command_name),
+        env_ids,
+    )
 
 
 def reset_compliance_wrench(
@@ -113,3 +152,8 @@ def reset_compliance_wrench(
         zero_torques_body=zero_torques,
         body_ids=command.application_body_ids,
     )
+    if not command.operational_enabled and _covers_all_environments(
+        command,
+        resolved_env_ids,
+    ):
+        command.mark_wrench_cleared()

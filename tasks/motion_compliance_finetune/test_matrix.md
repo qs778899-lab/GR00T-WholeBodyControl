@@ -48,7 +48,9 @@ does not leave repository caches.
    SONIC body names, exercise both modern-composer and deprecated-setter feature
    paths with body-local fakes, reject scalar extraction/value validation in the
    per-step unchecked tensor path, verify disabled-clean writer calls are zero,
-   and Hydra-compose the opt-in command/event groups with one environment.
+   and Hydra-compose the opt-in command/event groups with one environment.  It
+   must prove command-owned enabled sampling does not advance global CPU/CUDA
+   RNG and host-off sampling does not advance even the command generator.
 4. Run the real one-environment headless smoke with the NVIDIA 580.159
    compatibility libraries:
    `env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu LD_PRELOAD=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.580.159.03:/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libcuda.so.580.159.03 VK_ICD_FILENAMES=/tmp/nvidia_580_159_compat/extracted/usr/share/vulkan/icd.d/nvidia_icd.json PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase2_isaaclab_smoke.py`.
@@ -56,7 +58,11 @@ does not leave repository caches.
    execute exactly 100 disabled and 100 forced-on policy steps, use the modern
    composer, prove it remains inactive throughout disabled mode, keep every
    checked tensor finite, observe a nonzero forced wrench, and clear
-   command/composer force and torque on reset.
+   command/composer force and torque on reset.  The enabled-to-disabled setter
+   must clear owned composer rows immediately before another physics step.
+   Before stepping, disabled real
+   command reset, repeated compute, and reset-event calls must preserve the next
+   global CPU and CUDA random samples bit for bit.
 5. `git diff --check` and, after staging only Phase-1/Phase-2 files,
    `git diff --cached --check`.
 6. Confirm no `__pycache__`, `.pytest_cache`, `.pyc`, or `.pyo` remains.
@@ -80,7 +86,9 @@ does not leave repository caches.
    every original reference bitwise, both new rewards contribute exactly zero,
    all released dense reward configs remain equal, and the inline
    `feet_acc.weight=-2.5e-6` override survives composition.  The hard gate must
-   still return exact zero when disabled errors contain NaN.
+   still return exact zero when disabled errors contain NaN.  Resolved baseline
+   and compliance interval-event names/ranges must be identical; there is no
+   compliance interval writer event.
 5. Active-site test: future frame zero is aligned to current endpoint state,
    only selected position targets yield, every inactive target remains bitwise
    original, and per-site selected/original errors remain independently

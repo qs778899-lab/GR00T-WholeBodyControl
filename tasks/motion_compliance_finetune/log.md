@@ -240,3 +240,34 @@
   staged with no unstaged changes or repository-local Python/pytest caches;
   the released `sonic_release.yaml` remains absent from the diff.  No commit or
   push was performed in this phase.
+
+## 2026-07-27 — Phase 3 reopened for strict off-mode RNG parity
+
+- A late lifecycle review found that IsaacLab's base `CommandTerm._resample`
+  samples `time_left` from the global generator before invoking the subclass.
+  It also found that a zero-period interval event still samples its scheduling
+  state globally.  Both behaviors could shift baseline observation or motion
+  randomness even when compliance was operationally disabled.
+- The command now owns duration sampling through its seeded generator and uses
+  a finite stable timer while host-disabled.  Reset, repeated compute, and the
+  reset event leave the next CPU and CUDA global random samples bitwise equal
+  to their saved baseline states.
+- The command writes its link-frame wrench immediately after computing it, so
+  the added interval event is no longer needed.  Resolved baseline and opt-in
+  interval event names and ranges are exactly equal, and the actual simulator
+  manager contains only the added compliance reset event.
+- Dirty disable performs one narrow zero write to the configured compliance
+  body rows immediately in the setter, before another physics step, and
+  preserves every unowned composer row.  Full composer reset is reserved for
+  the environment-reset lifecycle, where stale external forces must be cleared;
+  only a full host-disabled reset releases global dirty ownership.
+- The final pure matrix passed: `56 passed, 1 skipped in 3.79s`; the sole skip
+  is the ordinary interpreter's unavailable CUDA device parametrization.
+- The final real Phase-2 RTX 4090 regression exited 0 in 22.54 seconds with
+  `disabled_rng_neutral=true`, `disabled_peak_force_n=0.0`, forced site and
+  composer peaks `8.3204117/8.3204098 N`, and `reset_zero=true`.
+- The final real Phase-3 smoke exited 0 in 13.59 seconds with policy/critic widths
+  `933/1657`, tokenizer shapes `[1,10,58]/[1,10,6]`, both disabled rewards
+  exactly zero, enabled freshness reward `1.0`, and exact shared total reward.
+- Phase 3 is again `PASSED`; `current_phase` advances to 4, which remains
+  `PENDING`.  No Phase-4 implementation or test was executed.

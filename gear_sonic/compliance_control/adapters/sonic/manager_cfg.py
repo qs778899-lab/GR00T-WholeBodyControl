@@ -48,7 +48,7 @@ class ComplianceCommandsCfg:
 
 @configclass
 class ComplianceEventsCfg:
-    """Existing tracking events plus narrow compliance apply/reset terms."""
+    """Existing tracking events plus a narrow compliance reset term."""
 
     physics_material = None
     add_joint_default_pos = None
@@ -56,5 +56,4 @@ class ComplianceEventsCfg:
     base_com = None
     push_robot = None
     randomize_rigid_body_mass = None
-    motion_compliance_apply = None
     motion_compliance_reset = None

@@ -8,6 +8,7 @@ import math
 from pathlib import Path
 
 from hydra import compose, initialize_config_dir
+from omegaconf import OmegaConf
 import pytest
 import torch
 
@@ -15,6 +16,7 @@ from gear_sonic.compliance_control.adapters.sonic.event import (
     _set_body_wrench,
     apply_compliance_wrench,
     reset_compliance_wrench,
+    transition_compliance_operational_state,
 )
 from gear_sonic.compliance_control.adapters.sonic.frames import (
     _align_trailing_components,
@@ -223,6 +225,56 @@ def test_seeded_state_sampling_is_deterministic_and_threshold_kp_coupled():
     assert first.condition is cached_condition
 
 
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable"),
+        ),
+    ],
+)
+def test_command_owned_sampling_never_advances_global_rng(device):
+    first = ComplianceCommandState(
+        4,
+        2,
+        3,
+        ComplianceSamplingSpec(enable_probability=1.0),
+        device=device,
+        seed=19,
+    )
+    second = ComplianceCommandState(
+        4,
+        2,
+        3,
+        ComplianceSamplingSpec(enable_probability=1.0),
+        device=device,
+        seed=19,
+    )
+    if device == "cpu":
+        global_before = torch.random.get_rng_state()
+    else:
+        global_before = torch.cuda.get_rng_state(device)
+
+    first_duration = first.sample_resampling_time(4, (2.0, 16.0))
+    first.reset()
+    second_duration = second.sample_resampling_time(4, (2.0, 16.0))
+    second.reset()
+
+    if device == "cpu":
+        global_after = torch.random.get_rng_state()
+    else:
+        global_after = torch.cuda.get_rng_state(device)
+    assert torch.equal(global_after, global_before)
+    torch.testing.assert_close(first_duration, second_duration, rtol=0.0, atol=0.0)
+    torch.testing.assert_close(first.condition, second.condition, rtol=0.0, atol=0.0)
+
+    owned_before_disable = first.generator.get_state()
+    first.disable()
+    assert torch.equal(first.generator.get_state(), owned_before_disable)
+
+
 def test_independent_sampling_supports_simultaneous_single_and_disabled_masks():
     simultaneous = ComplianceCommandState(
         3,
@@ -356,12 +408,26 @@ class _FakeComposer:
     def __init__(self):
         self.set_calls = []
         self.reset_calls = []
+        self.force_rows = torch.full((3, 6, 3), 9.0)
+        self.torque_rows = torch.full((3, 6, 3), -9.0)
 
     def set_forces_and_torques(self, **kwargs):
         self.set_calls.append(kwargs)
+        env_ids = kwargs["env_ids"]
+        if env_ids is None or isinstance(env_ids, slice):
+            resolved_env_ids = range(self.force_rows.shape[0])
+        else:
+            resolved_env_ids = env_ids.tolist()
+        body_ids = kwargs["body_ids"].tolist()
+        for source_index, env_id in enumerate(resolved_env_ids):
+            self.force_rows[env_id, body_ids] = kwargs["forces"][source_index]
+            self.torque_rows[env_id, body_ids] = kwargs["torques"][source_index]
 
     def reset(self, env_ids):
         self.reset_calls.append(env_ids)
+        index = slice(None) if env_ids is None else env_ids
+        self.force_rows[index] = 0.0
+        self.torque_rows[index] = 0.0
 
 
 class _FakeAsset:
@@ -371,6 +437,7 @@ class _FakeAsset:
 
 class _FakeCommand:
     def __init__(self):
+        self.num_envs = 3
         self.robot = _FakeAsset()
         self.application_body_ids = torch.tensor([1, 4, 2])
         self.force = torch.full((3, 3, 3), 7.0)
@@ -388,14 +455,22 @@ class _FakeCommand:
     def mark_wrench_cleared(self):
         self._wrench_dirty = False
 
+    def _resample(self, env_ids):
+        self.force.zero_()
+        self.torque.zero_()
+
+    def set_operational_enabled(self, enabled):
+        transition_compliance_operational_state(self, enabled)
+
     def body_wrench_for_envs(self, env_ids):
         if env_ids is None:
             return self.force, self.torque, None
         return self.force[env_ids], self.torque[env_ids], env_ids
 
     def clear_wrench(self, env_ids):
-        self.force[env_ids] = 0.0
-        self.torque[env_ids] = 0.0
+        index = slice(None) if env_ids is None else env_ids
+        self.force[index] = 0.0
+        self.torque[index] = 0.0
 
 
 class _FakeCommandManager:
@@ -428,34 +503,79 @@ def test_event_only_writes_physx_buffers_and_reset_clears_composer_and_stale_sta
     torch.testing.assert_close(command.force[env_ids], torch.zeros((2, 3, 3)))
     torch.testing.assert_close(command.torque[env_ids], torch.zeros((2, 3, 3)))
     assert len(command.robot.permanent_wrench_composer.reset_calls) == 1
+    assert command.wrench_dirty
 
-    apply_compliance_wrench(env, env_ids)
-    torch.testing.assert_close(
-        command.robot.permanent_wrench_composer.set_calls[-1]["forces"],
-        torch.zeros((2, 3, 3)),
-    )
-
-
-def test_host_disabled_adapter_is_inert_and_dirty_disable_clears_only_once():
-    command = _FakeCommand()
     command.operational_enabled = False
+    reset_compliance_wrench(env, None)
+    assert len(command.robot.permanent_wrench_composer.reset_calls) == 2
+    assert not command.wrench_dirty
+
+    apply_compliance_wrench(env, None)
+    assert len(command.robot.permanent_wrench_composer.set_calls) == 1
+
+
+def test_disable_setter_immediately_clears_only_owned_rows_then_becomes_inert():
+    command = _FakeCommand()
     env = _FakeEnv(command)
     env_ids = torch.tensor([0, 1, 2])
 
     apply_compliance_wrench(env, env_ids)
-    assert command.robot.permanent_wrench_composer.set_calls == []
+    composer = command.robot.permanent_wrench_composer
+    assert len(composer.set_calls) == 1
+    assert command.wrench_dirty
 
-    command._wrench_dirty = True
-    apply_compliance_wrench(env, env_ids)
-    assert len(command.robot.permanent_wrench_composer.set_calls) == 1
+    command.set_operational_enabled(False)
+
+    assert len(composer.set_calls) == 2
+    assert composer.reset_calls == []
     torch.testing.assert_close(
-        command.robot.permanent_wrench_composer.set_calls[0]["forces"],
+        composer.force_rows[:, command.application_body_ids],
         torch.zeros((3, 3, 3)),
+    )
+    torch.testing.assert_close(
+        composer.force_rows[:, [0, 3, 5]],
+        torch.full((3, 3, 3), 9.0),
+    )
+    torch.testing.assert_close(
+        composer.torque_rows[:, command.application_body_ids],
+        torch.zeros((3, 3, 3)),
+    )
+    torch.testing.assert_close(
+        composer.torque_rows[:, [0, 3, 5]],
+        torch.full((3, 3, 3), -9.0),
     )
     assert not command.wrench_dirty
 
     apply_compliance_wrench(env, env_ids)
-    assert len(command.robot.permanent_wrench_composer.set_calls) == 1
+    assert len(composer.set_calls) == 2
+    assert composer.reset_calls == []
+
+
+def test_partial_disabled_clear_conservatively_retains_global_dirty_ownership():
+    command = _FakeCommand()
+    env = _FakeEnv(command)
+    apply_compliance_wrench(env, None)
+    composer = command.robot.permanent_wrench_composer
+
+    command.operational_enabled = False
+    apply_compliance_wrench(env, torch.tensor([0, 2]))
+
+    assert command.wrench_dirty
+    torch.testing.assert_close(
+        composer.force_rows[[0, 2]][:, command.application_body_ids],
+        torch.zeros((2, 3, 3)),
+    )
+    torch.testing.assert_close(
+        composer.force_rows[1, command.application_body_ids],
+        torch.full((3, 3), 7.0),
+    )
+
+    apply_compliance_wrench(env, None)
+    assert not command.wrench_dirty
+    torch.testing.assert_close(
+        composer.force_rows[:, command.application_body_ids],
+        torch.zeros((3, 3, 3)),
+    )
 
 
 def test_deprecated_wrench_setter_is_centralized_fallback_only():
@@ -490,6 +610,23 @@ def test_simulator_hot_path_uses_internal_no_sync_functions_and_cached_condition
     assert "_virtual_force_from_reference_delta_unchecked(" in command_source
     assert "_world_to_body_vectors_unchecked(" in command_source
     assert "._limit_unchecked(" in command_source
+    assert "write_compliance_command_wrench(self)" in command_source
+
+    command_tree = ast.parse(command_source)
+    resample_node = next(
+        node
+        for node in ast.walk(command_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_resample"
+    )
+    resample_source = ast.get_source_segment(command_source, resample_node)
+    assert "sample_resampling_time" in resample_source
+    assert "torch.rand" not in resample_source
+    assert ".uniform_" not in resample_source
+
+    switch_source = inspect.getsource(transition_compliance_operational_state)
+    assert switch_source.index("command._resample(slice(None))") < switch_source.rindex(
+        "write_compliance_command_wrench(command)"
+    )
 
     state_condition_source = inspect.getsource(ComplianceCommandState.condition.fget)
     assert "return self._condition" in state_condition_source
@@ -517,12 +654,17 @@ def test_simulator_hot_path_uses_internal_no_sync_functions_and_cached_condition
 def test_hydra_composes_opt_in_command_and_event_without_changing_release_files():
     config_dir = str((ROOT / "gear_sonic" / "config").resolve())
     with initialize_config_dir(config_dir=config_dir, version_base=None):
-        cfg = compose(
+        baseline = compose(
             config_name="base",
             overrides=[
                 "+exp=manager/universal_token/all_modes/sonic_release",
-                "manager_env/commands=tracking/motion_compliance",
-                "manager_env/events=tracking/motion_compliance",
+                "num_envs=1",
+            ],
+        )
+        cfg = compose(
+            config_name="base",
+            overrides=[
+                "+exp=manager/universal_token/all_modes/sonic_release_motion_compliance",
                 "num_envs=1",
             ],
         )
@@ -535,8 +677,20 @@ def test_hydra_composes_opt_in_command_and_event_without_changing_release_files(
     )
     assert cfg.manager_env.commands._target_.endswith("ComplianceCommandsCfg")
     assert cfg.manager_env.events._target_.endswith("ComplianceEventsCfg")
-    assert cfg.manager_env.events.motion_compliance_apply.mode == "interval"
+    assert "motion_compliance_apply" not in cfg.manager_env.events
     assert cfg.manager_env.events.motion_compliance_reset.mode == "reset"
+
+    def interval_contract(events):
+        result = {}
+        for name, term in events.items():
+            if name == "_target_" or term is None or term.get("mode") != "interval":
+                continue
+            result[name] = OmegaConf.to_container(term.interval_range_s, resolve=True)
+        return result
+
+    assert interval_contract(cfg.manager_env.events) == interval_contract(
+        baseline.manager_env.events
+    )
 
 
 def test_only_sonic_adapter_python_may_import_isaaclab_and_core_has_no_body_names():
