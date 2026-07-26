@@ -49,6 +49,10 @@ the clamp out of place. This is required because the staged workflow freezes
 `std`: four values in the audited release are only about `1e-5` above `0.5`, and
 the generic actor's in-place forward clamp would otherwise mutate frozen state.
 Do not replace this target with the generic actor for `decoder_critic` runs.
+The smoke validator also rejects overrides of `use_log_std=false`,
+`use_clampped_std=true`, `std_clamp_min=0.001`, `std_clamp_max=0.5`, or
+`clamp_noise_std=false`. The isolated trainer logs the effective clamped mean
+noise while leaving the raw frozen checkpoint tensor untouched.
 
 Record the fixed-shape all-environment scheduler cost separately, without
 instrumenting or changing the training hot path:

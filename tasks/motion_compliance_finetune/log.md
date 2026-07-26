@@ -438,3 +438,32 @@
   Phase-4 files staged and no unstaged changes.  The generic PPO trainer has no
   diff; no repository-local Python/pytest cache remains.  Post-run process
   checks found no IsaacLab/training process and no NVIDIA compute application.
+
+## 2026-07-27 — Phase 4 reopened for exact release-noise configuration
+
+- A late independent review found one P1 after the Phase-4 commit: the workflow
+  required the dedicated actor class but did not reject CLI overrides of the
+  release noise representation and clamp values.  Phase 5 was stopped before
+  edits; status returned to Phase 4 while this boundary was repaired.
+- The exact smoke guard now requires `use_log_std=false`,
+  `use_clampped_std=true`, `std_clamp_min=0.001`, `std_clamp_max=0.5`, and
+  `clamp_noise_std=false`.  Unit tests independently override every field and
+  require rejection while retaining a passing valid composition.
+- The same review's P2 observations were closed without modifying the generic
+  PPO trainer.  Frozen-state comparison now checks tensor element bytes, so a
+  `+0.0/-0.0` sign-bit difference is rejected.  The isolated compliance trainer
+  replaces the inherited raw-parameter noise metric with the actual effective
+  clamped mean; a release-`std` test checks that reporting does not mutate the
+  parameter.
+- The final focused suite passed with `14 passed in 5.67s`; the complete pure
+  Phase-1/2/3/4 suite passed with `78 passed, 1 skipped in 8.41s`.  The official
+  CPU migration, training help, resolved config, and strengthened step-5 and
+  step-6 hard audits all exited 0.  Those audits again reported global steps
+  5/6, additions `3/3` and `12/12`, 41 byte-exact frozen tensors, and optimizer
+  update steps 100/120.
+- No five-step retraining was needed: the accepted Hydra defaults, effective
+  distribution, optimizer ownership, and checkpoint weights did not change;
+  only invalid-override rejection, audit strictness, and metric reporting did.
+  The existing real step-5/6 artifacts were re-audited under the stronger byte
+  comparison.  Phase 4 returns to `PASSED`; `current_phase` advances to Phase 5,
+  which remains unexecuted in this repair.

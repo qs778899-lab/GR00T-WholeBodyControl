@@ -127,7 +127,10 @@ does not leave repository caches.
    checks, and exact Hydra smoke guards.  Load the pinned release `std`, require
    the dedicated compliance actor target, and prove repeated distribution
    construction retains byte-exact frozen noise state while producing the same
-   effective clamp and excluding `std/log_std` from the optimizer.
+   effective clamp and excluding `std/log_std` from the optimizer.  Reject
+   overrides of `use_log_std=false`, `use_clampped_std=true`, clamp bounds
+   `[0.001,0.5]`, and `clamp_noise_std=false`; require the isolated trainer's
+   noise metric to report the effective clamp rather than the raw parameter.
 2. Run the pinned official CPU migration smoke (reruns may atomically overwrite
    only this generated central artifact):
    `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase4_official_migration_smoke.py --output /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_cpu_gate/artifacts/motion_compliance_init.pt --report /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_cpu_gate/artifacts/migration_audit.json --num-sites 2 --overwrite`.
@@ -158,7 +161,7 @@ does not leave repository caches.
 7. Audit step 5:
    `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase4_checkpoint_audit.py --official /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sonic_release/last.pt --trained /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_smoke/last.pt --exposure /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_smoke/artifacts/motion_compliance_exposure.json --expected-step 5 --num-sites 2 --output-json /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_smoke/artifacts/step5_audit.json`.
    Every added actor/critic column must be nonzero; encoder, `g1_kin`,
-   quantizer state, and `std/log_std` must remain exact; all tensors and
+   quantizer state, and `std/log_std` must remain byte-exact; all tensors and
    optimizer moments must be finite; optimizer ownership/steps must be fresh.
 8. Strict-resume step 5 into a separate step-6 output directory:
    `env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu LD_PRELOAD=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.580.159.03:/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libcuda.so.580.159.03 VK_ICD_FILENAMES=/tmp/nvidia_580_159_compat/extracted/usr/share/vulkan/icd.d/nvidia_icd.json PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/train_agent_trl.py +exp=manager/universal_token/all_modes/sonic_release_motion_compliance_finetune experiment_dir=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_resume resume=true motion_compliance_finetune.resume_output_dir=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_resume motion_compliance_checkpoint_migration.enabled=false checkpoint=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_smoke/last.pt algo.config.num_learning_iterations=1 callbacks.model_save.save_last_frequency=1 headless=true`.

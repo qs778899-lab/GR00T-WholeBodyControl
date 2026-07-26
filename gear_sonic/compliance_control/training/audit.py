@@ -103,6 +103,16 @@ def _column_nonzero_flags(tensor: torch.Tensor, added_columns: int) -> tuple[boo
     return tuple(bool(value) for value in torch.any(tail != 0, dim=0).tolist())
 
 
+def _tensor_bytes_equal(left: torch.Tensor, right: torch.Tensor) -> bool:
+    """Compare tensor element representations, including the sign bit of zero."""
+
+    if left.shape != right.shape or left.dtype != right.dtype:
+        return False
+    left_bytes = left.detach().contiguous().view(torch.uint8)
+    right_bytes = right.detach().contiguous().view(torch.uint8)
+    return torch.equal(left_bytes, right_bytes)
+
+
 def _optimizer_steps(optimizer_state: Mapping[str, Any]) -> tuple[int, ...]:
     slots = optimizer_state["state"]
     steps: list[int] = []
@@ -209,7 +219,7 @@ def audit_trained_motion_compliance_checkpoint(
     if len(noise_keys) != 1:
         raise ValueError("official checkpoint must contain exactly one frozen noise tensor")
     for key in frozen_keys:
-        if not torch.equal(official_policy[key], trained_policy[key]):
+        if not _tensor_bytes_equal(official_policy[key], trained_policy[key]):
             raise ValueError(f"frozen policy tensor changed during finetuning: {key}")
     quantizer_keys = tuple(
         key for key in official_policy if key.startswith("actor_module.quantizer.")

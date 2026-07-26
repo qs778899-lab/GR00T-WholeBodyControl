@@ -48,6 +48,7 @@ from gear_sonic.compliance_control.training.finetune import (
 )
 from gear_sonic.compliance_control.training.trainer import MotionCompliancePPOTrainer
 from gear_sonic.trl.trainer.ppo_trainer import TRLPPOTrainer
+from gear_sonic.trl.trainer.ppo_trainer_aux_loss import TRLAuxLossPPOTrainer
 from gear_sonic.utils.config_utils import register_rl_resolvers
 
 
@@ -336,7 +337,7 @@ def test_decoder_critic_freeze_and_optimizer_ownership_are_exact(migrated_bundle
         )
 
 
-def test_frozen_release_std_clamp_is_non_mutating_and_optimizer_excluded():
+def test_frozen_release_std_clamp_is_non_mutating_and_optimizer_excluded(monkeypatch):
     official = audit_module.load_trl_checkpoint(OFFICIAL_CHECKPOINT, map_location="cpu")
     policy_key = (
         "actor_model_state_dict"
@@ -397,6 +398,23 @@ def test_frozen_release_std_clamp_is_non_mutating_and_optimizer_excluded():
         actor.update_distribution({"actor_obs": torch.zeros(2, 4)})
         assert torch.equal(actor.action_std[0], expected_effective)
         assert torch.equal(actor.std, before)
+
+    captured_logs = {}
+
+    def capture_base_log(self, logs, start_time=None):
+        del self, start_time
+        captured_logs.update(logs)
+
+    monkeypatch.setattr(TRLAuxLossPPOTrainer, "log", capture_base_log)
+    trainer = object.__new__(MotionCompliancePPOTrainer)
+    trainer.accelerator = SimpleNamespace(unwrap_model=lambda model: model)
+    trainer.model = SimpleNamespace(policy=actor)
+    MotionCompliancePPOTrainer.log(
+        trainer,
+        {"Policy/mean_noise_std": float(before.mean().item())},
+    )
+    assert captured_logs["Policy/mean_noise_std"] == float(expected_effective.mean().item())
+    assert torch.equal(actor.std, before)
 
 
 def test_custom_trainer_strict_resume_restores_all_state(tmp_path, migrated_bundle):
@@ -586,6 +604,11 @@ def test_finetune_hydra_config_resolves_to_low_resource_owned_workflow():
     assert Path(config.checkpoint) == OFFICIAL_CHECKPOINT
     assert config.trainer._target_ == MOTION_COMPLIANCE_TRAINER_TARGET
     assert config.algo.config.actor._target_ == MOTION_COMPLIANCE_ACTOR_TARGET
+    assert config.algo.config.get("use_log_std", False) is False
+    assert config.algo.config.use_clampped_std is True
+    assert config.algo.config.std_clamp_min == 0.001
+    assert config.algo.config.std_clamp_max == 0.5
+    assert config.algo.config.get("clamp_noise_std", False) is False
     assert config.num_envs == 16
     assert config.algo.config.num_learning_iterations == 5
     assert config.use_wandb is False
@@ -628,6 +651,11 @@ def test_finetune_hydra_config_resolves_to_low_resource_owned_workflow():
     invalid_smoke_values = {
         "motion_compliance_finetune.stage": "full",
         "motion_compliance_finetune.trainable_decoder_names": ["g1_kin"],
+        "algo.config.use_log_std": True,
+        "algo.config.use_clampped_std": False,
+        "algo.config.std_clamp_min": 0.002,
+        "algo.config.std_clamp_max": 0.6,
+        "algo.config.clamp_noise_std": True,
         "num_envs": 32,
         "algo.config.num_learning_iterations": 6,
         "use_wandb": True,
@@ -790,6 +818,23 @@ def test_post_train_audit_requires_nonzero_new_columns_and_exact_frozen_state(
             num_sites=2,
         )
     trained["optimizer_state_dict"]["state"][0]["exp_avg"].zero_()
+
+    source_std = source["policy_state_dict"]["std"]
+    trained_std = trained["policy_state_dict"]["std"]
+    original_source_std = source_std[0].clone()
+    original_trained_std = trained_std[0].clone()
+    source_std[0] = 0.0
+    trained_std[0] = -0.0
+    assert torch.equal(source_std, trained_std)
+    with pytest.raises(ValueError, match="frozen policy tensor changed"):
+        audit_trained_motion_compliance_checkpoint(
+            "/tmp/official.pt",
+            RUNS_ROOT / "unit" / "last.pt",
+            expected_global_step=5,
+            num_sites=2,
+        )
+    source_std[0] = original_source_std
+    trained_std[0] = original_trained_std
 
     trained["policy_state_dict"]["std"][0] += 1.0
     with pytest.raises(ValueError, match="frozen policy tensor changed"):

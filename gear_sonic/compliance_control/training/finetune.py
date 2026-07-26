@@ -124,6 +124,19 @@ def validate_motion_compliance_workflow_config(config) -> None:
             tuple(finetune_cfg.get("trainable_decoder_names", ())),
             ("g1_dyn",),
         ),
+        ("algo.config.use_log_std", config.algo.config.get("use_log_std", False), False),
+        (
+            "algo.config.use_clampped_std",
+            config.algo.config.get("use_clampped_std", False),
+            True,
+        ),
+        ("algo.config.std_clamp_min", config.algo.config.get("std_clamp_min"), 0.001),
+        ("algo.config.std_clamp_max", config.algo.config.get("std_clamp_max"), 0.5),
+        (
+            "algo.config.clamp_noise_std",
+            config.algo.config.get("clamp_noise_std", False),
+            False,
+        ),
         ("num_envs", config.get("num_envs"), 16),
         (
             "algo.config.num_learning_iterations",

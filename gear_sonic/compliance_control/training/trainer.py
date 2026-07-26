@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import torch
+
 from gear_sonic.trl.trainer.ppo_trainer_aux_loss import TRLAuxLossPPOTrainer
 
 from .checkpoint import (
@@ -15,6 +17,15 @@ class MotionCompliancePPOTrainer(TRLAuxLossPPOTrainer):
     """Keep strict migration/resume rules isolated from SONIC's generic trainer."""
 
     _tag_names = ["trl", "aux_loss_ppo", "motion_compliance"]
+
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
+        """Report the effective clamped noise while preserving frozen raw state."""
+
+        if "Policy/mean_noise_std" in logs:
+            model = self.accelerator.unwrap_model(self.model)
+            with torch.no_grad():
+                logs["Policy/mean_noise_std"] = float(model.policy.get_std.mean().item())
+        super().log(logs, start_time=start_time)
 
     def load_checkpoint(self, checkpoint_path, resume=False):  # noqa: D417
         """Strict-load migrated initialization or a complete branch checkpoint."""
