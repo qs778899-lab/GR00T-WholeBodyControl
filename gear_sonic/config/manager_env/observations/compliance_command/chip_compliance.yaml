@@ -1,0 +1,5 @@
+defaults:
+  - ../terms/chip_compliance_actor_command@_here_
+
+_target_: gear_sonic.compliance_control.adapters.sonic.isaaclab.configs.ComplianceCommandObservationCfg
+concatenate_terms: true

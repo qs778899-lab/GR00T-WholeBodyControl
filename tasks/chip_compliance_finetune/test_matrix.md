@@ -135,12 +135,92 @@ Run from the repository root. These commands include the inherited Phase 1 check
 
 ## Phase 3 — Checkpoint-compatible policy/critic integration
 
-- Phase 2 matrix.
-- Released checkpoint load with documented missing/new keys only.
-- Disabled-mode policy output parity against the release path.
-- Nonzero compliance-adapter gradient and no actor access to privileged force.
-- Encoder selection and auxiliary-loss tests for G1/teleop/SMPL samples.
-- Assert the compliance-only actor path consumes the Phase 2 damped/hindsight target while the released dense reference/reward path remains unchanged.
+Run from the repository root. Phase 3 inherits the complete Phase 2 matrix.
+
+1. Portable CPU suite
+
+   ```bash
+   PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s gear_sonic/tests/compliance -p 'test_*.py' -v
+   ```
+
+   Required result: all 79 discovered tests pass; 26 Hydra/CUDA/official-model
+   tests are expected to skip in the portable environment.
+
+2. Resolved CPU/Hydra and official-checkpoint suite
+
+   ```bash
+   PYTHONDONTWRITEBYTECODE=1 \
+       /home/lab/miniconda3/envs/sonic_backup/bin/python \
+       -m unittest discover -s gear_sonic/tests/compliance -p 'test_*.py' -v
+   ```
+
+   Required result: all 79 discovered tests pass, with only four expected CUDA
+   skips when the compatibility driver is not active. The twelve Phase-3 resolved
+   integration tests must verify the pinned official checkpoint hash and
+   55-policy/17-value legacy schemas; exactly six initialized residual keys per
+   model; byte-exact legacy tensors; strict branch-checkpoint resume; 64D
+   post-FSQ disabled and zero-compliance parity even after forcing nonzero branch
+   weights; byte-exact inactive rows under mixed gating; a non-overridable
+   privileged-force rejection in direct and rollout paths; public-only rollout
+   history; real actor/critic construction for 1/2/5/14/17 sites with independent
+   future counts; no extra global CPU/CUDA RNG advance during residual
+   construction; one shared, once-normalized critic context; frozen release
+   encoder/quantizer/G1 decoder/noise/value ownership; repeated distribution and
+   optimizer steps that leave the official frozen std byte-exact; finite
+   G1/teleop/SMPL auxiliary losses; and nonzero first-backward output-head
+   gradients. Zero-initialized residual trunks are expected to have zero first
+   backward gradients and must not be asserted to update on that step.
+
+3. Inherited Phase-2 CUDA/Hydra suite and scale profiler
+
+   Run Phase-2 items 2 and 3 unchanged after explicit GPU approval. The expanded
+   discovery must pass 79/79 with no skips, and the dedicated 4096-environment,
+   14-site profiler must still pass.
+
+   For the final 2026-07-27 independent-review correction, the parent accepted
+   the already-passing inherited CUDA/Hydra suite and scale profiler without a
+   repeat because no Phase-2 command/writer path changed. The changed Phase-3
+   model paths instead require the complete 79-test CPU/Hydra/official suite and
+   a fresh real Phase-3 model smoke from item 5.
+
+4. Inherited real disabled/enabled simulator smokes
+
+   Run Phase-2 item 4 unchanged after the CUDA/Hydra suite passes. Both
+   `CHIP_PHASE2_SMOKE_PASS` invocations and the disabled run's
+   `CHIP_PHASE2_REAL_BOUND_PROFILE_PASS` remain mandatory.
+
+5. One-environment resolved Phase-3 shape/model smoke
+
+   ```bash
+   env LD_LIBRARY_PATH="${_CHIP_PHASE2_CUDA_LIB}" \
+       LD_PRELOAD="${_CHIP_PHASE2_CUDA_PRELOAD}" \
+       VK_ICD_FILENAMES="${_CHIP_PHASE2_VK_ICD}" \
+       PYTHONDONTWRITEBYTECODE=1 \
+       /home/lab/miniconda3/envs/sonic_backup/bin/python \
+       gear_sonic/scripts/run_chip_phase3_shape_smoke.py \
+       --headless --device cuda:0 \
+       --motion-file "${_CHIP_PHASE2_MOTION}" \
+       --smpl-motion-dir "${_CHIP_PHASE2_SMPL}" \
+       --checkpoint /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sonic_release/last.pt
+   ```
+
+   Required marker: `CHIP_PHASE3_SHAPE_SMOKE_PASS`. The real observation manager
+   must resolve actor/critic/tokenizer/target/command/force widths to
+   `930/1645/1761/60/9/6`, instantiate and load both derived models, produce
+   `(1,1,29)` actions and `(1,1,1)` values, keep command/force exactly zero by
+   default, match the release actor output byte-for-byte, and leave the official
+   frozen direct-std tensor byte-exact after repeated distribution construction
+   while returning the same effective clamped std as the release policy.
+
+6. Import, syntax, release-path, and patch hygiene
+
+   Run Phase-1 item 2 and item 3 unchanged, including the new Phase-3 sources.
+   Additionally compile and audit
+   `gear_sonic/scripts/run_chip_phase3_shape_smoke.py` for one final newline,
+   no trailing whitespace, and no generated cache beside it.
+   The released `sonic_release.yaml`, released tokenizer/dense observations,
+   rewards, encoder/decoder definitions, and existing checkpoint files must
+   remain unchanged.
 
 ## Phase 4 — Low-resource finetune smoke and parity regression
 
@@ -150,7 +230,9 @@ Run from the repository root. These commands include the inherited Phase 1 check
 - Compliance-enabled 16-environment smoke with finite losses and checkpoint resume.
 - Bounded log/artifact size and cleanup verification.
 
-The 2026-07-27 `580.159` kernel / `580.173` userspace NVIDIA mismatch is an explicit blocker, not a waiver for these tests.
+Until the host NVIDIA packages are aligned, Phase 4 must use the validated
+`580.159.03` compatibility environment recorded in `plan.md`. This workaround
+does not waive any real-GPU training or smoke requirement.
 
 ## Phase 5 — Tracking/compliance evaluation and export
 

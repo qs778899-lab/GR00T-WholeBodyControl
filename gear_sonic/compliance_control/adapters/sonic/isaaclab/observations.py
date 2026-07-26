@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 
 from .command import SonicComplianceCommand
+from ..frames import world_vectors_to_frame_prevalidated
 from ..observation import build_sonic_compliance_targets_prevalidated
 
 
@@ -59,3 +60,39 @@ def sonic_compliance_target(
     if non_flatten:
         return targets.observed_target_common.reshape(num_envs, num_future, -1)
     return targets.observed_target_common.reshape(num_envs, -1)
+
+
+def sonic_compliance_actor_command(
+    env,
+    *,
+    compliance_command_name: str = "force",
+) -> torch.Tensor:
+    """Return enable, ordered site mask, and compliance without true force."""
+
+    compliance = env.command_manager.get_term(compliance_command_name)
+    if not isinstance(compliance, SonicComplianceCommand):
+        raise TypeError(
+            f"command {compliance_command_name!r} is not a SonicComplianceCommand"
+        )
+    return compliance.command
+
+
+def sonic_compliance_force_common(
+    env,
+    *,
+    compliance_command_name: str = "force",
+) -> torch.Tensor:
+    """Return final applied force in the target frame for the critic only."""
+
+    compliance = env.command_manager.get_term(compliance_command_name)
+    if not isinstance(compliance, SonicComplianceCommand):
+        raise TypeError(
+            f"command {compliance_command_name!r} is not a SonicComplianceCommand"
+        )
+    _, anchor_quaternion_wxyz = compliance._anchor_pose_w()  # noqa: SLF001
+    force_common = world_vectors_to_frame_prevalidated(
+        compliance.state.force_on_robot_w,
+        frame=compliance.sites.spec.common_frame,
+        anchor_quaternion_wxyz=anchor_quaternion_wxyz,
+    )
+    return force_common.reshape(compliance.num_envs, -1)

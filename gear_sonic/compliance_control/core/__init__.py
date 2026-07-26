@@ -3,6 +3,7 @@
 from .damper import TargetDamper
 from .math import apply_hindsight_target, apply_hindsight_target_prevalidated
 from .metrics import ComplianceResponseMetrics, summarize_compliance_response
+from .residual import ComplianceResidualLayout, ComplianceResidualMLP
 from .schedule import pyramid_phase_weight
 from .schema import (
     COMPLIANCE_UNIT,
@@ -21,6 +22,8 @@ __all__ = [
     "CartesianFrameSpec",
     "CartesianRotation",
     "ComplianceResponseMetrics",
+    "ComplianceResidualLayout",
+    "ComplianceResidualMLP",
     "ComplianceTargetSpec",
     "ForceSignConvention",
     "TargetDamper",

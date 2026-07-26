@@ -1,0 +1,5 @@
+defaults:
+  - ../terms/chip_compliance_force@_here_
+
+_target_: gear_sonic.compliance_control.adapters.sonic.isaaclab.configs.ComplianceForceObservationCfg
+concatenate_terms: true

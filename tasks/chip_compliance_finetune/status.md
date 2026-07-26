@@ -4,7 +4,7 @@ task: chip_compliance_finetune
 baseline_commit: 4141c34280abb67c82e115342a8720f4a83d750d
 branch: experiment/chip-compliance
 status: IN_PROGRESS
-current_phase: 3
+current_phase: 4
 
 phases:
   - id: 1
@@ -15,10 +15,10 @@ phases:
     status: PASSED
   - id: 3
     name: Checkpoint-compatible policy/critic integration
-    status: IN_PROGRESS
+    status: PASSED
   - id: 4
     name: Low-resource finetune smoke and parity regression
-    status: PENDING
+    status: IN_PROGRESS
   - id: 5
     name: Tracking/compliance evaluation and export
     status: PENDING
@@ -97,4 +97,33 @@ phase_2_result:
   syntax_import_hygiene: PASSED
   cuda_rerun_blocker: RESOLVED
 
-next_action: EXECUTE_PHASE_3_ONLY
+phase_3_result:
+  completed_on: 2026-07-27
+  status: PASSED
+  portable_suite: 79 tests, 26 expected Hydra/CUDA/official-model skips
+  resolved_cpu_hydra_official_suite: 79 tests, 4 expected CUDA skips
+  focused_resolved_integration: 12 tests, PASSED
+  compatibility_cuda_hydra_suite: 72 tests, 0 skips, PASSED_BEFORE_REVIEW_ONLY_PHASE3_MODEL_CHANGED
+  inherited_cuda_scale_profiler: PASSED_BEFORE_REVIEW_PHASE2_UNCHANGED
+  inherited_real_disabled_enabled_smokes: PASSED_BEFORE_REVIEW_PHASE2_UNCHANGED
+  official_checkpoint_sha256: e6bdab3f64a39336b3d41877d4f497d05f58af275f288ec0e6746c283ded8909
+  official_legacy_schema: 55 policy keys, 17 value keys
+  initialized_residual_keys: 6 actor, 6 critic
+  legacy_tensor_bitwise_exact: PASSED
+  strict_branch_resume: PASSED
+  hard_privileged_force_rejection: PASSED
+  variable_site_future_construction: PASSED_FOR_1_2_5_14_17_SITES
+  post_fsq_hard_gate: PASSED_GLOBAL_ZERO_COMPLIANCE_AND_MIXED_ROWS
+  residual_construction_rng_parity: PASSED_CPU
+  critic_single_shared_normalization: PASSED
+  frozen_official_std_distribution_optimizer_parity: PASSED
+  first_backward_head_gradient: PASSED
+  release_shared_file_byte_audit: PASSED
+  real_phase_3_shape_smoke: PASSED, wall 16.48 s
+  real_observation_widths: 930/1645/1761/60/9/6
+  real_action_value_shapes: (1,1,29)/(1,1,1)
+  real_default_off_action_bitwise_exact: PASSED
+  real_frozen_std_bitwise_exact: PASSED
+  syntax_import_hygiene: PASSED
+
+next_action: EXECUTE_PHASE_4_ONLY

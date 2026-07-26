@@ -1,0 +1,9 @@
+defaults:
+  - ../terms/chip_compliance_target@_here_
+
+_target_: gear_sonic.compliance_control.adapters.sonic.isaaclab.configs.ComplianceTargetObservationCfg
+concatenate_terms: true
+
+chip_compliance_target:
+  params:
+    non_flatten: false

@@ -1,0 +1,5 @@
+chip_compliance_command:
+  _target_: isaaclab.managers.ObservationTermCfg
+  func: gear_sonic.compliance_control.adapters.sonic.isaaclab.observations:sonic_compliance_actor_command
+  params:
+    compliance_command_name: force

@@ -1,0 +1,59 @@
+# @package _global_
+# Opt-in Phase-3 policy/critic adapter. The released experiment remains untouched.
+
+defaults:
+  - /exp/manager/universal_token/all_modes/sonic_release_compliance
+  - /manager_env/observations/compliance_target: chip_compliance
+  - /manager_env/observations/compliance_command: chip_compliance
+  - /manager_env/observations/compliance_force: chip_compliance
+  - override /manager_env/observations/tokenizer: unitoken_all_noz
+  - _self_
+
+manager_env:
+  observations:
+    _target_: gear_sonic.compliance_control.adapters.sonic.isaaclab.configs.ComplianceObservationsCfg
+  commands:
+    force:
+      enabled: false
+      target_damper_enabled: false
+      # Link-origin sites are the portable default. Callers may supply one
+      # offset per configured site, but a wrist-only two-row list must not leak
+      # into arbitrary-site compositions.
+      site_offsets_local_xyz: null
+
+algo:
+  config:
+    freeze_noise_std: true
+    actor:
+      _target_: gear_sonic.compliance_control.adapters.sonic.policy.SonicComplianceActor
+      allow_legacy_checkpoint_migration: true
+      allowed_observation_keys:
+        [actor_obs, tokenizer, compliance_target, compliance_command]
+      backbone:
+        _target_: gear_sonic.compliance_control.adapters.sonic.policy.SonicComplianceUniversalTokenModule
+        freeze_encoders: true
+        freeze_decoders: true
+        freeze_quantizer: true
+        compliance_site_names: ${manager_env.commands.force.site_names}
+        compliance_cartesian_dim: 3
+        compliance_num_future_frames: ${manager_env.commands.force.num_future_frames}
+        compliance_target_key: compliance_target
+        compliance_command_key: compliance_command
+        compliance_residual:
+          _target_: gear_sonic.compliance_control.core.residual.ComplianceResidualMLP
+          hidden_dims: [256, 128]
+          residual_limit: 0.25
+    critic:
+      _target_: gear_sonic.compliance_control.adapters.sonic.critic.SonicComplianceCritic
+      allow_legacy_checkpoint_migration: true
+      freeze_base_critic: true
+      compliance_site_names: ${manager_env.commands.force.site_names}
+      compliance_cartesian_dim: 3
+      compliance_num_future_frames: ${manager_env.commands.force.num_future_frames}
+      compliance_target_key: compliance_target
+      compliance_command_key: compliance_command
+      compliance_force_key: compliance_force
+      compliance_value_residual:
+        _target_: gear_sonic.compliance_control.core.residual.ComplianceResidualMLP
+        hidden_dims: [256, 128]
+        residual_limit: 0.25

@@ -61,7 +61,12 @@ conda run -n sonic_backup python gear_sonic/train_agent_trl.py \
   ++manager_env.commands.motion.motion_lib_cfg.smpl_motion_file=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sample_data/smpl_filtered
 ```
 
-As of 2026-07-27 this command is blocked before launch by an NVIDIA driver mismatch: kernel module `580.159` versus userspace `580.173`. Phase 4 cannot pass until GPU health is restored and the command is rerun; do not substitute a claimed CPU training result.
+The host still has a kernel/userspace NVIDIA mismatch (`580.159` versus
+`580.173`), but the pinned `580.159.03` compatibility-driver workaround is
+validated: the complete Phase-3 CUDA/Hydra suite and all real Isaac Lab smokes
+pass through the extracted local libraries. Phase 4 must use that recorded
+environment until the host packages are aligned; it still requires the real
+GPU training command and cannot substitute a CPU result.
 
 ### Phase 5 — Tracking/compliance evaluation and export
 
