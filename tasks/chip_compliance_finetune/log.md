@@ -134,3 +134,105 @@
 - The first authorized Phase-3 real shape-smoke invocation ran inside the managed sandbox, where the GPU device was unavailable. It stopped before environment/model construction (5.42 s, no pass marker) with CUDA error 100 and `RuntimeError: No CUDA GPUs are available`; no loop retry or other GPU test followed that failure.
 - After a root-side device/idle check, an explicitly approved compatibility-environment preflight reported `CUDA_AVAILABLE=True` and created a real `cuda:0` tensor. The one authorized smoke retry then PASSED in 16.48 s with `CHIP_PHASE3_SHAPE_SMOKE_PASS`: real observation widths were `930/1645/1761/60/9/6`, action/value shapes were `(1,1,29)/(1,1,1)`, default-off action was byte-exact, and three distribution constructions left the official frozen std byte-exact while returning the release-equivalent clamp.
 - Compile/import, release-path, final-newline, trailing-whitespace, cache, and staged/unstaged diff hygiene passed after the review corrections. Phase 3 is marked `PASSED`; Phase 4 becomes the sole `IN_PROGRESS` phase, but no Phase-4 training was started.
+
+## 2026-07-27 — Phase 4 implementation and resume-boundary correction
+
+- Added an isolated residual-only PPO trainer, strict checkpoint/training audits,
+  a derived 16-environment five-batch smoke config, and a collision-safe runner
+  for stiff step 5, compliant step 5, and an independent one-batch step-6
+  resume. The released SONIC config and generic PPO trainer remain unchanged.
+- Corrected the actor residual integration for PPO's real `[B=4, S=24]`
+  microbatch shape. A resolved model test proves per-timestep target/gate
+  alignment after FSQ, unchanged leading action/decoder/aux shapes, exact stiff
+  rows, and finite nonzero gradients for all six actor residual tensors.
+- Before the final CPU-only repair, the expanded compatibility CUDA/Hydra suite
+  passed 93/93 with no skips; the 4096-environment/14-site profiler, both
+  100-step simulator smokes, and the real Phase-3 shape smoke also passed. The
+  disabled smoke stayed at `0 N / 0 N*m`; the enabled smoke peaked at
+  `6.785363 N / 2.197217 N*m`.
+- The first formal directory completed stiff and compliant step 5, then stopped
+  before resume because file-path execution lacked the repository import root.
+  A bootstrap-only fix and subprocess regression closed that issue. Independent
+  review of its step-5 checkpoint passed all strict schema, optimizer,
+  gradient, exposure, loss, and memory audits.
+- The second formal directory again completed both step-5 jobs and independent
+  audit, then stopped before batch 6 because the generic loader changed the
+  optimizer LR from serialized `2e-5` to checkpoint-argument `1e-5`. Both
+  failed-run directories remain untouched; no third formal run was started.
+- Root cause is a legitimate split boundary: adaptive KL saved argument LR
+  `1e-5`, while the scheduler left the optimizer's serialized LR at `2e-5`.
+  `SonicComplianceResidualPPOTrainer.load_checkpoint` now calls the generic
+  restoration and then reloads only that same optimizer payload. It leaves the
+  restored argument, scheduler, environment, model, and counters untouched.
+- A constructive AdamW/LambdaLR unit test reproduces the LR disagreement and
+  proves recursive exact optimizer and scheduler restoration while retaining
+  argument LR `1e-5`. Phase-4 focused tests passed 15/15 in `sonic_backup` and
+  9 runnable plus six expected dependency skips portably. Full CPU discovery
+  passed 95 tests with 33 expected dependency skips portably and 95 tests with
+  four expected CUDA skips in `sonic_backup`.
+- Phase 4 remains `IN_PROGRESS`. No GPU process or new formal acceptance
+  directory was launched for this correction; step-6 validation still requires
+  explicit authorization.
+- The pinned training `--help` and runner `--dry-run` gates exited zero; the dry
+  run printed the three exact commands and left its requested path absent.
+  Syntax/core import, 46-file EOF/trailing-whitespace/cache, and both unstaged
+  and staged diff checks passed. `/proc` contained no training/Isaac process,
+  and compatibility-NVML `nvidia-smi` reported no compute application.
+
+## 2026-07-27 — Phase 4 passed
+
+- After explicit one-run authorization, the fresh canonical root
+  `phase4_acceptance_resume_fix` ran serially with the pinned `580.159.03`
+  compatibility environment. Stiff step 5 passed in 23.272135 s, compliant
+  step 5 passed in 24.701326 s, and the independent one-batch resume reached
+  step 6 in 17.529439 s. The runner emitted `CHIP_PHASE4_FINETUNE_PASS`; no
+  concurrent or retry GPU job was started.
+- Fresh-process independent audits passed for both checkpoints. Step 5 and
+  step 6 each preserve all 55 policy and 17 value legacy tensors byte-exactly,
+  contain exactly six actor plus six critic residual tensors, and retain
+  optimizer ownership of 12 tensors/770753 scalars. Finite loss steps are
+  exactly `[1,2,3,4,5]` and `[6]`; site exposures are `[79,79]` and `[16,16]`;
+  peak CUDA allocations are 727262208 B and 407661056 B. Every residual tensor
+  has nonzero gradient history, with minimum counts 99 and 20 respectively.
+- The completed workflow occupies 318016496 B across 32 files; its largest log
+  is 55249 B. The resume source is a symlink to the preserved step-5 checkpoint,
+  and the official checkpoint still hashes to
+  `e6bdab3f64a39336b3d41877d4f497d05f58af275f288ec0e6746c283ded8909`.
+- A first ad-hoc read-only artifact assertion expected `workflow.complete`, but
+  the documented workflow schema uses `status: PASSED`; correcting only that
+  inspection produced `PHASE4_ARTIFACT_GATE_PASS` without changing artifacts.
+- Host `/proc` and compatibility-NVML checks found no residual training/Isaac
+  process or GPU compute application. Final compile/core-import, cache/EOF/
+  whitespace, release/generic-trainer unchanged, and staged/unstaged diff
+  checks all passed.
+- Phase 4 is `PASSED`; `current_phase` advances to 5. No Phase-5 evaluation or
+  export work was started, and Phase-4 changes remain unstaged and uncommitted.
+
+## 2026-07-27 — Phase 4 final audit correction
+
+- A final read-only audit found no P0 issue. It found one P1 documentation
+  issue: the purported canonical rerun path named an already-retained failed
+  directory, which the collision-safe runner correctly refuses to reuse. The
+  plan and test matrix now identify `phase4_acceptance_resume_fix` solely as
+  immutable accepted evidence and use `<fresh-run-root>` for reproduction; the
+  replacement must be a unique nonexistent child of the centralized run root.
+- The audit also found one P2 evidence-label issue. The runner measured bytes
+  before replacing its small RUNNING manifest with the larger PASSED manifest,
+  but called the field `workflow_bytes`. Future workflows call it
+  `workflow_bytes_before_final_manifest` and recheck both the final workflow
+  and final largest-log limits after the PASSED manifest is written. This avoids
+  a self-referential exact-size field while retaining a hard final capacity
+  gate.
+- The accepted training directory and every training artifact remain byte-for-
+  byte untouched. Its legacy manifest field retains the earlier pre-final
+  measurement `318014905`; the independent symlink-safe final measurement
+  recorded in status remains `318016496` bytes.
+- New CPU contract tests lock both distinctions. Focused Phase-4 tests passed
+  17 discovered tests with six expected dependency skips portably and 17/17 in
+  `sonic_backup`. Full discovery passed 97 tests with 33 expected dependency
+  skips portably and 97 tests with four expected CUDA skips in `sonic_backup`.
+  The training `--help` gate passed; runner dry-run printed all three commands
+  and left the requested directory absent before and after execution.
+- Phase-4 syntax/import, EOF/trailing-whitespace/cache, staged/unstaged diff,
+  and release/generic source gates passed after these corrections. Phase 4 is
+  again `PASSED`; `current_phase` returns to 5 without starting Phase-5 work.

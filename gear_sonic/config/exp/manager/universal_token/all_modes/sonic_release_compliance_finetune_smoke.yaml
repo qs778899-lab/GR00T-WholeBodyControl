@@ -1,0 +1,59 @@
+# @package _global_
+# Phase-4-only, low-resource residual finetune. Release configs remain unchanged.
+
+defaults:
+  - /exp/manager/universal_token/all_modes/sonic_release_compliance_residual
+  - _self_
+
+base_dir: /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs
+project_name: chip
+experiment_name: chip_phase4_residual
+num_envs: 16
+headless: true
+use_wandb: false
+
+chip_phase4:
+  audit_mode: official_init
+  expected_source_checkpoint_step: 41550
+  expected_start_step: 0
+  expected_final_step: 5
+  expected_num_envs: 16
+  expected_trainable_scalar_count: 770753
+  max_run_bytes: 1200000000
+  max_log_bytes: 64000000
+
+manager_env:
+  commands:
+    force:
+      enabled: true
+      enabled_probability: 1.0
+      site_probability: 1.0
+      max_active_sites: ${len:${manager_env.commands.force.site_names}}
+      # Smoke-only acceleration: normal CHIP training keeps the 3.5-6 s range.
+      pulse_interval_range_s: [0.02, 0.04]
+      compliance_values_m_per_n: [0.02, 0.05]
+
+algo:
+  config:
+    num_learning_iterations: 5
+
+trainer:
+  _target_: gear_sonic.compliance_control.adapters.sonic.phase4_training.SonicComplianceResidualPPOTrainer
+
+callbacks:
+  model_save:
+    save_last_frequency: 5
+  chip_phase4_audit:
+    _target_: gear_sonic.compliance_control.adapters.sonic.phase4_training.SonicPhase4TrainingAuditCallback
+    report_path: ${experiment_dir}/phase4_audit.json
+    source_checkpoint: ${checkpoint}
+    audit_mode: ${chip_phase4.audit_mode}
+    expected_source_checkpoint_step: ${chip_phase4.expected_source_checkpoint_step}
+    expected_start_step: ${chip_phase4.expected_start_step}
+    expected_final_step: ${chip_phase4.expected_final_step}
+    expected_site_names: ${manager_env.commands.force.site_names}
+    expected_num_envs: ${chip_phase4.expected_num_envs}
+    expected_trainable_scalar_count: ${chip_phase4.expected_trainable_scalar_count}
+    expected_pulse_interval_range_s: ${manager_env.commands.force.pulse_interval_range_s}
+    max_run_bytes: ${chip_phase4.max_run_bytes}
+    max_log_bytes: ${chip_phase4.max_log_bytes}

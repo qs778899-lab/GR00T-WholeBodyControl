@@ -17,6 +17,15 @@ from .sampling import (
 class ComplianceOperationalControl:
     """Mixin implementing immediate, command-owned compliance mode switches."""
 
+    is_evaluating: bool = False
+
+    def set_is_evaluating(self, is_evaluating: bool = True) -> None:
+        """Honor the manager-wrapper lifecycle without changing force ownership."""
+
+        if type(is_evaluating) is not bool:
+            raise TypeError("is_evaluating must be a bool")
+        self.is_evaluating = is_evaluating
+
     def compute(self, dt: float) -> None:
         """Override ``CommandTerm.compute`` without dynamic CUDA due indices."""
 

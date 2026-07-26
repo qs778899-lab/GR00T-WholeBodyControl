@@ -49,17 +49,79 @@ Pinned local smoke assets (never stage these binaries):
 - Robot motion: `/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sample_data/robot_filtered/210531/walk_forward_amateur_001__A001.pkl`.
 - SMPL directory: `/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sample_data/smpl_filtered`.
 
-Pinned stiff-baseline smoke command:
+The immutable accepted Phase-4 evidence is under
+`/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/phase4_acceptance_resume_fix`.
+It is an evidence directory, not a rerun target. For reproduction, replace the
+literal `<fresh-run-root>` below with a unique absolute child of
+`compliance_control/runs/chip`; that path must not exist before launch.
+
+Pinned stiff-baseline smoke command template:
 
 ```bash
-conda run -n sonic_backup python gear_sonic/train_agent_trl.py \
+env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu \
+  LD_PRELOAD=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.580.159.03:/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libcuda.so.580.159.03 \
+  VK_ICD_FILENAMES=/tmp/nvidia_580_159_compat/extracted/usr/share/vulkan/icd.d/nvidia_icd.json \
+  PYTHONDONTWRITEBYTECODE=1 \
+  /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/train_agent_trl.py \
   +exp=manager/universal_token/all_modes/sonic_release \
   +checkpoint=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sonic_release/last.pt \
+  +resume=false \
   num_envs=16 headless=True use_wandb=false \
   ++algo.config.num_learning_iterations=5 \
   ++manager_env.commands.motion.motion_lib_cfg.motion_file=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sample_data/robot_filtered/210531/walk_forward_amateur_001__A001.pkl \
-  ++manager_env.commands.motion.motion_lib_cfg.smpl_motion_file=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sample_data/smpl_filtered
+  ++manager_env.commands.motion.motion_lib_cfg.smpl_motion_file=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sample_data/smpl_filtered \
+  experiment_dir=<fresh-run-root>/stiff_release_step5 \
+  save_dir=<fresh-run-root>/stiff_release_step5/.hydra \
+  output_dir=<fresh-run-root>/stiff_release_step5/output
 ```
+
+The official checkpoint is a warm start only: `resume=false` deliberately
+discards its 69-parameter optimizer and recorded step 41550. The opt-in CHIP
+branch is trained separately, with every released policy/value/std/RMS tensor
+frozen byte-for-byte and exactly 12 residual parameter tensors (770753 scalars
+for the two-wrist smoke layout) owned by the optimizer.
+
+The bounded workflow reproduction template is:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 \
+  /home/lab/miniconda3/envs/sonic_backup/bin/python -B \
+  gear_sonic/scripts/run_chip_phase4_finetune.py \
+  --run-root <fresh-run-root>
+```
+
+It executes the exact stiff command above, then an official-to-residual
+five-batch run and an independent one-batch step-5-to-step-6 resume. The
+compliance smoke forces both configured wrist sites to be enabled, uses the
+short smoke-only pulse interval `[0.02, 0.04]` seconds and nonzero compliance
+values `{0.02, 0.05}` m/N, saves `last.pt` at step 5, and records finite losses,
+per-site true exposure, all 12 gradient histories, and peak CUDA allocation.
+Normal CHIP training retains the physical 3.5-6 second pulse interval; the
+accelerated interval is only an acceptance-smoke mechanism.
+
+The released PPO update keeps a temporal rollout tensor: 16 environments and
+4 minibatches produce actor microbatches with leading shape ``[4, 24]``. The
+SONIC adapter therefore adds its ``[B, S, 64]`` residual only after encoder
+outputs have been reassembled from flattened ``B*S`` rows into
+``[B, S, 2, 32]`` FSQ tokens. It neither selects timestep zero nor broadcasts
+one timestep across the rollout; disabled timesteps remain release-bit-exact,
+and the generic ``UniversalTokenModule`` remains unchanged.
+
+The resume job creates a symlink to the preserved step-5 checkpoint inside a
+new output directory, passes `resume=true`, requests exactly one new PPO batch
+with `num_learning_iterations=1`, and saves on frequency 1 when global step
+reaches 6. Its start callback requires byte-exact model, optimizer, and
+scheduler state plus global step 5 before that batch. The generic trainer also
+loads its serialized environment payload. It does not serialize process
+CPU/CUDA/Python/NumPy RNG state or the compliance command's private generator,
+countdown, damper, and wrench buffers, so this is a strict training-state
+resume, not a claim of trajectory-bitwise replay.
+
+All generated files stay under `compliance_control/runs/chip`; the runner
+rejects a pre-existing or out-of-root workflow, caps each log at 64 MB, caps
+each checkpoint run at 1.2 GB and the complete workflow at 2.5 GB, and never
+overwrites the official checkpoint or the accepted step-5 evidence. Use
+`--dry-run` to inspect all three argument vectors without creating files.
 
 The host still has a kernel/userspace NVIDIA mismatch (`580.159` versus
 `580.173`), but the pinned `580.159.03` compatibility-driver workaround is

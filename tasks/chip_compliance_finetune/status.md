@@ -4,7 +4,7 @@ task: chip_compliance_finetune
 baseline_commit: 4141c34280abb67c82e115342a8720f4a83d750d
 branch: experiment/chip-compliance
 status: IN_PROGRESS
-current_phase: 4
+current_phase: 5
 
 phases:
   - id: 1
@@ -18,10 +18,10 @@ phases:
     status: PASSED
   - id: 4
     name: Low-resource finetune smoke and parity regression
-    status: IN_PROGRESS
+    status: PASSED
   - id: 5
     name: Tracking/compliance evaluation and export
-    status: PENDING
+    status: IN_PROGRESS
   - id: 6
     name: Final regression and handoff
     status: PENDING
@@ -126,4 +126,51 @@ phase_3_result:
   real_frozen_std_bitwise_exact: PASSED
   syntax_import_hygiene: PASSED
 
-next_action: EXECUTE_PHASE_4_ONLY
+phase_4_result:
+  completed_on: 2026-07-27
+  status: PASSED
+  inherited_compatibility_cuda_hydra_suite: PASSED, 93 tests, 0 skips, before the CPU-only resume repair
+  inherited_cuda_scale_profiler: PASSED, 4096 environments / 14 sites
+  inherited_disabled_smoke: PASSED, 100 steps / 0 N / 0 N*m / real-bound profiler marker
+  inherited_enabled_smoke: PASSED, 100 steps / 6.785363 N / 2.197217 N*m
+  real_phase_3_shape_smoke: PASSED
+  first_acceptance_step_5: PASSED, then runner lazy-import bootstrap failed before resume
+  second_acceptance_step_5: PASSED, then resume start audit rejected optimizer LR 1e-5 versus serialized 2e-5 before batch 6
+  failed_run_artifacts: RETAINED_UNCHANGED
+  resume_root_cause: generic load overwrote the serialized post-scheduler optimizer LR with the checkpoint adaptive-KL args LR
+  isolated_resume_fix: PASSED_CPU, dedicated trainer reloads only the same serialized optimizer payload after generic restoration
+  resume_boundary_unit_test: PASSED, optimizer and scheduler recursively exact while args LR remains unchanged
+  portable_cpu_suite: PASSED, 95 tests / 33 expected dependency skips
+  resolved_cpu_suite: PASSED, 95 tests / 4 expected CUDA skips
+  training_help_gate: PASSED
+  dry_run_gate: PASSED, exact three command vectors and no filesystem write
+  syntax_import_hygiene: PASSED, 38 compiled files / 46 text files
+  process_gate: PASSED, no training/Isaac process and no GPU compute application
+  canonical_run_root: /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/phase4_acceptance_resume_fix
+  canonical_marker: CHIP_PHASE4_FINETUNE_PASS
+  canonical_durations_s: stiff 23.272135 / initial 24.701326 / resume 17.529439
+  canonical_step_5_audit: PASSED, loss steps 1-5 / exposure 79,79 / peak CUDA 727262208 bytes
+  canonical_step_6_audit: PASSED, loss step 6 / exposure 16,16 / peak CUDA 407661056 bytes
+  independent_step_5_step_6_audits: PASSED
+  canonical_checkpoint_schema: 55 policy legacy / 17 value legacy / 6 actor residual / 6 critic residual
+  canonical_optimizer_ownership: 12 tensors / 770753 scalars
+  canonical_gradient_nonzero_min: step5 99 / step6 20
+  canonical_workflow_bytes: 318016496
+  canonical_largest_log_bytes: 55249
+  official_checkpoint_sha256: e6bdab3f64a39336b3d41877d4f497d05f58af275f288ec0e6746c283ded8909
+  released_config_and_generic_trainer: UNCHANGED
+  final_read_only_audit: PASSED, no P0; one documentation P1 and one manifest-label P2 corrected
+  accepted_evidence_root: /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/phase4_acceptance_resume_fix
+  rerun_contract: PASSED, documented <fresh-run-root> must not exist
+  accepted_training_artifacts: UNCHANGED
+  accepted_legacy_manifest_pre_final_bytes: 318014905
+  future_manifest_size_semantics: PASSED, explicit pre-final field plus post-write final cap check
+  final_audit_focused_portable: PASSED, 17 tests / 6 expected dependency skips
+  final_audit_focused_resolved: PASSED, 17 tests / 0 skips
+  final_audit_portable_cpu_suite: PASSED, 97 tests / 33 expected dependency skips
+  final_audit_resolved_cpu_suite: PASSED, 97 tests / 4 expected CUDA skips
+  final_audit_training_help: PASSED
+  final_audit_dry_run: PASSED, target absent before and after
+  final_audit_hygiene: PASSED
+
+next_action: EXECUTE_PHASE_5_ONLY

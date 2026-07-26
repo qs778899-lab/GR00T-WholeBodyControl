@@ -134,6 +134,39 @@ class SonicComplianceUniversalTokenModule(UniversalTokenModule):
             output_dim=self.token_total_dim,
         )
         self._last_compliance_residual = None
+        self._pending_compliance_residual = None
+
+    def assemble_all_tokens(self, encoded_tokens, encoder_masks, batch_size, seq_len):
+        """Inject the per-timestep residual after FSQ without flattening time.
+
+        ``UniversalTokenModule`` first encodes the flattened ``B*S`` rows and
+        then calls this virtual method to restore ``(B, S, token, channel)``.
+        Adding the adapter-owned residual here keeps the released module
+        untouched and makes the temporal alignment explicit: residual
+        ``[b, s]`` can affect only token ``[b, s]``.
+        """
+
+        tokens = super().assemble_all_tokens(
+            encoded_tokens,
+            encoder_masks,
+            batch_size,
+            seq_len,
+        )
+        residual = self._pending_compliance_residual
+        if residual is None:
+            return tokens
+        expected_shape = (batch_size, seq_len, self.token_total_dim)
+        if tuple(residual.shape) != expected_shape:
+            raise RuntimeError(
+                "compliance residual sequence shape mismatch: "
+                f"expected {expected_shape}, got {tuple(residual.shape)}"
+            )
+        return tokens + residual.reshape(
+            batch_size,
+            seq_len,
+            self.max_num_tokens,
+            self.token_dim,
+        )
 
     def forward(
         self,
@@ -152,22 +185,47 @@ class SonicComplianceUniversalTokenModule(UniversalTokenModule):
             raise ValueError("SONIC compliance residual must be post_quantization")
         target = input_data[self.compliance_target_key]
         actor_command = input_data[self.compliance_command_key]
+        if target.ndim != 3 or actor_command.ndim != 3:
+            raise ValueError(
+                "SONIC compliance policy inputs must preserve (batch, sequence, feature)"
+            )
+        batch_sequence = target.shape[:2]
+        if actor_command.shape[:2] != batch_sequence:
+            raise ValueError("SONIC compliance policy batch/sequence dimensions must match")
+        context_inputs = [input_data[name] for name in self.proprioception_features]
+        if any(
+            tensor.ndim != 3 or tensor.shape[:2] != batch_sequence
+            for tensor in context_inputs
+        ):
+            raise ValueError(
+                "SONIC compliance context must preserve the target batch/sequence dimensions"
+            )
         context = torch.cat(
-            [input_data[name] for name in self.proprioception_features],
+            context_inputs,
             dim=-1,
         )
-        if target.ndim != 3 or target.shape[1] != 1:
-            raise ValueError("released SONIC compliance policy requires sequence length one")
         delta_z = self.compliance_residual(target, actor_command, context)
+        expected_residual_shape = (*batch_sequence, self.token_total_dim)
+        if tuple(delta_z.shape) != expected_residual_shape:
+            raise RuntimeError(
+                "compliance residual changed the batch/sequence layout: "
+                f"expected {expected_residual_shape}, got {tuple(delta_z.shape)}"
+            )
         self._last_compliance_residual = delta_z.detach()
-        return super().forward(
-            input_data,
-            compute_aux_loss=compute_aux_loss,
-            return_dict=return_dict,
-            latent_residual=delta_z[:, 0],
-            latent_residual_mode="post_quantization",
-            **kwargs,
-        )
+        if self._pending_compliance_residual is not None:
+            raise RuntimeError("nested SONIC compliance policy forwards are unsupported")
+        self._pending_compliance_residual = delta_z
+        try:
+            return super().forward(
+                input_data,
+                compute_aux_loss=compute_aux_loss,
+                return_dict=return_dict,
+                latent_residual=None,
+                latent_residual_mode="post_quantization",
+                **kwargs,
+            )
+        finally:
+            self._pending_compliance_residual = None
 
 
 class SonicComplianceActor(Actor):

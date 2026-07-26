@@ -188,23 +188,29 @@ class SonicPhase3ResolvedIntegrationTest(unittest.TestCase):
         )
 
     @staticmethod
-    def _actor_inputs(*, batch: int = 3):
+    def _actor_inputs(*, batch: int = 3, sequence: int = 1):
         components = {
-            name: torch.randn(batch, 1, *shape)
+            name: torch.randn(batch, sequence, *shape)
             for name, shape in TOKENIZER_SHAPES.items()
         }
-        components["encoder_index"] = torch.tensor(
-            [[[1.0, 0.0, 0.0]], [[0.0, 1.0, 0.0]], [[1.0, 0.0, 1.0]]]
-        )[:batch]
+        encoder_patterns = torch.tensor(
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 1.0]]
+        )
+        components["encoder_index"] = encoder_patterns[
+            torch.arange(batch) % len(encoder_patterns)
+        ].unsqueeze(1).expand(-1, sequence, -1).clone()
         tokenizer = torch.cat(
-            [components[name].reshape(batch, 1, -1) for name in TOKENIZER_SHAPES],
+            [
+                components[name].reshape(batch, sequence, -1)
+                for name in TOKENIZER_SHAPES
+            ],
             dim=-1,
         )
         public = {
-            "actor_obs": torch.randn(batch, 1, 930),
+            "actor_obs": torch.randn(batch, sequence, 930),
             "tokenizer": tokenizer,
-            "compliance_target": torch.randn(batch, 1, 60),
-            "compliance_command": torch.zeros(batch, 1, 9),
+            "compliance_target": torch.randn(batch, sequence, 60),
+            "compliance_command": torch.zeros(batch, sequence, 9),
         }
         return public, components
 
@@ -687,6 +693,133 @@ class SonicPhase3ResolvedIntegrationTest(unittest.TestCase):
         )
         for name, value in result["aux_losses"].items():
             self.assertTrue(torch.isfinite(value).all(), msg=name)
+
+    def test_ppo_microbatch_preserves_each_of_24_residual_timesteps(self) -> None:
+        """Match SONIC's 16-env/4-minibatch/24-step PPO tensor layout."""
+
+        from gear_sonic.trl.modules.universal_token_modules import UniversalTokenModule
+
+        batch = 4
+        sequence = 24
+        public, _ = self._actor_inputs(batch=batch, sequence=sequence)
+        command = public["compliance_command"].clone()
+        command[..., 0] = 1.0
+        command[:, 0::4, 1] = 1.0
+        command[:, 0::4, 3:6] = 0.02
+        command[:, 2::4, 2] = 1.0
+        command[:, 2::4, 6:9] = 0.05
+        public = {**public, "compliance_command": command}
+
+        module = self.actor.actor_module
+        residual = module.compliance_residual
+        residual_before = {
+            name: tensor.clone() for name, tensor in residual.state_dict().items()
+        }
+        seen_residual_inputs = []
+        seen_aux_leading_shapes = []
+        hooks = []
+        try:
+            with torch.no_grad():
+                residual.output_layer.weight.fill_(5.0e-4)
+                residual.output_layer.bias.fill_(0.02)
+                release_result = UniversalTokenModule.forward(
+                    module,
+                    public,
+                    compute_aux_loss=True,
+                )
+                release_latent = module._last_full_latent_flat.clone()  # noqa: SLF001
+                release_action = release_result["action_mean"].clone()
+
+            hooks.append(
+                residual.register_forward_pre_hook(
+                    lambda _module, args: seen_residual_inputs.append(
+                        tuple(tensor.detach().clone() for tensor in args)
+                    )
+                )
+            )
+
+            def capture_aux_leading_shape(_module, args):
+                loss_inputs = args[0]
+                action_shape = tuple(loss_inputs["action_mean"].shape[:2])
+                decoded_shapes = {
+                    (decoder_name, output_name): tuple(tensor.shape[:2])
+                    for decoder_name, outputs in loss_inputs["decoded_outputs"].items()
+                    for output_name, tensor in outputs.items()
+                }
+                seen_aux_leading_shapes.append((action_shape, decoded_shapes))
+
+            hooks.extend(
+                loss.register_forward_pre_hook(capture_aux_leading_shape)
+                for loss in module.aux_loss_func.values()
+            )
+            result = module(public, compute_aux_loss=True)
+            for hook in hooks:
+                hook.remove()
+            hooks.clear()
+
+            delta = module._last_compliance_residual  # noqa: SLF001
+            actual_latent = module._last_full_latent_flat  # noqa: SLF001
+            self.assertEqual(tuple(delta.shape), (batch, sequence, module.token_total_dim))
+            self.assertTrue(torch.count_nonzero(delta[:, 0::2]).item() > 0)
+            self.assertTrue(
+                torch.equal(delta[:, 1::2], torch.zeros_like(delta[:, 1::2]))
+            )
+            self.assertTrue(torch.equal(actual_latent, release_latent + delta))
+            self.assertEqual(tuple(result["action_mean"].shape), (batch, sequence, 29))
+            self.assertTrue(
+                torch.equal(result["action_mean"][:, 1::2], release_action[:, 1::2])
+            )
+            self.assertFalse(
+                torch.equal(result["action_mean"][:, 0::2], release_action[:, 0::2])
+            )
+            self.assertIsNone(module._pending_compliance_residual)  # noqa: SLF001
+
+            self.assertEqual(len(seen_residual_inputs), 1)
+            seen_target, seen_command, seen_context = seen_residual_inputs[0]
+            self.assertTrue(torch.equal(seen_target, public["compliance_target"]))
+            self.assertTrue(torch.equal(seen_command, public["compliance_command"]))
+            self.assertTrue(torch.equal(seen_context, public["actor_obs"]))
+            self.assertEqual(len(seen_aux_leading_shapes), len(module.aux_loss_func))
+            for action_shape, decoded_shapes in seen_aux_leading_shapes:
+                self.assertEqual(action_shape, (batch, sequence))
+                self.assertTrue(decoded_shapes)
+                self.assertTrue(
+                    all(shape == (batch, sequence) for shape in decoded_shapes.values())
+                )
+            for name, value in result["aux_losses"].items():
+                self.assertTrue(torch.isfinite(value).all(), msg=name)
+
+            self.actor.zero_grad(set_to_none=True)
+            gradient_result = module(public, compute_aux_loss=True)
+            action_weights = torch.linspace(
+                0.1,
+                1.0,
+                gradient_result["action_mean"].numel(),
+            ).reshape_as(gradient_result["action_mean"])
+            loss = (gradient_result["action_mean"] * action_weights).sum()
+            for name, value in gradient_result["aux_losses"].items():
+                loss = loss + float(module.aux_loss_coef[name]) * value.mean()
+            loss.backward()
+            for name, parameter in residual.named_parameters():
+                self.assertIsNotNone(parameter.grad, msg=name)
+                self.assertTrue(torch.isfinite(parameter.grad).all(), msg=name)
+                self.assertGreater(float(parameter.grad.abs().sum()), 0.0, msg=name)
+
+            flattened_time = {
+                **public,
+                "compliance_target": public["compliance_target"].reshape(
+                    batch * sequence,
+                    -1,
+                ),
+            }
+            with self.assertRaisesRegex(ValueError, "preserve"):
+                module(flattened_time)
+            self.assertIsNone(module._pending_compliance_residual)  # noqa: SLF001
+        finally:
+            for hook in hooks:
+                hook.remove()
+            residual.load_state_dict(residual_before, strict=True)
+            self.actor.zero_grad(set_to_none=True)
 
     def test_first_backward_updates_heads_without_privileged_actor_gradient(self) -> None:
         public, _ = self._actor_inputs()
