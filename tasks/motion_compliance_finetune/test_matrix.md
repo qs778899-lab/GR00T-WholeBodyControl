@@ -118,18 +118,59 @@ does not leave repository caches.
 
 ## Phase 4 — Checkpoint migration and finetune workflow
 
-1. Run all earlier tests.
-2. Synthetic checkpoint migration test: old weights/biases copy exactly and new
-   input columns are exactly zero.
-3. Released-checkpoint load smoke with `resume=false`; assert no missing legacy
-   weights and report only expected new parameters.  Source checkpoint:
-   `compliance_control/official_assets/sonic_release/last.pt`, HF revision
-   `7c90a56c`, step 41550; verify its recorded digest before use.
-4. One PPO rollout/update with a small environment count; verify finite losses,
-   checkpoint save, and strict reload of the migrated checkpoint.
-5. Motion data smoke with one robot PKL from the six audited official samples
-   and `sample_data/smpl_filtered`; no modified/duplicate dataset is generated.
-6. Training entrypoint `--help`/Hydra help succeeds.
+1. Run the combined Phase-1/2/3/4 pure suite:
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B -m pytest -p no:cacheprovider -q gear_sonic/tests/test_compliance_core.py gear_sonic/tests/test_compliance_sonic_adapter.py gear_sonic/tests/test_compliance_sonic_training.py gear_sonic/tests/test_compliance_training_checkpoint.py`.
+   It must cover exact synthetic legacy copies/zero tails, derived `4+4*S`
+   critic widths, official-contract pinning, strict init/resume, complete
+   non-empty resume state, exact freeze/optimizer ownership, finite loss and
+   per-site exposure callbacks, path/collision rejection, post-train poison
+   checks, and exact Hydra smoke guards.  Load the pinned release `std`, require
+   the dedicated compliance actor target, and prove repeated distribution
+   construction retains byte-exact frozen noise state while producing the same
+   effective clamp and excluding `std/log_std` from the optimizer.
+2. Run the pinned official CPU migration smoke (reruns may atomically overwrite
+   only this generated central artifact):
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase4_official_migration_smoke.py --output /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_cpu_gate/artifacts/motion_compliance_init.pt --report /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_cpu_gate/artifacts/migration_audit.json --num-sites 2 --overwrite`.
+   Require SHA-256
+   `e6bdab3f64a39336b3d41877d4f497d05f58af275f288ec0e6746c283ded8909`,
+   full revision `7c90a56cfe04788c4f041daeef5b1e12930675ad`, source
+   step 41550, actor `994→997`, critic/RMS `1645→1657`, unchanged RMS
+   count, fresh step 0, and `optimizer/scheduler/env=None`.
+3. Run both entrypoint/config gates:
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/train_agent_trl.py --help` and
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/train_agent_trl.py +exp=manager/universal_token/all_modes/sonic_release_motion_compliance_finetune exp_base=phase4_test timestamp=20260727_000000 --cfg job`.
+   The latter must resolve the isolated strict trainer, central runs root,
+   official checkpoint, one official robot PKL plus official SMPL directory,
+   16 environments, 5 iterations, W&B off, and `save_last_frequency=5`.
+4. Rerun the exact Phase-2 and Phase-3 real CUDA regression commands from their
+   matrix sections with the NVIDIA 580.159 compatibility environment before
+   the new training smoke.
+5. Record the 16-environment fixed-shape scheduler cost without changing its
+   algorithm:
+   `env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu LD_PRELOAD=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.580.159.03:/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libcuda.so.580.159.03 VK_ICD_FILENAMES=/tmp/nvidia_580_159_compat/extracted/usr/share/vulkan/icd.d/nvidia_icd.json PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase4_candidate_scheduler_benchmark.py --num-envs 16 --output /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_smoke/artifacts/candidate_scheduler_benchmark.json`.
+   The JSON must contain enabled/host-off CUDA time and incremental peak-memory
+   measurements.
+6. Using `phase4_gpu_smoke` with no prior checkpoint/training files (the
+   scheduler JSON from command 5 is allowed), run the exact five-step training:
+   `env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu LD_PRELOAD=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.580.159.03:/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libcuda.so.580.159.03 VK_ICD_FILENAMES=/tmp/nvidia_580_159_compat/extracted/usr/share/vulkan/icd.d/nvidia_icd.json PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/train_agent_trl.py +exp=manager/universal_token/all_modes/sonic_release_motion_compliance_finetune experiment_dir=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_smoke headless=true`.
+   Require `last.pt` at step 5, one finite loss/timing record per iteration,
+   nonzero enabled/left/right force exposure, and process peak CUDA memory.
+7. Audit step 5:
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase4_checkpoint_audit.py --official /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sonic_release/last.pt --trained /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_smoke/last.pt --exposure /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_smoke/artifacts/motion_compliance_exposure.json --expected-step 5 --num-sites 2 --output-json /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_smoke/artifacts/step5_audit.json`.
+   Every added actor/critic column must be nonzero; encoder, `g1_kin`,
+   quantizer state, and `std/log_std` must remain exact; all tensors and
+   optimizer moments must be finite; optimizer ownership/steps must be fresh.
+8. Strict-resume step 5 into a separate step-6 output directory:
+   `env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu LD_PRELOAD=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.580.159.03:/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libcuda.so.580.159.03 VK_ICD_FILENAMES=/tmp/nvidia_580_159_compat/extracted/usr/share/vulkan/icd.d/nvidia_icd.json PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/train_agent_trl.py +exp=manager/universal_token/all_modes/sonic_release_motion_compliance_finetune experiment_dir=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_resume resume=true motion_compliance_finetune.resume_output_dir=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_resume motion_compliance_checkpoint_migration.enabled=false checkpoint=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_smoke/last.pt algo.config.num_learning_iterations=1 callbacks.model_save.save_last_frequency=1 headless=true`.
+   It must restore strict model/optimizer/scheduler/environment/trainer state,
+   execute exactly one PPO batch, preserve step 5, and save step 6 under
+   `phase4_gpu_resume`.
+9. Audit the independently saved step 6:
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase4_checkpoint_audit.py --official /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sonic_release/last.pt --trained /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_resume/last.pt --exposure /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_resume/artifacts/motion_compliance_exposure.json --expected-step 6 --num-sites 2 --output-json /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_resume/artifacts/step6_audit.json`.
+10. `git diff --check`; after staging all and only Phase-4 files,
+    `git diff --cached --check`.  Confirm the generic
+    `gear_sonic/trl/trainer/ppo_trainer.py` has no diff and remove all
+    repository-local `__pycache__`, `.pytest_cache`, `.pyc`, and `.pyo` files.
 
 ## Phase 5 — Export and deployment switch
 

@@ -143,10 +143,14 @@ Baseline: NVLabs upstream `main` at
   required.
 - Use the audited official release checkpoint at
   `compliance_control/official_assets/sonic_release/last.pt` (HF revision
-  `7c90a56c`, recorded SHA-256 ending `d8909`, training step 41550) for the real
+  `7c90a56cfe04788c4f041daeef5b1e12930675ad`, recorded SHA-256 ending
+  `d8909`, training step 41550) for the real
   migration smoke; never mutate the source asset.
 - Add staged finetuning controls: initially freeze the robot-motion encoder and
   quantizer, train the dynamic decoder/critic, then optionally unfreeze.
+- Keep frozen action-noise checkpoint tensors byte-exact through a dedicated
+  compliance actor that computes the release clamp out of place; retain the
+  generic actor unchanged and preserve its state-dict schema.
 - During the prescribed 16-environment/5-iteration smoke, separately record the
   fixed-shape all-environment candidate scheduler cost; keep the
   synchronization-safe algorithm unchanged until it has measured evidence.

@@ -95,7 +95,7 @@ observation config.  Existing release files remain untouched.
 
 The immutable official checkpoint is
 `/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sonic_release/last.pt`
-at Hugging Face revision `7c90a56c`, training step 41550, SHA-256
+at Hugging Face revision `7c90a56cfe04788c4f041daeef5b1e12930675ad`, training step 41550, SHA-256
 `e6bdab3f64a39336b3d41877d4f497d05f58af275f288ec0e6746c283ded8909`.
 The matching single robot input and SMPL directory are:
 

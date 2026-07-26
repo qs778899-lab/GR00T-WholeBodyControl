@@ -20,7 +20,8 @@
   index assumptions.
 - Audited external assets for later phases: official release checkpoint at
   `/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sonic_release/last.pt`
-  (HF revision `7c90a56c`, recorded SHA-256 ending `d8909`, step 41550) and six
+  (HF revision `7c90a56cfe04788c4f041daeef5b1e12930675ad`, recorded SHA-256
+  ending `d8909`, step 41550) and six
   official sample PKLs in the same asset area.  The prescribed later smoke uses
   `sonic_backup`, one robot PKL, `sample_data/smpl_filtered`, 16 environments,
   5 iterations, and W&B disabled.
@@ -309,3 +310,131 @@
   revalidated after a machine restart.
 - Phase 3 returns to `PASSED` and `current_phase` advances to 4.  The isolated
   Phase-4 work was not mixed into this regression fix.
+
+## 2026-07-27 — Phase 4 CPU gate passed; GPU acceptance pending
+
+- Added a strict, one-way official checkpoint adapter.  Its public official
+  wrapper pins SHA-256
+  `e6bdab3f64a39336b3d41877d4f497d05f58af275f288ec0e6746c283ded8909`,
+  full revision `7c90a56cfe04788c4f041daeef5b1e12930675ad`, and source
+  step 41550.  The actor first layer expands `994→997`; critic weight and RMS
+  expand `1645→1657` for two sites, with zero weight/mean tails, one variance
+  tail, and unchanged RMS count.
+- The generated init artifact contains complete strict policy/value state,
+  fresh `OnlineTrainerState(global_step=0)`, provenance, and explicit
+  `optimizer/scheduler/env=None`.  It cannot be resumed.  The normal branch
+  uses an isolated `MotionCompliancePPOTrainer` and requires complete non-empty
+  optimizer, scheduler, environment, and trainer state for strict resume; the
+  generic PPO trainer has no diff.
+- `decoder_critic` freezes every policy parameter except `g1_dyn`, including
+  all encoders, `g1_kin`, quantizer parameters, and `std/log_std`; every critic
+  parameter is trainable.  Trainer construction validates optimizer ownership
+  exactly after its optimizer is created.
+- The bounded exposure callback atomically updates one JSON per PPO step,
+  requires one finite `loss/*` and timing log per iteration, independently
+  counts enabled+active+nonzero force for each site, rejects stale force, and
+  records process peak CUDA memory.  The post-train audit requires every new
+  actor/critic column nonzero, frozen tensors bitwise official, finite model and
+  optimizer tensors, fresh optimizer steps, and exact expected global step.
+- Hydra is guarded against smoke-contract overrides and output collisions.  It
+  resolves the official single robot PKL/SMPL directory, 16 environments, five
+  iterations, W&B off, `save_last_frequency=5`, forced two-site exposure, and
+  the dedicated strict trainer.  Every generated artifact is constrained to
+  the central `compliance_control/runs/motion` root.  Strict step-5→6 resume
+  uses a separate output directory so the step-5 evidence is preserved.
+- The standalone official CPU migration exited 0 and wrote only central
+  artifacts.  Its audit reported actor `[994,997]`, critic `[1645,1657]`, RMS
+  count `69574656000.0`, source step 41550, and fresh/no-old-state semantics.
+- The final pre-review combined pure command passed with `76 passed, 1 skipped
+  in 8.34s`; after review hardening, the focused Phase-4 suite passed with
+  `13 passed in 5.76s`.  Both training `--help` and the finetune `--cfg job`
+  command exited 0.  A final combined rerun remains required after the last
+  callback/path changes.
+- Independent Phase-4 review found no P0.  Its P1/P2 findings (finite losses,
+  exact smoke parameters, collision-safe paths, separate resume output,
+  discoverable scheduler timing/memory command, exact test matrix, and cache
+  hygiene) were incorporated.  No Phase-4 GPU command has run yet; Phase 4
+  remains `IN_PROGRESS` pending the exact CUDA matrix, five-step training,
+  step-5 audit, strict one-step resume, and step-6 audit.
+- The final frozen Phase-4 CPU gate passed after those review fixes:
+  `77 passed, 1 skipped in 8.51s`; the skip is the existing ordinary-process
+  CUDA parametrization.  Official migration reran with `--overwrite` against
+  only its owned generated artifact and passed in 5.4 seconds.  Training help,
+  resolved Hydra config, scheduler benchmark help, and checkpoint-audit help
+  all exited 0.  `git diff --check` and repository cache hygiene passed before
+  staging.  GPU execution is intentionally waiting for parent approval.
+
+## 2026-07-27 — Phase 4 GPU acceptance, frozen-noise diagnosis, and fix
+
+- The approved serial CUDA matrix first passed the inherited Phase-2 and
+  Phase-3 real smokes and the 16-environment scheduler benchmark.  The initial
+  five-step PPO process also exited 0, but the required hard audit correctly
+  stopped the matrix because frozen policy tensor `std` differed from the
+  official checkpoint.
+- This was not optimizer leakage.  The official direct-`std` values span
+  `0.2968585193..0.5000106096`; only the four values above `0.5` changed, all to
+  exactly `0.5`, with maximum absolute delta `1.06096e-5`.  The generic actor's
+  `get_std` applies `self.std.clamp_` under `no_grad` even when
+  `requires_grad=false`.  The full failed run was preserved, not deleted, by
+  atomically moving it to `phase4_gpu_smoke_failed_std_clamp`.
+- Added the isolated `MotionComplianceFrozenNoiseActor`.  It retains the exact
+  release effective clamp and state-dict schema but computes the direct-`std`
+  clamp out of place.  Only the opt-in finetune Hydra config uses it; workflow
+  validation rejects another actor target, and the generic actor remains
+  unmodified.  A real-release regression loads the over-bound values, builds
+  the action distribution repeatedly, requires byte-exact stored `std`, and
+  proves the optimizer still owns exactly `g1_dyn` plus critic parameters.
+- The focused checkpoint/training suite passed with `14 passed in 5.71s`; the
+  complete pure Phase-1/2/3/4 suite passed with
+  `78 passed, 1 skipped in 8.44s`.  The official CPU migration rerun reported
+  actor `994→997`, critic/RMS `1645→1657`, unchanged RMS count
+  `69574656000.0`, source step 41550, and fresh state.  Training `--help` and
+  the resolved finetune config both exited 0; the latter resolves the dedicated
+  actor and strict trainer.
+
+## 2026-07-27 — Phase 4 passed
+
+- On the corrected frozen tree, the inherited real Phase-2 smoke passed in
+  22.92 seconds: 100 disabled and 100 forced steps, exact disabled force/RNG
+  neutrality, forced site/composer peaks `8.3204117/8.3204098 N`, no scalar or
+  dynamic-nonzero command dispatch, and `reset_zero=true`.  The Phase-3 smoke
+  passed in 13.62 seconds with policy/critic widths `933/1657`, unchanged G1
+  tokenizer shapes, exact off rewards, enabled freshness `1.0`, and exact
+  shared reward total.
+- The fresh 16-environment scheduler benchmark used 100 warmups and 1000
+  measured iterations on RTX 4090.  Enabled fixed-shape sampling cost
+  `265.651 us` with `8704` bytes incremental peak allocation; the host-off path
+  cost `2.358 us` with zero incremental allocation.
+- Fresh training completed five PPO iterations / 1920 timesteps and exited 0
+  in 24.87 seconds.  The training-loop total was 9.05 seconds; mean collection
+  and learning times were `1.5149/0.2950 s`, FPS range was `159..233`, and
+  process peak CUDA allocation was `543227392` bytes.  All five batches exposed
+  both sites (`80/80` active and nonzero samples), peak force was
+  `14.977984 N`, and all 55 recorded loss values were finite.  Final policy,
+  value, entropy, and auxiliary loss values were `-0.071478`, `0.015463`,
+  `13.122421`, and `0.008347`.
+- The step-5 audit passed: global step 5, actor additions `3/3` nonzero, critic
+  additions `12/12` nonzero, 41 frozen policy tensors byte-exact to the pinned
+  official checkpoint, 28 fresh optimizer slots at PPO update step 100, and
+  finite model/optimizer state.  The generated init and step-5 checkpoints are
+  `149658515` and `323439369` bytes.
+- Strict resume loaded complete step-5 model/optimizer/scheduler/environment/
+  trainer state, ran exactly one PPO batch, and saved a separate step-6
+  checkpoint without overwriting step 5.  The process exited 0 in 17.64 seconds
+  at 176 FPS (`1.7455 s` collection, `0.4351 s` learning).  Both sites had
+  `16/16` active and nonzero samples, peak force was `14.911679 N`, all 11 loss
+  values were finite, and peak CUDA allocation was `693784064` bytes.
+- The independent step-6 audit passed: global step 6, actor/critic additions
+  `3/3` and `12/12` nonzero, the same 41 frozen tensors byte-exact, 28 optimizer
+  slots advanced to PPO update step 120, and all state finite.  The step-6
+  checkpoint is `323439689` bytes.  Both hard-audit JSON reports and bounded
+  exposure reports remain under the central runs root.
+- IsaacSim emitted the same non-fatal platform-info, NVML-initialization, and
+  CPU-governor diagnostics while reporting driver `580.159.03` and an active
+  RTX 4090.  Every prescribed CPU and CUDA acceptance command exited 0 after
+  the isolated fix.  Phase 4 is `PASSED`; `current_phase` advances to Phase 5,
+  which is `IN_PROGRESS` but was not executed in this handoff.
+- Final source and cached `diff --check` passed with exactly the intended 20
+  Phase-4 files staged and no unstaged changes.  The generic PPO trainer has no
+  diff; no repository-local Python/pytest cache remains.  Post-run process
+  checks found no IsaacLab/training process and no NVIDIA compute application.

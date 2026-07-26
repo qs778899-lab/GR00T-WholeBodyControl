@@ -94,6 +94,22 @@ def resume_checkpoint(config):
     config.checkpoint = config.checkpoint
 
 
+def resolve_checkpoint_and_experiment_dir(config):
+    """Resolve generic checkpoint input and preserve a separate compliance resume output."""
+
+    compliance_resume_output = None
+    finetune_cfg = config.get("motion_compliance_finetune", None)
+    if finetune_cfg is not None:
+        compliance_resume_output = finetune_cfg.get("resume_output_dir", None)
+
+    if config.get("resume", False):
+        resume_training(config)
+        if compliance_resume_output is not None:
+            config.experiment_dir = compliance_resume_output
+    elif config.get("checkpoint", None) is not None:
+        resume_checkpoint(config)
+
+
 def create_manager_env(config, device, args_cli):
 
     # import wandb
@@ -152,6 +168,63 @@ def create_manager_env(config, device, args_cli):
     return env
 
 
+def prepare_motion_compliance_finetune(
+    config,
+    policy,
+    value_model,
+    accelerator,
+):
+    """Run opt-in migration and selective freezing before trainer construction."""
+
+    from gear_sonic.compliance_control.training import (
+        configure_motion_compliance_finetune_stage,
+        migrate_official_sonic_release_checkpoint_file,
+        validate_motion_compliance_run_path,
+    )
+
+    migration_cfg = config.get("motion_compliance_checkpoint_migration", None)
+    if migration_cfg is not None and migration_cfg.get("enabled", False):
+        if config.get("resume", False):
+            raise ValueError("official checkpoint migration requires resume=false")
+        if config.get("checkpoint", None) is None:
+            raise ValueError("checkpoint must point to the immutable migration source")
+        if value_model is None:
+            raise ValueError("motion-compliance migration requires a critic value model")
+        output_path = validate_motion_compliance_run_path(migration_cfg.output_path)
+        site_names = tuple(config.manager_env.commands.motion_compliance.site_body_names)
+        if accelerator.is_main_process:
+            report = migrate_official_sonic_release_checkpoint_file(
+                config.checkpoint,
+                output_path,
+                num_sites=len(site_names),
+                target_policy_state=policy.state_dict(),
+                target_value_state=value_model.state_dict(),
+                overwrite=migration_cfg.get("overwrite", False),
+            )
+            logger.info(f"Motion-compliance checkpoint migration: {report}")
+        accelerator.wait_for_everyone()
+        if not output_path.is_file():
+            raise FileNotFoundError(f"migrated checkpoint was not created: {output_path}")
+        config.checkpoint = str(output_path)
+
+    finetune_cfg = config.get("motion_compliance_finetune", None)
+    if finetune_cfg is None:
+        return None
+    report = configure_motion_compliance_finetune_stage(
+        policy,
+        value_model,
+        stage=finetune_cfg.stage,
+        trainable_decoder_names=tuple(finetune_cfg.trainable_decoder_names),
+    )
+    logger.info(
+        "Motion-compliance finetune stage "
+        f"'{report.stage}': policy_trainable={len(report.trainable_policy_names)}, "
+        f"policy_frozen={len(report.frozen_policy_names)}, "
+        f"value_trainable={len(report.trainable_value_names)}"
+    )
+    return report
+
+
 @hydra.main(config_path="config", config_name="base", version_base="1.1")
 def main(config: OmegaConf):
     simulator_type = "IsaacSim"
@@ -162,10 +235,14 @@ def main(config: OmegaConf):
     # Setup model components
     parser = HfArgumentParser((ScriptArguments, PPOConfig, ModelConfig))
 
-    if config.get("resume", False):
-        resume_training(config)
-    elif config.get("checkpoint", None) is not None:
-        resume_checkpoint(config)
+    resolve_checkpoint_and_experiment_dir(config)
+
+    if config.get("motion_compliance_finetune", None) is not None:
+        from gear_sonic.compliance_control.training import (
+            validate_motion_compliance_workflow_config,
+        )
+
+        validate_motion_compliance_workflow_config(config)
 
     config.algo.trl.output_dir = str(Path(config.experiment_dir))
 
@@ -420,6 +497,15 @@ def main(config: OmegaConf):
 
     materialize_lazy_params(policy, env)
 
+    compliance_finetune_report = None
+    if config.get("motion_compliance_finetune", None) is not None:
+        compliance_finetune_report = prepare_motion_compliance_finetune(
+            config,
+            policy,
+            value_model,
+            accelerator,
+        )
+
     if config.algo.config.get("pretrained_model", None) is not None:
         pretrained_cfg = config.algo.config.pretrained_model
         sd_key = pretrained_cfg.get("state_dict_key", "state_dict")
@@ -468,6 +554,10 @@ def main(config: OmegaConf):
         accelerator=accelerator,
         _resolve=False,
     )
+    if compliance_finetune_report is not None:
+        from gear_sonic.compliance_control.training import validate_optimizer_parameter_set
+
+        validate_optimizer_parameter_set(trainer.optimizer, policy, value_model)
 
     # Training loop
     trainer.train()
