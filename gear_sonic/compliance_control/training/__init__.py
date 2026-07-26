@@ -1,4 +1,4 @@
-"""Checkpoint and staged-finetuning workflow for motion compliance."""
+"""Same-shape checkpoint initialization and residual-only compliance finetuning."""
 
 from .actor import MOTION_COMPLIANCE_ACTOR_TARGET, MotionComplianceFrozenNoiseActor
 from .audit import (
@@ -7,19 +7,23 @@ from .audit import (
     audit_trained_motion_compliance_checkpoint,
 )
 from .checkpoint import (
-    MOTION_COMPLIANCE_MIGRATION_KEY,
+    MOTION_COMPLIANCE_INITIALIZATION_KEY,
     OFFICIAL_SONIC_RELEASE_SHA256,
-    CheckpointMigrationReport,
+    CheckpointInitializationReport,
     LoadStateReport,
     ResumeStatePayload,
-    audit_migrated_init_checkpoint,
-    critic_added_columns,
-    migrate_motion_compliance_checkpoint,
-    migrate_motion_compliance_checkpoint_file,
-    migrate_official_sonic_release_checkpoint_file,
+    action_residual_context_width,
+    audit_residual_init_checkpoint,
+    compliance_privileged_width,
+    expected_residual_shapes,
+    initialize_motion_compliance_checkpoint,
+    initialize_motion_compliance_checkpoint_file,
+    initialize_official_sonic_release_checkpoint_file,
     strict_load_policy_value_state,
+    tensor_bytes_equal,
     validate_checkpoint_sha256,
     validate_strict_resume_payload,
+    value_residual_context_width,
 )
 from .callback import MotionComplianceExposureCallback
 from .finetune import (
@@ -48,10 +52,10 @@ from .residual_policy import (
 )
 
 __all__ = [
-    "MOTION_COMPLIANCE_MIGRATION_KEY",
+    "MOTION_COMPLIANCE_INITIALIZATION_KEY",
     "MOTION_COMPLIANCE_ACTOR_TARGET",
     "OFFICIAL_SONIC_RELEASE_SHA256",
-    "CheckpointMigrationReport",
+    "CheckpointInitializationReport",
     "CONDITION_OBSERVATION_KEY",
     "FinetuneStageReport",
     "LoadStateReport",
@@ -69,20 +73,24 @@ __all__ = [
     "PRIVILEGED_OBSERVATION_KEY",
     "TrainedCheckpointAuditReport",
     "audit_motion_compliance_exposure_report",
-    "audit_migrated_init_checkpoint",
+    "action_residual_context_width",
+    "audit_residual_init_checkpoint",
     "audit_trained_motion_compliance_checkpoint",
     "configure_motion_compliance_finetune_stage",
-    "critic_added_columns",
-    "migrate_motion_compliance_checkpoint",
-    "migrate_motion_compliance_checkpoint_file",
-    "migrate_official_sonic_release_checkpoint_file",
+    "compliance_privileged_width",
+    "expected_residual_shapes",
+    "initialize_motion_compliance_checkpoint",
+    "initialize_motion_compliance_checkpoint_file",
+    "initialize_official_sonic_release_checkpoint_file",
     "strict_load_policy_value_state",
+    "tensor_bytes_equal",
     "validate_checkpoint_sha256",
     "validate_distinct_artifact_paths",
     "validate_motion_compliance_run_path",
     "validate_motion_compliance_workflow_config",
     "validate_optimizer_parameter_set",
     "validate_strict_resume_payload",
+    "value_residual_context_width",
     "ZeroInitializedResidualMLP",
     "motion_compliance_residual_parameters",
 ]

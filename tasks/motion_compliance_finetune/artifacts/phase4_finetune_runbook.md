@@ -1,4 +1,4 @@
-# Phase 4 motion-compliance finetune runbook
+# Phase 4 residual-only finetune runbook
 
 All generated checkpoints, Hydra files, logs, and JSON reports must remain
 below:
@@ -7,22 +7,45 @@ below:
 /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion
 ```
 
-The initialization adapter accepts only the audited SONIC release:
+Schema-v1 expanded checkpoints and the old `phase4_cpu_gate`,
+`phase4_gpu_smoke`, and `phase4_gpu_resume` outputs are invalid evidence.  Use
+only the new `phase4_residual_*` directories.
+
+The initializer accepts only the audited SONIC release:
 
 - checkpoint: `compliance_control/official_assets/sonic_release/last.pt`
 - SHA-256: `e6bdab3f64a39336b3d41877d4f497d05f58af275f288ec0e6746c283ded8909`
 - Hugging Face revision: `7c90a56cfe04788c4f041daeef5b1e12930675ad`
 - trainer step: `41550`
+- state schema: 55 policy tensors and 17 value tensors under
+  `policy_state_dict` / `value_state_dict`
 
-The default Phase-4 experiment is the prescribed low-resource run: one
-official robot PKL plus the official SMPL directory, 16 environments, five PPO
-iterations, W&B disabled, and `last.pt` saved at step 5. Compliance examples
-are synthesized online; this workflow does not create a modified motion
-dataset.
+The release actor input remains 994 and the release critic/RMS remain 1645.
+Only six action-residual tensors and six value-residual tensors are added; for
+two sites their independent contexts are 997 and 1657.  Every release tensor,
+including `g1_dyn`, critic, RMS, quantizer, and `std`, is frozen byte-exact.
+
+## CPU initialization gate
+
+This command is safe to rerun with `--overwrite`; it reloads the hash-verified
+official file and directly compares every base tensor:
+
+```bash
+env PYTHONDONTWRITEBYTECODE=1 \
+  /home/lab/miniconda3/envs/sonic_backup/bin/python -B \
+  tasks/motion_compliance_finetune/artifacts/phase4_official_residual_init_smoke.py \
+  --output /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_cpu_gate/artifacts/motion_compliance_residual_init.pt \
+  --report /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_cpu_gate/artifacts/residual_init_audit.json \
+  --num-sites 2 \
+  --overwrite
+```
 
 ## Initial five-step sample run
 
-Choose one new directory under the owned runs root and use it consistently:
+Do not start a GPU run until the CPU gates pass and the root agent explicitly
+confirms it.  The prescribed smoke uses one official robot PKL, the official
+SMPL directory, 16 environments, five PPO iterations, four mini-batches, five
+epochs, and 24 rollout frames:
 
 ```bash
 env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu \
@@ -31,31 +54,23 @@ env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gn
   PYTHONDONTWRITEBYTECODE=1 \
   /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/train_agent_trl.py \
   +exp=manager/universal_token/all_modes/sonic_release_motion_compliance_finetune \
-  experiment_dir=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_smoke \
+  experiment_dir=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_smoke_tensordict_fix \
   headless=true
 ```
 
-The config migrates the official checkpoint to
-`phase4_gpu_smoke/artifacts/motion_compliance_init.pt` with `resume=false`, then
-trains only `g1_dyn` and the critic. It writes per-step, per-site exposure to
-`phase4_gpu_smoke/artifacts/motion_compliance_exposure.json`. That bounded JSON
-also records one finite loss/timing sample per PPO iteration and process peak
-CUDA memory.
+The config first writes
+`artifacts/motion_compliance_residual_init.pt`, then trains only the two
+residual heads.  The isolated trainer rejects any PPO micro-batch other than
+actor/critic/condition/privileged/tokenizer leading shape `[4,24,...]`, with
+privileged width 9, action width 29, and value width 1.  The exposure JSON is
+coarse physical evidence sampled once per outer iteration; it is not evidence
+that all 24 frames reached the residual path.
 
-The experiment selects the compliance-only
-`MotionComplianceFrozenNoiseActor`. It has the same checkpoint keys and
-effective `[0.001, 0.5]` action-noise clamp as the released actor, but computes
-the clamp out of place. This is required because the staged workflow freezes
-`std`: four values in the audited release are only about `1e-5` above `0.5`, and
-the generic actor's in-place forward clamp would otherwise mutate frozen state.
-Do not replace this target with the generic actor for `decoder_critic` runs.
-The smoke validator also rejects overrides of `use_log_std=false`,
-`use_clampped_std=true`, `std_clamp_min=0.001`, `std_clamp_max=0.5`, or
-`clamp_noise_std=false`. The isolated trainer logs the effective clamped mean
-noise while leaving the raw frozen checkpoint tensor untouched.
+The compliance-only actor computes the released `[0.001,0.5]` noise clamp out
+of place.  It leaves the raw official `std` bytes unchanged and excludes noise
+from the optimizer.
 
-Record the fixed-shape all-environment scheduler cost separately, without
-instrumenting or changing the training hot path:
+Record scheduler overhead separately:
 
 ```bash
 env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu \
@@ -65,26 +80,29 @@ env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gn
   /home/lab/miniconda3/envs/sonic_backup/bin/python -B \
   tasks/motion_compliance_finetune/artifacts/phase4_candidate_scheduler_benchmark.py \
   --num-envs 16 \
-  --output /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_smoke/artifacts/candidate_scheduler_benchmark.json
+  --output /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_smoke_tensordict_fix/artifacts/candidate_scheduler_benchmark.json
 ```
 
-Audit step 5 before resuming:
+Audit step 5 against both independent sources:
 
 ```bash
 env PYTHONDONTWRITEBYTECODE=1 \
   /home/lab/miniconda3/envs/sonic_backup/bin/python -B \
   tasks/motion_compliance_finetune/artifacts/phase4_checkpoint_audit.py \
   --official /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sonic_release/last.pt \
-  --trained /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_smoke/last.pt \
-  --exposure /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_smoke/artifacts/motion_compliance_exposure.json \
+  --initialization /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_smoke_tensordict_fix/artifacts/motion_compliance_residual_init.pt \
+  --trained /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_smoke_tensordict_fix/last.pt \
+  --exposure /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_smoke_tensordict_fix/artifacts/motion_compliance_exposure.json \
   --expected-step 5 \
-  --output-json /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_smoke/artifacts/step5_audit.json
+  --num-sites 2 \
+  --output-json /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_smoke_tensordict_fix/artifacts/step5_audit.json
 ```
 
 ## Strict step-5 to step-6 resume
 
-The resume branch disables migration explicitly and requires complete,
-non-empty model, optimizer, scheduler, environment, and trainer state:
+Strict resume preflights every model and non-model boundary before mutation.
+It restores optimizer group LRs and scheduler state exactly; the independently
+saved `args.learning_rate` never overwrites optimizer LRs.
 
 ```bash
 env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu \
@@ -93,26 +111,23 @@ env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gn
   PYTHONDONTWRITEBYTECODE=1 \
   /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/train_agent_trl.py \
   +exp=manager/universal_token/all_modes/sonic_release_motion_compliance_finetune \
-  experiment_dir=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_resume \
+  experiment_dir=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_resume_tensordict_fix \
   resume=true \
-  motion_compliance_finetune.resume_output_dir=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_resume \
-  motion_compliance_checkpoint_migration.enabled=false \
-  checkpoint=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_smoke/last.pt \
+  motion_compliance_finetune.resume_output_dir=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_resume_tensordict_fix \
+  motion_compliance_checkpoint_initialization.enabled=false \
+  checkpoint=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_smoke_tensordict_fix/last.pt \
   algo.config.num_learning_iterations=1 \
   callbacks.model_save.save_last_frequency=1 \
   headless=true
 ```
 
-This writes step 6 to
-`phase4_gpu_resume/last.pt` and preserves the audited step-5 checkpoint. Run the
-same audit with `--expected-step 6`,
-`phase4_gpu_resume/artifacts/motion_compliance_exposure.json`, and a new
-`phase4_gpu_resume/artifacts/step6_audit.json` output.
+Audit step 6 with the same pinned official and step-0 residual initialization,
+changing only trained/exposure/output paths and `--expected-step 6`.
 
 ## Full motion-data finetune
 
-Keep the same experiment config and override only the two loader-boundary
-paths. The core, trainer, and compliance controller are unchanged:
+Compliance is synthesized online, so no modified dataset is needed.  Override
+only the loader-boundary paths and disable the exact low-resource smoke guard:
 
 ```bash
 env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu \
@@ -121,7 +136,7 @@ env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gn
   PYTHONDONTWRITEBYTECODE=1 \
   /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/train_agent_trl.py \
   +exp=manager/universal_token/all_modes/sonic_release_motion_compliance_finetune \
-  experiment_dir=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/full_data_run \
+  experiment_dir=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/full_data_residual_run \
   manager_env.commands.motion.motion_lib_cfg.motion_file=/absolute/robot_filtered \
   manager_env.commands.motion.motion_lib_cfg.smpl_motion_file=/absolute/smpl_filtered \
   manager_env.commands.motion.motion_lib_cfg.multi_thread=true \
@@ -129,6 +144,5 @@ env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gn
   headless=true
 ```
 
-Do not point `experiment_dir`, migration output, checkpoint audit output, or
-exposure output outside the owned central runs root; the workflow rejects such
-paths before training artifacts are created.
+Do not point initialization, checkpoint, audit, exposure, or Hydra outputs
+outside the owned central runs root.

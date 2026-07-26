@@ -27,6 +27,7 @@ from gear_sonic.compliance_control.training import (
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--official", required=True)
+    parser.add_argument("--initialization", required=True)
     parser.add_argument("--trained", required=True)
     parser.add_argument("--exposure", required=True)
     parser.add_argument("--expected-step", required=True, type=int)
@@ -63,12 +64,14 @@ def main() -> None:
         raise ValueError("checkpoint audit output must use a .json suffix")
     validate_distinct_artifact_paths(
         official_checkpoint=args.official,
+        initialization_checkpoint=args.initialization,
         trained_checkpoint=args.trained,
         exposure_report=args.exposure,
         audit_output=output_path,
     )
     checkpoint_report = audit_trained_motion_compliance_checkpoint(
         args.official,
+        args.initialization,
         args.trained,
         expected_global_step=args.expected_step,
         num_sites=args.num_sites,

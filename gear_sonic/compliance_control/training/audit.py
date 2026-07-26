@@ -1,4 +1,4 @@
-"""Hard acceptance checks for trained motion-compliance checkpoints."""
+"""Hard acceptance checks for trained motion-compliance residual checkpoints."""
 
 from __future__ import annotations
 
@@ -13,30 +13,55 @@ from typing import Any
 import torch
 
 from .checkpoint import (
-    ACTOR_ADDED_COLUMNS,
-    ACTOR_INPUT_WEIGHT_KEY,
-    CRITIC_INPUT_WEIGHT_KEY,
-    CRITIC_RUNNING_MEAN_KEY,
-    CRITIC_RUNNING_VAR_KEY,
-    OFFICIAL_ACTOR_INPUT_WIDTH,
-    OFFICIAL_CRITIC_INPUT_WIDTH,
-    OFFICIAL_INPUT_HIDDEN_WIDTH,
+    MOTION_COMPLIANCE_INITIALIZATION_KEY,
+    OFFICIAL_POLICY_TENSOR_COUNT,
     OFFICIAL_SONIC_RELEASE_SHA256,
+    OFFICIAL_VALUE_TENSOR_COUNT,
+    RESIDUAL_DTYPE,
     VALUE_STATE_KEY,
-    critic_added_columns,
+    audit_residual_init_checkpoint,
+    expected_residual_shapes,
     load_trl_checkpoint,
+    tensor_bytes_equal,
     validate_checkpoint_sha256,
+    validate_optimizer_parameter_group_hyperparameters,
     validate_strict_resume_payload,
 )
-from .paths import validate_motion_compliance_run_path
-
-
-_DYNAMIC_DECODER_PREFIX = "actor_module.decoders.g1_dyn."
-_FROZEN_REQUIRED_PREFIXES = (
-    "actor_module.encoders.",
-    "actor_module.decoders.g1_kin.",
+from .paths import (
+    validate_distinct_artifact_paths,
+    validate_motion_compliance_run_path,
 )
+
+
 _OFFICIAL_OPTIMIZER_STEP = 831000
+_PINNED_ADAMW_GROUP_KEYS = frozenset(
+    {
+        "lr",
+        "weight_decay",
+        "betas",
+        "eps",
+        "amsgrad",
+        "maximize",
+        "foreach",
+        "capturable",
+        "differentiable",
+        "fused",
+        "decoupled_weight_decay",
+        "initial_lr",
+        "params",
+    }
+)
+_PINNED_ADAMW_FIXED_VALUES = {
+    "betas": (0.9, 0.999),
+    "eps": 1.0e-8,
+    "amsgrad": False,
+    "maximize": False,
+    "foreach": None,
+    "capturable": False,
+    "differentiable": False,
+    "fused": None,
+    "decoupled_weight_decay": True,
+}
 
 
 @dataclass(frozen=True)
@@ -44,190 +69,271 @@ class TrainedCheckpointAuditReport:
     """Compact evidence emitted after the real training and resume smokes."""
 
     checkpoint_path: str
+    initialization_checkpoint_path: str
     global_step: int
-    actor_added_columns_nonzero: tuple[bool, ...]
-    critic_added_columns_nonzero: tuple[bool, ...]
+    changed_policy_residual_names: tuple[str, ...]
+    changed_value_residual_names: tuple[str, ...]
     frozen_policy_tensor_count: int
-    quantizer_state_tensor_count: int
+    frozen_value_tensor_count: int
     optimizer_slot_count: int
     optimizer_steps: tuple[int, ...]
 
 
 def _resolve_single_policy_state(
     checkpoint: Mapping[str, Any],
-) -> Mapping[str, torch.Tensor]:
+) -> tuple[str, Mapping[str, torch.Tensor]]:
     present = [
         key for key in ("actor_model_state_dict", "policy_state_dict") if key in checkpoint
     ]
     if len(present) != 1 or not isinstance(checkpoint[present[0]], Mapping):
         raise ValueError("checkpoint must contain exactly one policy state mapping")
-    return checkpoint[present[0]]
+    return present[0], checkpoint[present[0]]
 
 
 def _require_tensor_mapping(value: Any, name: str) -> Mapping[str, torch.Tensor]:
     if not isinstance(value, Mapping):
         raise ValueError(f"{name} must be a state mapping")
-    if any(not isinstance(key, str) or not isinstance(tensor, torch.Tensor) for key, tensor in value.items()):
+    if any(
+        not isinstance(key, str) or not isinstance(tensor, torch.Tensor)
+        for key, tensor in value.items()
+    ):
         raise ValueError(f"{name} must contain only string tensor entries")
     return value
 
 
-def _require_equal_keys_and_expected_shapes(
+def _require_schema_and_finite(
     official: Mapping[str, torch.Tensor],
-    trained: Mapping[str, torch.Tensor],
+    candidate: Mapping[str, torch.Tensor],
+    residual_shapes: Mapping[str, tuple[int, ...]],
     *,
-    expanded_shapes: Mapping[str, tuple[int, ...]],
     group_name: str,
 ) -> None:
-    if set(official) != set(trained):
-        raise ValueError(f"{group_name} keys differ from the official checkpoint")
-    for key, official_tensor in official.items():
-        trained_tensor = trained[key]
-        expected_shape = expanded_shapes.get(key, tuple(official_tensor.shape))
-        if tuple(trained_tensor.shape) != expected_shape:
+    expected_keys = set(official) | set(residual_shapes)
+    if set(candidate) != expected_keys:
+        raise ValueError(
+            f"{group_name} keys differ: missing={sorted(expected_keys - set(candidate))}, "
+            f"unexpected={sorted(set(candidate) - expected_keys)}"
+        )
+    for key, tensor in candidate.items():
+        expected_tensor = official.get(key)
+        expected_shape = (
+            tuple(expected_tensor.shape) if expected_tensor is not None else residual_shapes[key]
+        )
+        expected_dtype = expected_tensor.dtype if expected_tensor is not None else RESIDUAL_DTYPE
+        if tuple(tensor.shape) != expected_shape or tensor.dtype != expected_dtype:
             raise ValueError(
-                f"{group_name}.{key} shape differs: expected {expected_shape}, "
-                f"got {tuple(trained_tensor.shape)}"
+                f"{group_name}.{key} schema differs: expected "
+                f"{expected_shape}/{expected_dtype}, got {tuple(tensor.shape)}/{tensor.dtype}"
             )
-        if trained_tensor.dtype != official_tensor.dtype:
-            raise ValueError(
-                f"{group_name}.{key} dtype differs: expected {official_tensor.dtype}, "
-                f"got {trained_tensor.dtype}"
-            )
-        if not torch.isfinite(trained_tensor).all():
+        if not torch.isfinite(tensor).all():
             raise ValueError(f"{group_name}.{key} contains NaN or Inf")
 
 
-def _column_nonzero_flags(tensor: torch.Tensor, added_columns: int) -> tuple[bool, ...]:
-    tail = tensor[:, -added_columns:]
-    return tuple(bool(value) for value in torch.any(tail != 0, dim=0).tolist())
+def _require_official_bytes(
+    official: Mapping[str, torch.Tensor],
+    candidate: Mapping[str, torch.Tensor],
+    *,
+    group_name: str,
+) -> None:
+    for key, official_tensor in official.items():
+        if not tensor_bytes_equal(official_tensor, candidate[key]):
+            raise ValueError(f"frozen {group_name} tensor changed: {key}")
 
 
-def _tensor_bytes_equal(left: torch.Tensor, right: torch.Tensor) -> bool:
-    """Compare tensor element representations, including the sign bit of zero."""
+def _require_every_residual_changed(
+    initialized: Mapping[str, torch.Tensor],
+    trained: Mapping[str, torch.Tensor],
+    residual_shapes: Mapping[str, tuple[int, ...]],
+    *,
+    group_name: str,
+) -> tuple[str, ...]:
+    unchanged = tuple(
+        key
+        for key in residual_shapes
+        if tensor_bytes_equal(initialized[key], trained[key])
+    )
+    if unchanged:
+        raise ValueError(f"one or more {group_name} residual tensors did not change: {unchanged}")
+    return tuple(residual_shapes)
 
-    if left.shape != right.shape or left.dtype != right.dtype:
-        return False
-    left_bytes = left.detach().contiguous().view(torch.uint8)
-    right_bytes = right.detach().contiguous().view(torch.uint8)
-    return torch.equal(left_bytes, right_bytes)
 
+def _optimizer_steps_and_ownership(
+    optimizer_state: Mapping[str, Any],
+    ordered_residual_tensors: tuple[torch.Tensor, ...],
+) -> tuple[int, ...]:
+    slots = optimizer_state.get("state")
+    parameter_groups = optimizer_state.get("param_groups")
+    if not isinstance(slots, Mapping) or not isinstance(parameter_groups, list):
+        raise ValueError("optimizer state/parameter groups are malformed")
+    expected_parameter_groups = (tuple(range(6)), tuple(range(6, 12)))
+    parameter_ids: list[Any] = []
+    for group_index, (group, expected_parameter_ids) in enumerate(
+        zip(parameter_groups, expected_parameter_groups, strict=True)
+    ):
+        if not isinstance(group, Mapping) or not isinstance(group.get("params"), list):
+            raise ValueError("optimizer parameter group is malformed")
+        if set(group) != _PINNED_ADAMW_GROUP_KEYS:
+            raise ValueError(
+                f"optimizer parameter group {group_index} differs from the pinned "
+                "AdamW schema"
+            )
+        if tuple(group["params"]) != expected_parameter_ids:
+            raise ValueError(
+                f"optimizer parameter order differs in group {group_index}"
+            )
+        validate_optimizer_parameter_group_hyperparameters(
+            group,
+            group_index=group_index,
+        )
+        for key, expected_value in _PINNED_ADAMW_FIXED_VALUES.items():
+            if group[key] != expected_value:
+                raise ValueError(
+                    f"optimizer fixed AdamW flag/value differs for group "
+                    f"{group_index}: {key}"
+                )
+        # The pinned SONIC PPOConfig leaves weight_decay at its 0.0 default;
+        # Hugging Face still creates decay/no-decay groups, but both serialize
+        # zero weight decay for this Phase-4 workflow.
+        expected_weight_decay = 0.0
+        if group["weight_decay"] != expected_weight_decay:
+            raise ValueError(
+                f"optimizer fixed AdamW weight_decay differs for group {group_index}"
+            )
+        parameter_ids.extend(group["params"])
+    if len(parameter_ids) != len(set(parameter_ids)):
+        raise ValueError("optimizer contains duplicate parameter ids")
+    if len(parameter_ids) != len(ordered_residual_tensors):
+        raise ValueError(
+            "optimizer parameter ownership differs from the residual-only schema: "
+            f"expected {len(ordered_residual_tensors)}, got {len(parameter_ids)}"
+        )
+    if set(slots) != set(parameter_ids):
+        raise ValueError("optimizer slots do not cover exactly every residual parameter")
 
-def _optimizer_steps(optimizer_state: Mapping[str, Any]) -> tuple[int, ...]:
-    slots = optimizer_state["state"]
     steps: list[int] = []
-    for slot in slots.values():
+    for parameter_id, residual_tensor in zip(
+        parameter_ids,
+        ordered_residual_tensors,
+        strict=True,
+    ):
+        slot = slots[parameter_id]
         if not isinstance(slot, Mapping) or "step" not in slot:
             raise ValueError("optimizer slot lacks a step counter")
         raw_step = slot["step"]
         if isinstance(raw_step, torch.Tensor):
-            if raw_step.numel() != 1:
-                raise ValueError("optimizer step tensor must be scalar")
+            if raw_step.numel() != 1 or not torch.isfinite(raw_step).all():
+                raise ValueError("optimizer step tensor must be a finite scalar")
             raw_step = raw_step.item()
         step = int(raw_step)
         if float(raw_step) != step or step <= 0:
             raise ValueError(f"optimizer step must be a positive integer; got {raw_step!r}")
         steps.append(step)
-        for key, value in slot.items():
-            if isinstance(value, torch.Tensor) and not torch.isfinite(value).all():
-                raise ValueError(f"optimizer slot tensor {key} contains NaN or Inf")
+        for moment_name in ("exp_avg", "exp_avg_sq"):
+            moment = slot.get(moment_name)
+            if (
+                not isinstance(moment, torch.Tensor)
+                or moment.shape != residual_tensor.shape
+                or moment.dtype != residual_tensor.dtype
+            ):
+                raise ValueError(
+                    f"optimizer {moment_name} schema does not match its residual tensor"
+                )
+            if not torch.isfinite(moment).all():
+                raise ValueError(f"optimizer slot tensor {moment_name} contains NaN or Inf")
+            if torch.count_nonzero(moment).item() == 0:
+                raise ValueError(
+                    "optimizer evidence shows a residual tensor has a zero "
+                    f"{moment_name} moment"
+                )
     return tuple(sorted(set(steps)))
 
 
 def audit_trained_motion_compliance_checkpoint(
     official_checkpoint_path: str | os.PathLike[str],
+    initialization_checkpoint_path: str | os.PathLike[str],
     trained_checkpoint_path: str | os.PathLike[str],
     *,
     expected_global_step: int,
     num_sites: int = 2,
 ) -> TrainedCheckpointAuditReport:
-    """Compare a step checkpoint against the immutable release and finetune contract."""
+    """Compare trained state independently against pinned official and init files."""
 
     if type(expected_global_step) is not int or expected_global_step <= 0:
         raise ValueError("expected_global_step must be a positive integer")
+    initialized_path = validate_motion_compliance_run_path(initialization_checkpoint_path)
     trained_path = validate_motion_compliance_run_path(trained_checkpoint_path)
+    validate_distinct_artifact_paths(initialized=initialized_path, trained=trained_path)
     validate_checkpoint_sha256(
         official_checkpoint_path,
         OFFICIAL_SONIC_RELEASE_SHA256,
     )
     official = load_trl_checkpoint(official_checkpoint_path, map_location="cpu")
+    initialized = load_trl_checkpoint(initialized_path, map_location="cpu")
     trained = load_trl_checkpoint(trained_path, map_location="cpu")
+    audit_residual_init_checkpoint(initialized)
+    if MOTION_COMPLIANCE_INITIALIZATION_KEY in trained:
+        raise ValueError("trained checkpoint must not masquerade as an initialization artifact")
 
-    official_policy = _require_tensor_mapping(
-        _resolve_single_policy_state(official),
-        "official policy",
-    )
-    trained_policy = _require_tensor_mapping(
-        _resolve_single_policy_state(trained),
-        "trained policy",
-    )
+    official_policy_key, official_policy_raw = _resolve_single_policy_state(official)
+    initialized_policy_key, initialized_policy_raw = _resolve_single_policy_state(initialized)
+    trained_policy_key, trained_policy_raw = _resolve_single_policy_state(trained)
+    if official_policy_key != "policy_state_dict":
+        raise ValueError("pinned official source_policy_key changed")
+    if initialized_policy_key != "policy_state_dict" or trained_policy_key != "policy_state_dict":
+        raise ValueError("motion-compliance policy state key must be policy_state_dict")
+    official_policy = _require_tensor_mapping(official_policy_raw, "official policy")
+    initialized_policy = _require_tensor_mapping(initialized_policy_raw, "initialized policy")
+    trained_policy = _require_tensor_mapping(trained_policy_raw, "trained policy")
     official_value = _require_tensor_mapping(
         official.get(VALUE_STATE_KEY),
         "official value",
     )
-    trained_value = _require_tensor_mapping(
-        trained.get(VALUE_STATE_KEY),
-        "trained value",
+    initialized_value = _require_tensor_mapping(
+        initialized.get(VALUE_STATE_KEY),
+        "initialized value",
     )
+    trained_value = _require_tensor_mapping(trained.get(VALUE_STATE_KEY), "trained value")
+    if len(official_policy) != OFFICIAL_POLICY_TENSOR_COUNT or len(
+        official_value
+    ) != OFFICIAL_VALUE_TENSOR_COUNT:
+        raise ValueError("pinned official policy/value tensor counts changed")
 
-    critic_columns = critic_added_columns(num_sites)
-    _require_equal_keys_and_expected_shapes(
-        official_policy,
+    policy_residual_shapes, value_residual_shapes = expected_residual_shapes(num_sites)
+    for state, group_name in (
+        (initialized_policy, "initialized policy"),
+        (trained_policy, "trained policy"),
+    ):
+        _require_schema_and_finite(
+            official_policy,
+            state,
+            policy_residual_shapes,
+            group_name=group_name,
+        )
+        _require_official_bytes(official_policy, state, group_name=group_name)
+    for state, group_name in (
+        (initialized_value, "initialized value"),
+        (trained_value, "trained value"),
+    ):
+        _require_schema_and_finite(
+            official_value,
+            state,
+            value_residual_shapes,
+            group_name=group_name,
+        )
+        _require_official_bytes(official_value, state, group_name=group_name)
+
+    changed_policy = _require_every_residual_changed(
+        initialized_policy,
         trained_policy,
-        expanded_shapes={
-            ACTOR_INPUT_WEIGHT_KEY: (
-                OFFICIAL_INPUT_HIDDEN_WIDTH,
-                OFFICIAL_ACTOR_INPUT_WIDTH + ACTOR_ADDED_COLUMNS,
-            )
-        },
+        policy_residual_shapes,
         group_name="policy",
     )
-    _require_equal_keys_and_expected_shapes(
-        official_value,
+    changed_value = _require_every_residual_changed(
+        initialized_value,
         trained_value,
-        expanded_shapes={
-            CRITIC_INPUT_WEIGHT_KEY: (
-                OFFICIAL_INPUT_HIDDEN_WIDTH,
-                OFFICIAL_CRITIC_INPUT_WIDTH + critic_columns,
-            ),
-            CRITIC_RUNNING_MEAN_KEY: (OFFICIAL_CRITIC_INPUT_WIDTH + critic_columns,),
-            CRITIC_RUNNING_VAR_KEY: (OFFICIAL_CRITIC_INPUT_WIDTH + critic_columns,),
-        },
+        value_residual_shapes,
         group_name="value",
     )
-
-    actor_nonzero = _column_nonzero_flags(
-        trained_policy[ACTOR_INPUT_WEIGHT_KEY],
-        ACTOR_ADDED_COLUMNS,
-    )
-    critic_nonzero = _column_nonzero_flags(
-        trained_value[CRITIC_INPUT_WEIGHT_KEY],
-        critic_columns,
-    )
-    if not all(actor_nonzero):
-        raise ValueError(f"one or more added actor columns remained zero: {actor_nonzero}")
-    if not all(critic_nonzero):
-        raise ValueError(f"one or more added critic columns remained zero: {critic_nonzero}")
-
-    frozen_keys = tuple(
-        key for key in official_policy if not key.startswith(_DYNAMIC_DECODER_PREFIX)
-    )
-    for prefix in _FROZEN_REQUIRED_PREFIXES:
-        if not any(key.startswith(prefix) for key in frozen_keys):
-            raise ValueError(f"official checkpoint lacks frozen contract prefix {prefix}")
-    noise_keys = tuple(key for key in frozen_keys if key in {"std", "log_std"})
-    if len(noise_keys) != 1:
-        raise ValueError("official checkpoint must contain exactly one frozen noise tensor")
-    for key in frozen_keys:
-        if not _tensor_bytes_equal(official_policy[key], trained_policy[key]):
-            raise ValueError(f"frozen policy tensor changed during finetuning: {key}")
-    quantizer_keys = tuple(
-        key for key in official_policy if key.startswith("actor_module.quantizer.")
-    )
-    if set(quantizer_keys) != {
-        key for key in trained_policy if key.startswith("actor_module.quantizer.")
-    }:
-        raise ValueError("quantizer state keys changed during finetuning")
 
     payload = validate_strict_resume_payload(trained)
     global_step = getattr(payload.state, "global_step")
@@ -235,27 +341,36 @@ def audit_trained_motion_compliance_checkpoint(
         raise ValueError(
             f"trained global step differs: expected {expected_global_step}, got {global_step}"
         )
-    expected_optimizer_slots = sum(
-        key.startswith(_DYNAMIC_DECODER_PREFIX) for key in trained_policy
-    ) + sum(key.startswith("critic_module.") for key in trained_value)
-    optimizer_slot_count = len(payload.optimizer_state_dict["state"])
-    if optimizer_slot_count != expected_optimizer_slots:
-        raise ValueError(
-            "optimizer slot ownership differs from dynamic-decoder + critic tensors: "
-            f"expected {expected_optimizer_slots}, got {optimizer_slot_count}"
-        )
-    optimizer_steps = _optimizer_steps(payload.optimizer_state_dict)
+    policy_weight_keys = tuple(
+        key for key in policy_residual_shapes if key.endswith(".weight")
+    )
+    value_weight_keys = tuple(
+        key for key in value_residual_shapes if key.endswith(".weight")
+    )
+    policy_bias_keys = tuple(key for key in policy_residual_shapes if key.endswith(".bias"))
+    value_bias_keys = tuple(key for key in value_residual_shapes if key.endswith(".bias"))
+    ordered_residual_tensors = (
+        tuple(trained_policy[key] for key in policy_weight_keys)
+        + tuple(trained_value[key] for key in value_weight_keys)
+        + tuple(trained_policy[key] for key in policy_bias_keys)
+        + tuple(trained_value[key] for key in value_bias_keys)
+    )
+    optimizer_steps = _optimizer_steps_and_ownership(
+        payload.optimizer_state_dict,
+        ordered_residual_tensors,
+    )
     if _OFFICIAL_OPTIMIZER_STEP in optimizer_steps:
         raise ValueError("trained optimizer retained the official step 831000")
 
     return TrainedCheckpointAuditReport(
         checkpoint_path=str(trained_path),
+        initialization_checkpoint_path=str(initialized_path),
         global_step=global_step,
-        actor_added_columns_nonzero=actor_nonzero,
-        critic_added_columns_nonzero=critic_nonzero,
-        frozen_policy_tensor_count=len(frozen_keys),
-        quantizer_state_tensor_count=len(quantizer_keys),
-        optimizer_slot_count=optimizer_slot_count,
+        changed_policy_residual_names=changed_policy,
+        changed_value_residual_names=changed_value,
+        frozen_policy_tensor_count=len(official_policy),
+        frozen_value_tensor_count=len(official_value),
+        optimizer_slot_count=len(payload.optimizer_state_dict["state"]),
         optimizer_steps=optimizer_steps,
     )
 

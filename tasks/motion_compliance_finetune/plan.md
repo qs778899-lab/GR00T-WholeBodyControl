@@ -141,12 +141,20 @@ Baseline: NVLabs upstream `main` at
   loading, mixed off/on gates, residual-only gradients, identical interval-event
   structure, and global-RNG contracts.
 
-### Phase 4 — Released-checkpoint migration and finetune workflow
+### Phase 4 — Same-shape residual initialization and finetune workflow
 
-- Add a shape-aware checkpoint adapter for the dynamic decoder/critic input
-  expansion.  Copy all old columns exactly and zero-initialize new compliance
-  columns so the initial `enable=0` policy is functionally unchanged.
-- Keep normal strict resume semantics for already-migrated checkpoints.
+- Compose a schema-v2 initialization checkpoint from the pinned release and
+  the instantiated Phase-3 target.  Keep all 55 official policy tensors and
+  all 17 official value tensors byte-exact at their released shapes: `g1_dyn`
+  remains 994, critic/RMS remain 1645, and `std` remains unchanged.  Add only
+  the six action-residual and six value-residual tensors initialized by the
+  target model.  The separate residual contexts are 997 and 1657 for two
+  sites; these are not release-network input expansions.
+- Treat every schema-v1 expanded artifact and every old Phase-4 output as
+  invalid evidence.  A non-resume load accepts only the schema-v2 residual
+  initialization artifact; a resume load accepts only a complete branch
+  checkpoint and remains strict for model, optimizer, scheduler, environment,
+  trainer state, and root keys.
 - Add documented Hydra CLI examples for sample/full motion data.  Compliance
   forces are synthesized online; no duplicate modified motion dataset is
   required.
@@ -154,24 +162,50 @@ Baseline: NVLabs upstream `main` at
   `compliance_control/official_assets/sonic_release/last.pt` (HF revision
   `7c90a56cfe04788c4f041daeef5b1e12930675ad`, recorded SHA-256 ending
   `d8909`, training step 41550) for the real
-  migration smoke; never mutate the source asset.
-- Add staged finetuning controls: initially freeze the robot-motion encoder and
-  quantizer, train the dynamic decoder/critic, then optionally unfreeze.
+  residual-initialization smoke; never mutate the source asset.  Independently
+  reload this hash-verified file when auditing initialization, step 5, and step
+  6 rather than trusting artifact-authored provenance or digests.
+- Freeze every released policy/value parameter, including robot-motion
+  encoder, quantizer, `g1_dyn`, `g1_kin`, critic, critic RMS, and action noise.
+  Train exactly the two residual heads.  The HF decay/no-decay optimizer order
+  is six weights followed by six biases, with one finite slot per tensor.
 - Keep frozen action-noise checkpoint tensors byte-exact through a dedicated
   compliance actor that computes the release clamp out of place; retain the
   generic actor unchanged and preserve its state-dict schema.
+- Lock the real PPO smoke to micro-batches `[4,24,*]` (16 environments, four
+  mini-batches), two-site privileged width 9, tokenizer leading shape
+  `[4,24,...]`, action `[4,24,29]`, and value `[4,24,1]`.  Require every
+  residual tensor to receive a finite gradient and to differ from its separate
+  initialization checkpoint after training.
+- Before any strict-resume mutation, preflight model keys/shapes/dtypes/
+  finiteness plus exact non-model payload structure.  Preserve the independent
+  learning-rate boundaries: restore `args.learning_rate`, optimizer group LRs,
+  and scheduler state exactly as saved; never overwrite loaded optimizer LRs
+  from `args.learning_rate`.
 - During the prescribed 16-environment/5-iteration smoke, separately record the
   fixed-shape all-environment candidate scheduler cost; keep the
   synchronization-safe algorithm unchanged until it has measured evidence.
 
 ### Phase 5 — Export and deployment switch
 
-- Export the migrated encoder/decoder without changing encoder inputs.
-- Add a deployment observation named `motion_compliance_condition` and explicit
-  runtime `enable`/threshold options in a new observation config; do not modify
-  the released config in place.
-- Confirm disabled deployment supplies exactly three zeros and reproduces the
-  baseline output within tolerance.
+- Leave the released robot-motion encoder and decoder ONNX files byte-for-byte
+  untouched.  Export only the trained action-residual head as a separate,
+  versioned ONNX artifact with explicit `actor_context [B,S,997]` and
+  `motion_compliance_condition [B,S,3]` inputs and `action_delta [B,S,29]`
+  output.  Deployment composition remains `release_action + bounded_delta`.
+- Keep export/runtime tensor contracts in a tracker-independent deployment
+  module.  A thin SONIC adapter owns observation names and assembly of the
+  released 930-D actor observation with the existing 64-D encoder token; no
+  robot name, 14-keypoint assumption, or IsaacLab import may enter the portable
+  export/runtime layer.
+- Add an opt-in deployment configuration and explicit runtime switch without
+  changing released configs.  Disabled rows must bypass residual inference and
+  return the released action bit-for-bit; mixed `[B,S]` gates must isolate off
+  rows even when rejected condition/context rows contain NaN.
+- Compare PyTorch and ONNX Runtime output for dynamic batch/sequence shapes,
+  all-off, all-on, and mixed gates.  Export atomically, record source checkpoint
+  SHA/provenance beside the ONNX, and reject incompatible site/layout/version
+  metadata before inference.
 
 ### Phase 6 — Integration, regression, and low-resource validation
 

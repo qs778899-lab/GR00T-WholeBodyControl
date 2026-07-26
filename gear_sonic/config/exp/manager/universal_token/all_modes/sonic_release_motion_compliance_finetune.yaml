@@ -1,5 +1,5 @@
 # @package _global_
-# Bootstrap-only stage: strict official migration, dynamic decoder + critic training.
+# Strict official residual initialization; release policy/value stay frozen.
 
 defaults:
   - /exp/manager/universal_token/all_modes/sonic_release_motion_compliance
@@ -20,15 +20,18 @@ algo:
     num_learning_iterations: 5
     actor:
       _target_: gear_sonic.compliance_control.training.actor.MotionComplianceFrozenNoiseActor
+      backbone:
+        motion_compliance_residual_hidden_dims: [256, 256]
+    critic:
+      motion_compliance_residual_hidden_dims: [256, 256]
 
-motion_compliance_checkpoint_migration:
+motion_compliance_checkpoint_initialization:
   enabled: true
-  output_path: ${experiment_dir}/artifacts/motion_compliance_init.pt
+  output_path: ${experiment_dir}/artifacts/motion_compliance_residual_init.pt
   overwrite: false
 
 motion_compliance_finetune:
-  stage: decoder_critic
-  trainable_decoder_names: [g1_dyn]
+  stage: residual_only
   enforce_phase4_smoke_contract: true
   resume_output_dir: null
 

@@ -1,8 +1,7 @@
-"""Selective parameter ownership for staged compliance finetuning."""
+"""Residual-only parameter ownership for motion-compliance finetuning."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +14,11 @@ from .paths import (
     OFFICIAL_SONIC_RELEASE_CHECKPOINT,
     validate_distinct_artifact_paths,
     validate_motion_compliance_run_path,
+)
+from .residual_policy import (
+    MOTION_COMPLIANCE_BACKBONE_TARGET,
+    MOTION_COMPLIANCE_CRITIC_TARGET,
+    motion_compliance_residual_parameters,
 )
 
 
@@ -32,6 +36,7 @@ class FinetuneStageReport:
     trainable_policy_names: tuple[str, ...]
     frozen_policy_names: tuple[str, ...]
     trainable_value_names: tuple[str, ...]
+    frozen_value_names: tuple[str, ...]
 
 
 def validate_motion_compliance_workflow_config(config) -> None:
@@ -55,13 +60,16 @@ def validate_motion_compliance_workflow_config(config) -> None:
             f"got {actor_target!r}"
         )
 
-    migration_cfg = config.get("motion_compliance_checkpoint_migration", None)
-    migration_enabled = bool(
-        migration_cfg is not None and migration_cfg.get("enabled", False)
+    initialization_cfg = config.get(
+        "motion_compliance_checkpoint_initialization",
+        None,
+    )
+    initialization_enabled = bool(
+        initialization_cfg is not None and initialization_cfg.get("enabled", False)
     )
     if config.get("resume", False):
-        if migration_enabled:
-            raise ValueError("strict resume requires checkpoint migration to be disabled")
+        if initialization_enabled:
+            raise ValueError("strict resume requires checkpoint initialization to be disabled")
         if config.get("checkpoint", None) is None:
             raise ValueError("strict resume requires a checkpoint path")
         input_checkpoint = validate_motion_compliance_run_path(config.checkpoint)
@@ -74,15 +82,17 @@ def validate_motion_compliance_workflow_config(config) -> None:
                 "strict resume requires experiment_dir to equal resume_output_dir"
             )
     else:
-        if not migration_enabled:
-            raise ValueError("initial compliance finetuning requires official migration")
+        if not initialization_enabled:
+            raise ValueError(
+                "initial compliance finetuning requires official residual initialization"
+            )
         source = Path(config.get("checkpoint", "")).expanduser().resolve(strict=False)
         official_source = OFFICIAL_SONIC_RELEASE_CHECKPOINT.resolve(strict=False)
         if source != official_source:
             raise ValueError(
                 f"initial compliance checkpoint must be {official_source}; got {source}"
             )
-        validate_motion_compliance_run_path(migration_cfg.output_path)
+        validate_motion_compliance_run_path(initialization_cfg.output_path)
         input_checkpoint = source
 
     exposure_output = validate_motion_compliance_run_path(
@@ -105,11 +115,13 @@ def validate_motion_compliance_workflow_config(config) -> None:
         "resolved_config": experiment_dir / "config.yaml",
         "run_metadata": experiment_dir / "meta.yaml",
     }
-    if migration_enabled:
-        migration_output = Path(migration_cfg.output_path).expanduser().resolve(strict=False)
-        if migration_output.suffix != ".pt":
-            raise ValueError("motion-compliance migration output must use a .pt suffix")
-        artifact_paths["migration_output"] = migration_output
+    if initialization_enabled:
+        initialization_output = (
+            Path(initialization_cfg.output_path).expanduser().resolve(strict=False)
+        )
+        if initialization_output.suffix != ".pt":
+            raise ValueError("motion-compliance initialization output must use a .pt suffix")
+        artifact_paths["initialization_output"] = initialization_output
     validate_distinct_artifact_paths(**artifact_paths)
 
     if not finetune_cfg.get("enforce_phase4_smoke_contract", False):
@@ -118,11 +130,68 @@ def validate_motion_compliance_workflow_config(config) -> None:
     expected_iterations = 1 if config.get("resume", False) else 5
     expected_save_last = 1 if config.get("resume", False) else 5
     exact_values = (
-        ("motion_compliance_finetune.stage", finetune_cfg.get("stage"), "decoder_critic"),
+        ("motion_compliance_finetune.stage", finetune_cfg.get("stage"), "residual_only"),
         (
-            "motion_compliance_finetune.trainable_decoder_names",
-            tuple(finetune_cfg.get("trainable_decoder_names", ())),
-            ("g1_dyn",),
+            "algo.config.num_steps_per_env",
+            config.algo.config.get("num_steps_per_env"),
+            24,
+        ),
+        (
+            "algo.config.num_learning_epochs",
+            config.algo.config.get("num_learning_epochs"),
+            5,
+        ),
+        (
+            "algo.config.num_mini_batches",
+            config.algo.config.get("num_mini_batches"),
+            4,
+        ),
+        (
+            "manager_env.config.use_symmetry",
+            config.manager_env.config.get("use_symmetry", False),
+            False,
+        ),
+        (
+            "algo.config.freeze_noise_std",
+            config.algo.config.get("freeze_noise_std", False),
+            True,
+        ),
+        (
+            "algo.config.actor.backbone._target_",
+            config.algo.config.actor.backbone.get("_target_"),
+            MOTION_COMPLIANCE_BACKBONE_TARGET,
+        ),
+        (
+            "algo.config.critic._target_",
+            config.algo.config.critic.get("_target_"),
+            MOTION_COMPLIANCE_CRITIC_TARGET,
+        ),
+        (
+            "algo.config.actor.backbone.motion_compliance_action_delta_limit",
+            config.algo.config.actor.backbone.get(
+                "motion_compliance_action_delta_limit"
+            ),
+            0.25,
+        ),
+        (
+            "algo.config.actor.backbone.motion_compliance_residual_hidden_dims",
+            tuple(
+                config.algo.config.actor.backbone.get(
+                    "motion_compliance_residual_hidden_dims",
+                    (),
+                )
+            ),
+            (256, 256),
+        ),
+        (
+            "algo.config.critic.motion_compliance_residual_hidden_dims",
+            tuple(
+                config.algo.config.critic.get(
+                    "motion_compliance_residual_hidden_dims",
+                    (),
+                )
+            ),
+            (256, 256),
         ),
         ("algo.config.use_log_std", config.algo.config.get("use_log_std", False), False),
         (
@@ -214,20 +283,8 @@ def validate_motion_compliance_workflow_config(config) -> None:
             raise ValueError(
                 f"Phase-4 smoke requires {field_name}={expected!r}; got {actual!r}"
             )
-
-
-def _validate_decoder_names(decoders, names: Sequence[str]) -> tuple[str, ...]:
-    if isinstance(names, str | bytes):
-        raise TypeError("trainable_decoder_names must be a sequence of names")
-    resolved = tuple(names)
-    if not resolved or any(not isinstance(name, str) or not name for name in resolved):
-        raise ValueError("trainable_decoder_names must contain non-empty strings")
-    if len(set(resolved)) != len(resolved):
-        raise ValueError("trainable_decoder_names contains duplicates")
-    missing = sorted(set(resolved) - set(decoders))
-    if missing:
-        raise ValueError(f"unknown trainable decoders: {missing}")
-    return resolved
+    if "trainable_decoder_names" in finetune_cfg:
+        raise ValueError("residual-only finetuning forbids trainable_decoder_names")
 
 
 def configure_motion_compliance_finetune_stage(
@@ -235,45 +292,39 @@ def configure_motion_compliance_finetune_stage(
     value_model: torch.nn.Module | None,
     *,
     stage: str,
-    trainable_decoder_names: Sequence[str] = ("g1_dyn",),
 ) -> FinetuneStageReport:
-    """Freeze all policy state except selected decoders, or explicitly unfreeze."""
+    """Freeze every release parameter and enable only the two residual heads."""
 
-    if stage not in {"decoder_critic", "full"}:
-        raise ValueError("finetune stage must be 'decoder_critic' or 'full'")
-    actor_module = getattr(policy, "actor_module", None)
-    decoders = getattr(actor_module, "decoders", None)
-    if decoders is None:
-        raise TypeError("policy must expose actor_module.decoders")
-    decoder_names = _validate_decoder_names(decoders, trainable_decoder_names)
+    if stage != "residual_only":
+        raise ValueError("motion-compliance finetune stage must be 'residual_only'")
     if value_model is None:
         raise TypeError("motion-compliance finetuning requires a critic value model")
 
-    if stage == "decoder_critic":
-        if decoder_names != ("g1_dyn",):
-            raise ValueError("decoder_critic stage trains exactly the g1_dyn decoder")
-        encoders = getattr(actor_module, "encoders", None)
-        quantizer = getattr(actor_module, "quantizer", None)
-        if encoders is None or not tuple(encoders):
-            raise TypeError("policy must expose non-empty actor_module.encoders")
-        if quantizer is None:
-            raise TypeError("policy must expose actor_module.quantizer")
-        if "g1_kin" not in decoders:
-            raise TypeError("policy must expose the frozen g1_kin decoder")
-        noise_names = tuple(
-            name for name, _ in policy.named_parameters() if name in {"std", "log_std"}
-        )
-        if len(noise_names) != 1:
-            raise TypeError("policy must expose exactly one std or log_std noise parameter")
-
     for parameter in policy.parameters():
-        parameter.requires_grad = stage == "full"
-    if stage == "decoder_critic":
-        for decoder_name in decoder_names:
-            for parameter in decoders[decoder_name].parameters():
-                parameter.requires_grad = True
+        parameter.requires_grad_(False)
     for parameter in value_model.parameters():
-        parameter.requires_grad = True
+        parameter.requires_grad_(False)
+
+    policy_backbone = getattr(policy, "actor_module", policy)
+    action_residual = getattr(
+        policy_backbone,
+        "motion_compliance_action_residual",
+        None,
+    )
+    value_residual = getattr(
+        value_model,
+        "motion_compliance_value_residual",
+        None,
+    )
+    if not isinstance(action_residual, torch.nn.Module):
+        raise TypeError("policy lacks a motion-compliance action residual module")
+    if not isinstance(value_residual, torch.nn.Module):
+        raise TypeError("value model lacks a motion-compliance value residual module")
+    for parameter in action_residual.parameters():
+        parameter.requires_grad_(True)
+    for parameter in value_residual.parameters():
+        parameter.requires_grad_(True)
+    motion_compliance_residual_parameters(policy, value_model)
 
     trainable_policy = tuple(
         name for name, parameter in policy.named_parameters() if parameter.requires_grad
@@ -284,35 +335,27 @@ def configure_motion_compliance_finetune_stage(
     trainable_value = tuple(
         name for name, parameter in value_model.named_parameters() if parameter.requires_grad
     )
-    if not trainable_policy:
-        raise ValueError("finetune stage selected no trainable policy parameters")
-    if stage == "decoder_critic":
-        allowed_prefixes = tuple(f"actor_module.decoders.{name}." for name in decoder_names)
-        if any(not name.startswith(allowed_prefixes) for name in trainable_policy):
-            raise RuntimeError("decoder_critic stage leaked non-decoder policy parameters")
-        required_frozen_prefixes = (
-            "actor_module.encoders.",
-            "actor_module.decoders.g1_kin.",
-        )
-        for prefix in required_frozen_prefixes:
-            matching = tuple(name for name in frozen_policy if name.startswith(prefix))
-            if not matching:
-                raise RuntimeError(f"decoder_critic stage found no frozen parameters for {prefix}")
-        quantizer_parameters = tuple(actor_module.quantizer.parameters())
-        if any(parameter.requires_grad for parameter in quantizer_parameters):
-            raise RuntimeError("decoder_critic stage left quantizer parameters trainable")
-        noise_name = next(
-            name for name, _ in policy.named_parameters() if name in {"std", "log_std"}
-        )
-        if noise_name not in frozen_policy:
-            raise RuntimeError("decoder_critic stage left action noise trainable")
-    if not trainable_value:
-        raise ValueError("finetune stage selected no trainable critic parameters")
+    frozen_value = tuple(
+        name for name, parameter in value_model.named_parameters() if not parameter.requires_grad
+    )
+    if not trainable_policy or not trainable_value:
+        raise ValueError("residual-only stage selected an empty residual module")
+    if any(
+        not name.startswith("actor_module.motion_compliance_action_residual.")
+        for name in trainable_policy
+    ):
+        raise RuntimeError("residual-only stage leaked a released policy parameter")
+    if any(
+        not name.startswith("motion_compliance_value_residual.")
+        for name in trainable_value
+    ):
+        raise RuntimeError("residual-only stage leaked a released value parameter")
     return FinetuneStageReport(
         stage=stage,
         trainable_policy_names=trainable_policy,
         frozen_policy_names=frozen_policy,
         trainable_value_names=trainable_value,
+        frozen_value_names=frozen_value,
     )
 
 
@@ -321,13 +364,12 @@ def validate_optimizer_parameter_set(
     policy: torch.nn.Module,
     value_model: torch.nn.Module | None,
 ) -> None:
-    """Require optimizer ownership to equal exactly all requires-grad parameters."""
+    """Require optimizer ownership to equal exactly both residual modules."""
 
-    expected = {id(parameter) for parameter in policy.parameters() if parameter.requires_grad}
-    if value_model is not None:
-        expected.update(
-            id(parameter) for parameter in value_model.parameters() if parameter.requires_grad
-        )
+    if value_model is None:
+        raise TypeError("motion-compliance optimizer validation requires a value model")
+    residual_parameters = motion_compliance_residual_parameters(policy, value_model)
+    expected = {id(parameter) for parameter in residual_parameters}
     actual_list = [
         parameter
         for parameter_group in optimizer.param_groups

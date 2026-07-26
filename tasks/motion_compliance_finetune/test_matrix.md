@@ -130,75 +130,109 @@ does not leave repository caches.
    `git diff --cached --check`.
 10. Confirm no `__pycache__`, `.pytest_cache`, `.pyc`, or `.pyo` remains.
 
-## Phase 4 — Checkpoint migration and finetune workflow
+## Phase 4 — Same-shape residual initialization and finetune workflow
 
 1. Run the combined Phase-1/2/3/4 pure suite:
    `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B -m pytest -p no:cacheprovider -q gear_sonic/tests/test_compliance_core.py gear_sonic/tests/test_compliance_sonic_adapter.py gear_sonic/tests/test_compliance_sonic_training.py gear_sonic/tests/test_compliance_training_checkpoint.py`.
-   It must cover exact synthetic legacy copies/zero tails, derived `4+4*S`
-   critic widths, official-contract pinning, strict init/resume, complete
-   non-empty resume state, exact freeze/optimizer ownership, finite loss and
-   per-site exposure callbacks, path/collision rejection, post-train poison
-   checks, and exact Hydra smoke guards.  Load the pinned release `std`, require
-   the dedicated compliance actor target, and prove repeated distribution
-   construction retains byte-exact frozen noise state while producing the same
-   effective clamp and excluding `std/log_std` from the optimizer.  Reject
-   overrides of `use_log_std=false`, `use_clampped_std=true`, clamp bounds
-   `[0.001,0.5]`, and `clamp_noise_std=false`; require the isolated trainer's
-   noise metric to report the effective clamp rather than the raw parameter.
-2. Run the pinned official CPU migration smoke (reruns may atomically overwrite
-   only this generated central artifact):
-   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase4_official_migration_smoke.py --output /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_cpu_gate/artifacts/motion_compliance_init.pt --report /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_cpu_gate/artifacts/migration_audit.json --num-sites 2 --overwrite`.
+   It must prove that the release actor/critic/RMS remain 994/1645/1645 and
+   that 997/1657 are separate residual contexts, never expanded base inputs.
+   Require exactly 55 official policy + six action-residual tensors and 17
+   official value + six value-residual tensors, float32 residuals, zero output
+   layers, byte-exact base tensors, fresh step 0, and no optimizer/scheduler/env
+   state.  Reject schema-v1 artifacts, unmarked non-resume checkpoints, partial
+   model schemas, and incomplete resume roots before any live-state mutation.
+2. The suite must freeze every released policy/value parameter and make exactly
+   twelve residual tensors trainable.  Match HF optimizer ordering precisely:
+   policy W0/W2/W4, value W0/W2/W4, policy b0/b2/b4, value b0/b2/b4.  Run two
+   synthetic `[4,24,*]` updates and require finite gradients plus a byte change
+   for every residual tensor.  Validate action `[4,24,29]`, value `[4,24,1]`,
+   condition `[4,24,3]`, privileged `[4,24,9]`, and tokenizer
+   `[4,24,...]`; the physical exposure callback remains coarse exposure
+   evidence and is not treated as proof of all 24 frames.
+3. The suite must constructively test strict resume with different saved
+   boundaries (`args.learning_rate=1e-5`, optimizer group LRs `2e-5/3e-5`).
+   Before loading, preflight exact checkpoint roots, both model schemas and
+   finiteness, two optimizer groups/12 slots/moment shapes, scheduler state,
+   `env_state_dict.motion_lib`, trainer tensors, and global step.  After load,
+   recursively compare model/optimizer/scheduler/global-step state to the saved
+   payload and prove optimizer LRs were not overwritten from args.
+4. Run the pinned official CPU residual-initialization smoke.  Reruns may
+   atomically overwrite only this new generated artifact; old Phase-4 outputs
+   are invalid evidence:
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase4_official_residual_init_smoke.py --output /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_cpu_gate/artifacts/motion_compliance_residual_init.pt --report /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_cpu_gate/artifacts/residual_init_audit.json --num-sites 2 --overwrite`.
    Require SHA-256
    `e6bdab3f64a39336b3d41877d4f497d05f58af275f288ec0e6746c283ded8909`,
-   full revision `7c90a56cfe04788c4f041daeef5b1e12930675ad`, source
-   step 41550, actor `994→997`, critic/RMS `1645→1657`, unchanged RMS
-   count, fresh step 0, and `optimizer/scheduler/env=None`.
-3. Run both entrypoint/config gates:
+   revision `7c90a56cfe04788c4f041daeef5b1e12930675ad`, source step
+   41550, source policy key `policy_state_dict`, official tensor counts 55/17,
+   byte-exact base state loaded independently from the pinned file, release
+   widths 994/1645/1645, residual contexts 997/1657, and fresh empty training
+   state.
+5. Run both entrypoint/config gates:
    `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/train_agent_trl.py --help` and
    `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/train_agent_trl.py +exp=manager/universal_token/all_modes/sonic_release_motion_compliance_finetune exp_base=phase4_test timestamp=20260727_000000 --cfg job`.
-   The latter must resolve the isolated strict trainer, central runs root,
-   official checkpoint, one official robot PKL plus official SMPL directory,
-   16 environments, 5 iterations, W&B off, and `save_last_frequency=5`.
-4. Rerun the exact Phase-2 and Phase-3 real CUDA regression commands from their
-   matrix sections with the NVIDIA 580.159 compatibility environment before
-   the new training smoke.
-5. Record the 16-environment fixed-shape scheduler cost without changing its
+   Resolve the isolated trainer/actor/backbone/critic targets, residual-only
+   stage, `[256,256]` residual heads, delta limit 0.25, 24 rollout steps, five
+   PPO epochs, four mini-batches, no symmetry, frozen noise, 16 environments,
+   five iterations, W&B off, official sample paths, and save frequency 5.
+6. Before any Phase-4 GPU command, obtain explicit root-agent confirmation.
+   Then rerun the exact Phase-2 and Phase-3 real CUDA regression commands from
+   their matrix sections with the NVIDIA 580.159 compatibility environment.
+7. Record the 16-environment fixed-shape scheduler cost without changing its
    algorithm:
-   `env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu LD_PRELOAD=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.580.159.03:/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libcuda.so.580.159.03 VK_ICD_FILENAMES=/tmp/nvidia_580_159_compat/extracted/usr/share/vulkan/icd.d/nvidia_icd.json PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase4_candidate_scheduler_benchmark.py --num-envs 16 --output /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_smoke/artifacts/candidate_scheduler_benchmark.json`.
-   The JSON must contain enabled/host-off CUDA time and incremental peak-memory
-   measurements.
-6. Using `phase4_gpu_smoke` with no prior checkpoint/training files (the
-   scheduler JSON from command 5 is allowed), run the exact five-step training:
-   `env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu LD_PRELOAD=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.580.159.03:/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libcuda.so.580.159.03 VK_ICD_FILENAMES=/tmp/nvidia_580_159_compat/extracted/usr/share/vulkan/icd.d/nvidia_icd.json PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/train_agent_trl.py +exp=manager/universal_token/all_modes/sonic_release_motion_compliance_finetune experiment_dir=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_smoke headless=true`.
-   Require `last.pt` at step 5, one finite loss/timing record per iteration,
-   nonzero enabled/left/right force exposure, and process peak CUDA memory.
-7. Audit step 5:
-   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase4_checkpoint_audit.py --official /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sonic_release/last.pt --trained /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_smoke/last.pt --exposure /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_smoke/artifacts/motion_compliance_exposure.json --expected-step 5 --num-sites 2 --output-json /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_smoke/artifacts/step5_audit.json`.
-   Every added actor/critic column must be nonzero; encoder, `g1_kin`,
-   quantizer state, and `std/log_std` must remain byte-exact; all tensors and
-   optimizer moments must be finite; optimizer ownership/steps must be fresh.
-8. Strict-resume step 5 into a separate step-6 output directory:
-   `env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu LD_PRELOAD=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.580.159.03:/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libcuda.so.580.159.03 VK_ICD_FILENAMES=/tmp/nvidia_580_159_compat/extracted/usr/share/vulkan/icd.d/nvidia_icd.json PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/train_agent_trl.py +exp=manager/universal_token/all_modes/sonic_release_motion_compliance_finetune experiment_dir=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_resume resume=true motion_compliance_finetune.resume_output_dir=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_resume motion_compliance_checkpoint_migration.enabled=false checkpoint=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_smoke/last.pt algo.config.num_learning_iterations=1 callbacks.model_save.save_last_frequency=1 headless=true`.
-   It must restore strict model/optimizer/scheduler/environment/trainer state,
-   execute exactly one PPO batch, preserve step 5, and save step 6 under
-   `phase4_gpu_resume`.
-9. Audit the independently saved step 6:
-   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase4_checkpoint_audit.py --official /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sonic_release/last.pt --trained /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_resume/last.pt --exposure /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_resume/artifacts/motion_compliance_exposure.json --expected-step 6 --num-sites 2 --output-json /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_gpu_resume/artifacts/step6_audit.json`.
-10. `git diff --check`; after staging all and only Phase-4 files,
+   `env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu LD_PRELOAD=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.580.159.03:/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libcuda.so.580.159.03 VK_ICD_FILENAMES=/tmp/nvidia_580_159_compat/extracted/usr/share/vulkan/icd.d/nvidia_icd.json PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase4_candidate_scheduler_benchmark.py --num-envs 16 --output /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_smoke_tensordict_fix/artifacts/candidate_scheduler_benchmark.json`.
+8. With no prior checkpoint/training files in `phase4_residual_gpu_smoke_tensordict_fix` (the
+   benchmark JSON is allowed), run exactly five iterations:
+   `env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu LD_PRELOAD=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.580.159.03:/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libcuda.so.580.159.03 VK_ICD_FILENAMES=/tmp/nvidia_580_159_compat/extracted/usr/share/vulkan/icd.d/nvidia_icd.json PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/train_agent_trl.py +exp=manager/universal_token/all_modes/sonic_release_motion_compliance_finetune experiment_dir=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_smoke_tensordict_fix headless=true`.
+   Require the isolated trainer's `[4,24,*]` gates on every PPO micro-batch,
+   `last.pt` at step 5, finite loss/timing per iteration, nonzero two-site
+   physical exposure, and process peak CUDA memory.
+9. Independently audit step 5 against both pinned official and the separate init:
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase4_checkpoint_audit.py --official /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sonic_release/last.pt --initialization /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_smoke_tensordict_fix/artifacts/motion_compliance_residual_init.pt --trained /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_smoke_tensordict_fix/last.pt --exposure /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_smoke_tensordict_fix/artifacts/motion_compliance_exposure.json --expected-step 5 --num-sites 2 --output-json /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_smoke_tensordict_fix/artifacts/step5_audit.json`.
+   All 55+17 base tensors, including `g1_dyn`, critic, RMS, quantizer, and
+   `std`, must remain byte-exact to official.  Every one of the twelve residual
+   tensors must differ from initialization and have a matching finite nonzero
+   optimizer moment; no official optimizer step may survive.
+10. Strict-resume step 5 into an independent step-6 directory:
+    `env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu LD_PRELOAD=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.580.159.03:/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libcuda.so.580.159.03 VK_ICD_FILENAMES=/tmp/nvidia_580_159_compat/extracted/usr/share/vulkan/icd.d/nvidia_icd.json PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/train_agent_trl.py +exp=manager/universal_token/all_modes/sonic_release_motion_compliance_finetune experiment_dir=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_resume_tensordict_fix resume=true motion_compliance_finetune.resume_output_dir=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_resume_tensordict_fix motion_compliance_checkpoint_initialization.enabled=false checkpoint=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_smoke_tensordict_fix/last.pt algo.config.num_learning_iterations=1 callbacks.model_save.save_last_frequency=1 headless=true`.
+    Before the next batch, require recursive-exact restored model, optimizer,
+    scheduler and global-step boundaries, while preserving distinct saved args
+    and optimizer LRs.  Execute one PPO batch and save step 6 without changing
+    step 5.
+11. Audit step 6 with the same independently saved initialization:
+    `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase4_checkpoint_audit.py --official /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sonic_release/last.pt --initialization /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_smoke_tensordict_fix/artifacts/motion_compliance_residual_init.pt --trained /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_resume_tensordict_fix/last.pt --exposure /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_resume_tensordict_fix/artifacts/motion_compliance_exposure.json --expected-step 6 --num-sites 2 --output-json /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_resume_tensordict_fix/artifacts/step6_audit.json`.
+12. `git diff --check`; after staging all and only Phase-4 files,
     `git diff --cached --check`.  Confirm the generic
     `gear_sonic/trl/trainer/ppo_trainer.py` has no diff and remove all
     repository-local `__pycache__`, `.pytest_cache`, `.pyc`, and `.pyo` files.
 
 ## Phase 5 — Export and deployment switch
 
-1. Run all earlier unit/config tests.
-2. Export encoder and decoder ONNX.
-3. Verify encoder input names/shapes exactly match the released robot-motion
-   encoder contract.
-4. Compare PyTorch and ONNX decoder outputs for disabled and enabled conditions.
-5. Disabled deployment golden: three condition zeros and baseline action output
-   within `1e-5` absolute tolerance.
-6. CLI/config validation rejects invalid threshold/displacement combinations.
+1. Run all earlier pure unit/config tests plus the Phase-5 deployment/export
+   suite.  The portable deployment package must import without IsaacLab and
+   contain no G1 body names, fixed 14-keypoint order, or filesystem assumptions.
+2. Export only the six trained action-residual tensors from the accepted step-6
+   checkpoint into a separate ONNX file.  Do not rewrite/copy the released
+   encoder or decoder.  Require inputs `actor_context [B,S,997]` and
+   `motion_compliance_condition [B,S,3]`, output
+   `action_delta [B,S,29]`, dynamic `B/S`, and a metadata JSON pinning schema,
+   site/layout contract, checkpoint SHA-256, and residual tensor names/shapes.
+3. Compare PyTorch and ONNX Runtime action deltas for at least two dynamic
+   `[B,S]` shapes.  Cover all-off, all-on, and mixed gates in the same tensor;
+   every off row must be exactly zero and every finite on row must agree within
+   `1e-5` absolute tolerance.  Poison rejected rows with NaN and require finite,
+   isolated output.
+4. Deployment composition must preserve the supplied release action bitwise for
+   disabled rows and bound enabled deltas by 0.25.  The hard-off path must not
+   call the optional residual session.  Test a multi-row/multi-step mixed gate,
+   not only global all-on/all-off switches.
+5. Add an opt-in SONIC deployment config/adapter that assembles the 997-D
+   residual context from the unchanged 930-D actor observation, unchanged 64-D
+   robot-motion token, and 3-D public condition.  The released deployment config,
+   encoder ONNX, and decoder ONNX must have no diff.
+6. CLI/config validation rejects incompatible schema/site/action widths,
+   mismatched metadata digest, non-binary/non-finite gates, and invalid
+   threshold/displacement combinations.  ONNX and JSON writes must be atomic;
+   failed export leaves neither a partial final file nor repository cache.
 
 ## Phase 6 — Integration and regression validation
 

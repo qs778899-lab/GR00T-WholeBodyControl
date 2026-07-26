@@ -174,37 +174,40 @@ def prepare_motion_compliance_finetune(
     value_model,
     accelerator,
 ):
-    """Run opt-in migration and selective freezing before trainer construction."""
+    """Build strict residual init state and freeze release parameters."""
 
     from gear_sonic.compliance_control.training import (
         configure_motion_compliance_finetune_stage,
-        migrate_official_sonic_release_checkpoint_file,
+        initialize_official_sonic_release_checkpoint_file,
         validate_motion_compliance_run_path,
     )
 
-    migration_cfg = config.get("motion_compliance_checkpoint_migration", None)
-    if migration_cfg is not None and migration_cfg.get("enabled", False):
+    initialization_cfg = config.get(
+        "motion_compliance_checkpoint_initialization",
+        None,
+    )
+    if initialization_cfg is not None and initialization_cfg.get("enabled", False):
         if config.get("resume", False):
-            raise ValueError("official checkpoint migration requires resume=false")
+            raise ValueError("official residual initialization requires resume=false")
         if config.get("checkpoint", None) is None:
-            raise ValueError("checkpoint must point to the immutable migration source")
+            raise ValueError("checkpoint must point to the immutable initialization source")
         if value_model is None:
-            raise ValueError("motion-compliance migration requires a critic value model")
-        output_path = validate_motion_compliance_run_path(migration_cfg.output_path)
+            raise ValueError("motion-compliance initialization requires a critic value model")
+        output_path = validate_motion_compliance_run_path(initialization_cfg.output_path)
         site_names = tuple(config.manager_env.commands.motion_compliance.site_body_names)
         if accelerator.is_main_process:
-            report = migrate_official_sonic_release_checkpoint_file(
+            report = initialize_official_sonic_release_checkpoint_file(
                 config.checkpoint,
                 output_path,
                 num_sites=len(site_names),
                 target_policy_state=policy.state_dict(),
                 target_value_state=value_model.state_dict(),
-                overwrite=migration_cfg.get("overwrite", False),
+                overwrite=initialization_cfg.get("overwrite", False),
             )
-            logger.info(f"Motion-compliance checkpoint migration: {report}")
+            logger.info(f"Motion-compliance residual initialization: {report}")
         accelerator.wait_for_everyone()
         if not output_path.is_file():
-            raise FileNotFoundError(f"migrated checkpoint was not created: {output_path}")
+            raise FileNotFoundError(f"residual init checkpoint was not created: {output_path}")
         config.checkpoint = str(output_path)
 
     finetune_cfg = config.get("motion_compliance_finetune", None)
@@ -214,7 +217,6 @@ def prepare_motion_compliance_finetune(
         policy,
         value_model,
         stage=finetune_cfg.stage,
-        trainable_decoder_names=tuple(finetune_cfg.trainable_decoder_names),
     )
     logger.info(
         "Motion-compliance finetune stage "

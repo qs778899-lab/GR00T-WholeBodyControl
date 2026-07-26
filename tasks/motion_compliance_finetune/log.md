@@ -518,3 +518,128 @@
   while reporting driver `580.159.03`; both real commands exited 0.  `git diff
   --check` and cache hygiene passed.  Phase 3 is `PASSED`; Phase 4 is now the
   current phase but no Phase-4 migration, training, or export command was run.
+
+## 2026-07-27 — Reopened Phase 4 CPU gates passed for same-shape residuals
+
+- Phase 4 now initializes a schema-v2 same-shape branch from the independently
+  pinned official checkpoint.  The 55 policy and 17 value base tensors remain
+  byte-exact; only six action-residual and six value-residual tensors are
+  added.  Release widths remain actor/g1_dyn `930/994`, critic `1645`, and RMS
+  `1645`; the separate two-site residual contexts are `997/1657`.
+- The final combined Phase-1/2/3/4 pure suite passed with `87 passed, 1 skipped
+  in 31.76s`.  It covers schema-v1 rejection, strict initialization and resume
+  preflight before mutation, exact Hugging Face optimizer ordering, and two
+  synthetic `[4,24,*]` PPO updates with finite gradients and byte changes for
+  all twelve residual tensors.  The second forward constructively proves that
+  distinct timestep contexts do not broadcast timestep zero.
+- Strict resume now preflights the complete model, optimizer, scheduler,
+  environment, and saved trainer-state boundary before any live mutation.
+  Optimizer groups require exact saved/live parameter ID order, fixed AdamW
+  flags, finite/domain-valid dynamic learning rates, exact three-key slots,
+  scalar positive float32 steps, and matching finite moments.  Environment and
+  trainer state receive recursive key/shape/dtype/finiteness checks and
+  recursive exact post-load comparison.  Constructive negative tests corrupt
+  nested environment state, same-shape optimizer order, optimizer flags,
+  trainer fields, and trainer tensors and prove every live boundary unchanged.
+  The positive resume test preserves distinct saved argument and optimizer
+  learning rates; audit tests require both Adam moments nonzero per residual.
+- The pinned official CPU residual-initialization smoke exited 0.  Its report
+  independently verified SHA-256
+  `e6bdab3f64a39336b3d41877d4f497d05f58af275f288ec0e6746c283ded8909`,
+  revision `7c90a56cfe04788c4f041daeef5b1e12930675ad`, source step 41550,
+  `policy_state_dict`, official tensor counts `55/17`, RMS count
+  `69574656000.0`, byte-exact base state, and a fresh step-0 checkpoint with no
+  optimizer, scheduler, or environment state.
+- Both `train_agent_trl.py --help` and the resolved finetune Hydra config exited
+  0.  The latter resolves residual-only training, `[256,256]` action/value
+  heads, action delta limit `0.25`, 24 rollout steps, five PPO epochs, four
+  mini-batches, no symmetry, frozen release noise, 16 environments, five
+  iterations, W&B disabled, and save-last frequency 5.
+- All known CPU-review P0/P1 findings are closed; final independent read-only
+  review is pending.  The generic PPO trainer has no diff.  Phase 4 remains
+  `IN_PROGRESS`: no new CUDA command has run, and the real Phase-2/3
+  regressions, five-step training, independent step-5 audit, strict step-6
+  resume, and step-6 audit require explicit root approval first.  All prior
+  expanded-input Phase-4 GPU outputs remain invalid evidence and are not
+  accepted by the new schema.
+
+## 2026-07-27 — Phase 4 independent-audit closure before GPU
+
+- Independent review found that runtime resume already rejects a saved/live
+  optimizer-ID mismatch, but the separate post-train audit could still pair
+  two same-shape residual moments after swapping their serialized IDs.  The
+  offline audit now pins the two groups to IDs `0..5` and `6..11`, requires the
+  complete pinned PyTorch 2.7 AdamW group schema, fixed flags, and the actual
+  PPOConfig default `weight_decay=0.0` in both serialized groups,
+  and still permits only the dynamic learning-rate fields to vary.
+- New negative cases swap the two same-shape `256x256` slots and set
+  `maximize=true`; both are rejected by the independent checkpoint audit.
+  The focused negative/config/resume tests passed, and the complete CPU suite
+  was rerun with `87 passed, 1 skipped in 36.50s`.  GPU remains unstarted until the final
+  read-only re-audit confirms this last evidence boundary.
+
+## 2026-07-27 — First same-shape GPU launch exposed TensorDict boundary
+
+- The pre-training Phase-2 writer/RNG/profiler regression passed on the RTX
+  4090: 100 disabled steps remained at `0 N`, 100 forced steps reached
+  `8.3204117 N` at the sites and `8.3204098 N` in the composer, and reset plus
+  host-scalar/nonzero-free checks passed.  The Phase-3 real model regression
+  also passed at policy/critic `930/1645`, condition/privileged `3/9`, with the
+  frozen official off path byte-exact.
+- The first five-step launch created the environment and schema-v2 official
+  initialization, then failed before the first policy rollout/PPO step.  The
+  isolated actor used direct mapping iteration to form its allowlist, while
+  the real manager wrapper supplies a `TensorDict` that intentionally rejects
+  direct iteration.  No `last.pt` or exposure artifact was produced.  The
+  partial root `phase4_residual_gpu_smoke` is retained as failed evidence and
+  is not reused.
+- The actor boundary now uses the explicit top-level `keys()` API shared by
+  dict and TensorDict.  A real `TensorDict` allowlist test was added; targeted
+  testing passed and, after updating the fresh-run routing, the full CPU suite
+  passed again with `87 passed, 1 skipped in 44.43s`.  The matrix/runbook route the fresh retry and resume
+  to `phase4_residual_gpu_smoke_tensordict_fix` and
+  `phase4_residual_gpu_resume_tensordict_fix`.
+
+## 2026-07-27 — Reopened Phase 4 passed with real same-shape finetuning
+
+- After the TensorDict fix, the inherited real Phase-2 and Phase-3 CUDA gates
+  passed again at the accepted same-shape contracts: release policy/critic
+  `930/1645`, public/privileged condition `3/9`, and unchanged G1 tokenizer
+  `[10,58]` / `[10,6]`.  The Phase-2 100-disabled/100-forced run observed
+  `0 N` disabled force and `8.3204117/8.3204098 N` site/composer peaks.
+- The fresh 16-environment scheduler benchmark used 100 warmups and 1000
+  measurements on RTX 4090.  Host-off cost `2.193408 us` and zero incremental
+  allocation; enabled fixed-shape sampling cost `269.245758 us` and `8704`
+  incremental bytes.  This is scheduler-only characterization, not end-to-end
+  policy latency.
+- The fresh official run completed five PPO iterations / 1920 simulator
+  timesteps and exited 0.  Mean collection/learning times were
+  `1.427531/0.257943 s`; FPS ranged `176..250`; process peak CUDA allocation was
+  `353315840` bytes.  Both sites received `80/80` active and nonzero-force
+  samples, peak site force was `14.996154 N`, and all 55 recorded loss metrics
+  were finite.
+- The independent step-5 audit passed against both the hash-pinned official
+  checkpoint and separate step-0 initialization: all 55 policy plus 17 value
+  release tensors remained byte-exact, all six action plus six value residual
+  tensors changed, all 12 optimizer slots had finite nonzero first/second
+  moments, and their update step was 100.
+- One manually typed resume command used an erroneously path-prefixed Hydra
+  group and failed during config lookup before application or simulator startup.
+  The documented exact command was then used against a still-absent fresh output
+  root; it restored step 5 strictly, ran one PPO iteration, and saved step 6.
+- The independent step-6 audit passed: official 55/17 base tensors were still
+  byte-exact, all 12 residual tensors remained changed with nonzero moments,
+  optimizer steps advanced to 120, and the resumed batch added `16/16`
+  active/nonzero-force samples with `14.913702 N` peak.  Saved args retained
+  learning rate `1e-5`, optimizer groups retained `2e-5/2e-5`, canonical IDs
+  remained `0..5` and `6..11`, and scheduler state advanced from epoch 5 to 6.
+- The accepted directories are
+  `phase4_residual_gpu_smoke_tensordict_fix` and
+  `phase4_residual_gpu_resume_tensordict_fix`; old expanded-input and failed
+  TensorDict-launch directories remain invalid evidence.  These short runs prove
+  initialization/training/resume integrity and physical-path exposure only;
+  they are not evidence of learned compliance or tracking performance.
+- The generic PPO trainer has no diff, source diff checks pass, and no
+  repository-local Python/pytest cache remains.  Phase 4 is `PASSED`; Phase 5
+  starts with a separate residual-only ONNX/deployment switch design so the
+  released encoder and decoder remain untouched.

@@ -12,6 +12,7 @@ from omegaconf import OmegaConf
 import pytest
 import torch
 from torch import nn
+from tensordict import TensorDict
 
 from gear_sonic.compliance_control.adapters.sonic.contracts import (
     condition_from_command,
@@ -464,6 +465,21 @@ def test_full_residual_actor_and_value_preserve_release_paths_and_mixed_gradient
         "critic_obs": torch.randn(batch, 1, 1645),
         "motion_compliance_privileged": privileged,
     }
+
+    tensor_dict_obs = TensorDict(
+        {key: tensor.squeeze(1) for key, tensor in full_obs.items()},
+        batch_size=[batch],
+    )
+    filtered_tensor_dict_obs = policy._policy_only_observations(tensor_dict_obs)
+    assert set(filtered_tensor_dict_obs) == {
+        "actor_obs",
+        "tokenizer",
+        "motion_compliance_condition",
+    }
+    assert all(
+        filtered_tensor_dict_obs[key] is tensor_dict_obs[key]
+        for key in filtered_tensor_dict_obs
+    )
 
     probe_widths = []
     hook = policy.actor_module.decoders["probe"].register_forward_pre_hook(

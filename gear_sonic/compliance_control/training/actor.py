@@ -24,7 +24,12 @@ class MotionComplianceFrozenNoiseActor(Actor):
 
     @staticmethod
     def _policy_only_observations(obs_dict):
-        missing = sorted(set(_MOTION_COMPLIANCE_POLICY_KEYS) - set(obs_dict))
+        # TensorDict intentionally disables direct iteration; its explicit
+        # top-level keys API is shared with ordinary mappings.
+        keys = getattr(obs_dict, "keys", None)
+        if not callable(keys):
+            raise TypeError("motion-compliance observations must expose keys()")
+        missing = sorted(set(_MOTION_COMPLIANCE_POLICY_KEYS) - set(keys()))
         if missing:
             raise KeyError(f"motion-compliance actor lacks required groups: {missing}")
         return {key: obs_dict[key] for key in _MOTION_COMPLIANCE_POLICY_KEYS}
