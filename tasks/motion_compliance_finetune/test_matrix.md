@@ -62,7 +62,11 @@ does not leave repository caches.
    must clear owned composer rows immediately before another physics step.
    Before stepping, disabled real
    command reset, repeated compute, and reset-event calls must preserve the next
-   global CPU and CUDA random samples bit for bit.
+   global CPU and CUDA random samples bit for bit.  Force the real command timer
+   due and call the bound `command.compute(dt)` under
+   both `TorchDispatchMode` and `torch.profiler.profile(activities=[CPU,CUDA])`;
+   neither complete trace may contain `aten::_local_scalar_dense` or
+   `aten::nonzero`.
 5. `git diff --check` and, after staging only Phase-1/Phase-2 files,
    `git diff --cached --check`.
 6. Confirm no `__pycache__`, `.pytest_cache`, `.pyc`, or `.pyo` remains.
@@ -143,16 +147,19 @@ does not leave repository caches.
 1. Run the complete test suite from Phases 1–5.
 2. Low-resource IsaacLab smoke/performance run in `sonic_backup`: one audited
    robot PKL, `sample_data/smpl_filtered`, `num_envs=16`, 5 iterations, and
-   `use_wandb=false`; record FPS/GPU memory.  If GPU execution remains blocked
-   by the NVIDIA 580.159 kernel / 580.173 user-space mismatch, record the exact
-   failure and do not claim this test passed.
-3. Paired baseline regression, same seeds/motion IDs/timestamps:
+   `use_wandb=false`; record FPS/GPU memory.  Use the same temporary NVIDIA
+   580.159 compatibility-library environment as the passing Phase-2/3 real
+   tests and revalidate it after a machine restart.
+3. Characterize fixed-shape compliance-candidate overhead at 4096 environments:
+   report policy-step time and GPU memory for host-off/baseline and enabled
+   scheduling without changing the synchronization-safe algorithm first.
+4. Paired baseline regression, same seeds/motion IDs/timestamps:
    - success-rate drop no more than 1 percentage point;
    - local MPJPE regression no more than 3 mm or 10%, whichever is larger;
    - left/right hand endpoint RMSE regression no more than 5 mm in off mode.
-4. Enabled/no-contact endpoint metrics remain in the same range as off mode.
-5. Single-left, single-right, and simultaneous two-site force trials:
+5. Enabled/no-contact endpoint metrics remain in the same range as off mode.
+6. Single-left, single-right, and simultaneous two-site force trials:
    record force peaks, yielded displacement, endpoint RMSE, falls, and reset
    behavior; no NaN/Inf or persistent wrench is permitted.
-6. Confirm output directories contain no unintended caches, duplicate JSON, or
+7. Confirm output directories contain no unintended caches, duplicate JSON, or
    multi-GB debug logs.

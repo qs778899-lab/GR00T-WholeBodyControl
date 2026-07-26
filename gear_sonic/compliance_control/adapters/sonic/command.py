@@ -195,17 +195,36 @@ class MotionComplianceCommand(CommandTerm):
             writer_ids,
         )
 
-    def _clear_application_buffers(self, env_ids=None) -> None:
-        ids = self.state._env_ids_tensor(env_ids)
+    def _clear_application_buffers_prevalidated(self, ids: torch.Tensor) -> None:
         self._application_force_world[ids] = 0.0
         self._application_torque_world[ids] = 0.0
         self._application_force_body[ids] = 0.0
         self._application_torque_body[ids] = 0.0
 
+    def _clear_application_buffers_masked_prevalidated(
+        self,
+        row_mask: torch.Tensor,
+    ) -> None:
+        for tensor in (
+            self._application_force_world,
+            self._application_torque_world,
+            self._application_force_body,
+            self._application_torque_body,
+        ):
+            self.state._replace_masked_rows_prevalidated(
+                tensor,
+                torch.zeros_like(tensor),
+                row_mask,
+            )
+
+    def _clear_application_buffers(self, env_ids=None) -> None:
+        ids = self.state._env_ids_tensor(env_ids)
+        self._clear_application_buffers_prevalidated(ids)
+
     def clear_wrench(self, env_ids=None) -> None:
         ids = self.state._env_ids_tensor(env_ids)
-        self.state.clear_dynamic(ids)
-        self._clear_application_buffers(ids)
+        self.state._clear_dynamic_prevalidated(ids)
+        self._clear_application_buffers_prevalidated(ids)
 
     def _tracking_term(self):
         return self._env.command_manager.get_term(self.cfg.tracking_command_name)
@@ -328,18 +347,17 @@ class MotionComplianceCommand(CommandTerm):
             dim=-1,
         ).max(dim=-1).values
 
-    def _resample_command(self, env_ids: Sequence[int]) -> None:
-        ids = self.state._env_ids_tensor(env_ids)
+    def _resample_command(self, ids: torch.Tensor) -> None:
         if self.operational_enabled:
-            self.state.reset(ids)
+            self.state._resample_prevalidated(ids)
         else:
-            self.state.disable(ids)
-        self._clear_application_buffers(ids)
+            self.state._disable_prevalidated(ids)
+        self._clear_application_buffers_prevalidated(ids)
 
     def _resample(self, env_ids: Sequence[int] | torch.Tensor | slice) -> None:
         """Use only command-owned RNG and make host-off timing deterministic."""
 
-        ids = self.state._env_ids_tensor(env_ids)
+        ids = self.state._env_ids_tensor_prevalidated(env_ids)
         if ids.numel() == 0:
             return
         if self.operational_enabled:
@@ -351,6 +369,35 @@ class MotionComplianceCommand(CommandTerm):
             self.time_left[ids] = torch.finfo(self.time_left.dtype).max
         self._resample_command(ids)
         self.command_counter[ids] += 1
+
+    def _resample_masked_prevalidated(self, due_mask: torch.Tensor) -> None:
+        candidate_time_left = self.state.sample_resampling_time(
+            self.num_envs,
+            tuple(self.cfg.resampling_time_range),
+        )
+        self.time_left.copy_(torch.where(due_mask, candidate_time_left, self.time_left))
+        self.state._resample_masked_prevalidated(due_mask)
+        self._clear_application_buffers_masked_prevalidated(due_mask)
+        self.command_counter.copy_(
+            torch.where(
+                due_mask,
+                self.command_counter + 1,
+                self.command_counter,
+            )
+        )
+
+    def compute(self, dt: float) -> None:
+        """Update without IsaacLab's dynamic-shape due-ID compaction."""
+
+        self._update_metrics()
+        if not self.operational_enabled:
+            self.time_left.fill_(torch.finfo(self.time_left.dtype).max)
+            self._update_command()
+            return
+
+        self.time_left.sub_(dt)
+        self._resample_masked_prevalidated(self.time_left <= 0.0)
+        self._update_command()
 
     def _update_command(self) -> None:
         if not self.operational_enabled:

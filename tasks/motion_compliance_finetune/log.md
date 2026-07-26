@@ -271,3 +271,41 @@
   exactly zero, enabled freshness reward `1.0`, and exact shared total reward.
 - Phase 3 is again `PASSED`; `current_phase` advances to 4, which remains
   `PENDING`.  No Phase-4 implementation or test was executed.
+
+## 2026-07-27 — Phase 3 reopened for CUDA synchronization regression
+
+- A Phase-4 readiness review found that the inherited IsaacLab command loop
+  compacted `(time_left <= 0).nonzero()` every policy step and that the due-ID
+  resample path re-entered public range checks.  On CUDA, these dynamic-index
+  and Python truth operations force device-to-host synchronization.
+- Public state APIs retain full shape/range validation and now resolve IDs
+  exactly once.  The command overrides `compute(dt)` and, while enabled,
+  samples fixed-shape all-environment candidates before selecting due state,
+  timer, wrench-buffer, and counter rows with a boolean mask.  It never creates
+  a dynamic due-ID tensor; host-off remains stable and consumes no RNG.
+- A follow-up trace review also found data-dependent `nonzero()` compaction in
+  the core site's at-least-one fallback.  Site sampling now uses fixed-shape
+  random scores, an `argmax` fallback mask, and `torch.where`; it consumes a
+  fixed number of owned-generator draws and dispatches no internal `nonzero`.
+- The independent source review found no remaining P0/P1 issue.  A final pure
+  command-owned regression directly invokes `_resample_masked_prevalidated`
+  through a minimal non-Isaac command instance and proves timer, all four
+  application buffers, counter, and state preserve every non-due row bitwise,
+  reset/increment due rows, and consume the same owned RNG for different masks.
+- The final pure matrix passed with `64 passed, 1 skipped in 3.76s`; it also
+  covers fixed-shape fallback sampling, public validation count, and source
+  guards against inherited/dynamic-ID compute.
+- The parent thread's frozen-code Phase-2 rerun exited 0 in 23.02 seconds:
+  bound `command.compute(dt)` passed both dispatch and CPU/CUDA profiler guards,
+  disabled peak was `0.0 N`, forced site/composer peaks were
+  `8.3204117/8.3204098 N`, and RNG neutrality/reset clearing passed.
+- The parent thread's frozen-code Phase-3 rerun exited 0 in 13.73 seconds with
+  policy/critic widths `933/1657`, tokenizer shapes `[1,10,58]/[1,10,6]`, exact
+  zero off rewards, freshness reward `1.0`, and exact shared total reward.
+- The cost of fixed-shape candidate sampling at 4096 environments remains an
+  explicit Phase-4/6 performance measurement; no algorithm change is justified
+  before those timing and memory measurements.  The temporary NVIDIA 580.159
+  compatibility environment is working, not a current blocker, but must be
+  revalidated after a machine restart.
+- Phase 3 returns to `PASSED` and `current_phase` advances to 4.  The isolated
+  Phase-4 work was not mixed into this regression fix.

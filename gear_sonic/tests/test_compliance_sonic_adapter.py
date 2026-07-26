@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 import inspect
 import math
 from pathlib import Path
+import sys
+import types
+from types import SimpleNamespace
 
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
@@ -273,6 +277,268 @@ def test_command_owned_sampling_never_advances_global_rng(device):
     owned_before_disable = first.generator.get_state()
     first.disable()
     assert torch.equal(first.generator.get_state(), owned_before_disable)
+
+
+def test_prevalidated_resample_path_does_not_reenter_checked_id_resolution():
+    state = ComplianceCommandState(
+        4,
+        2,
+        3,
+        ComplianceSamplingSpec(enable_probability=1.0),
+        seed=23,
+    )
+    ids = torch.tensor([1, 3])
+
+    def checked_resolution_is_forbidden(*args, **kwargs):
+        raise AssertionError("prevalidated path re-entered checked ID resolution")
+
+    state._env_ids_tensor = checked_resolution_is_forbidden
+    state._resample_prevalidated(ids)
+    assert state.enabled[ids].all()
+    state._disable_prevalidated(ids)
+    assert not state.enabled[ids].any()
+
+
+@pytest.mark.parametrize("operation_name", ["clear_dynamic", "disable", "resample", "reset"])
+def test_public_state_operations_validate_env_ids_exactly_once(operation_name):
+    state = ComplianceCommandState(
+        4,
+        2,
+        3,
+        ComplianceSamplingSpec(enable_probability=1.0),
+        seed=29,
+    )
+    original_resolver = state._env_ids_tensor
+    resolved_inputs = []
+
+    def counting_resolver(env_ids):
+        resolved_inputs.append(env_ids)
+        return original_resolver(env_ids)
+
+    state._env_ids_tensor = counting_resolver
+    ids = torch.tensor([0, 2])
+    getattr(state, operation_name)(ids)
+    assert len(resolved_inputs) == 1
+    assert resolved_inputs[0] is ids
+
+
+def test_fixed_shape_masked_resample_updates_only_due_rows_with_fixed_rng_cost():
+    sampling = ComplianceSamplingSpec(
+        enable_probability=1.0,
+        site_activation_probability=0.0,
+    )
+    due_state = ComplianceCommandState(4, 2, 3, sampling, seed=31)
+    idle_state = ComplianceCommandState(4, 2, 3, sampling, seed=31)
+    due_mask = torch.tensor([False, True, False, True])
+    idle_mask = torch.zeros(4, dtype=torch.bool)
+
+    tracked_names = (
+        "enabled",
+        "active_site_mask",
+        "force_threshold_n",
+        "stiffness_n_per_m",
+        "_condition",
+        "reference_offset_common",
+        "original_reference_common",
+        "compliant_reference_common",
+        "current_reference_common",
+        "force_common_future",
+        "site_force_world",
+        "site_torque_world",
+        "anchor_force_world",
+        "anchor_torque_world",
+    )
+    for name in tracked_names:
+        tensor = getattr(due_state, name)
+        if tensor.dtype == torch.bool:
+            tensor.fill_(True)
+        else:
+            tensor.fill_(7.0)
+        getattr(idle_state, name).copy_(tensor)
+    before = {name: getattr(due_state, name).clone() for name in tracked_names}
+
+    due_state._resample_masked_prevalidated(due_mask)
+    idle_state._resample_masked_prevalidated(idle_mask)
+
+    for name in tracked_names:
+        torch.testing.assert_close(
+            getattr(due_state, name)[~due_mask],
+            before[name][~due_mask],
+            rtol=0.0,
+            atol=0.0,
+        )
+        torch.testing.assert_close(
+            getattr(idle_state, name),
+            before[name],
+            rtol=0.0,
+            atol=0.0,
+        )
+    for name in (
+        "original_reference_common",
+        "compliant_reference_common",
+        "current_reference_common",
+        "force_common_future",
+        "site_force_world",
+        "site_torque_world",
+        "anchor_force_world",
+        "anchor_torque_world",
+    ):
+        torch.testing.assert_close(
+            getattr(due_state, name)[due_mask],
+            torch.zeros_like(getattr(due_state, name)[due_mask]),
+            rtol=0.0,
+            atol=0.0,
+        )
+    assert due_state.enabled[due_mask].all()
+    assert due_state.active_site_mask[due_mask].sum(dim=-1).tolist() == [1, 1]
+    assert torch.equal(due_state.generator.get_state(), idle_state.generator.get_state())
+
+
+def test_command_masked_resample_preserves_non_due_rows_and_has_fixed_rng_cost(monkeypatch):
+    fake_isaaclab = types.ModuleType("isaaclab")
+    fake_isaaclab.__path__ = []
+    fake_assets = types.ModuleType("isaaclab.assets")
+    fake_managers = types.ModuleType("isaaclab.managers")
+    fake_assets.Articulation = type("Articulation", (), {})
+    fake_managers.CommandTerm = type("CommandTerm", (), {})
+    fake_isaaclab.assets = fake_assets
+    fake_isaaclab.managers = fake_managers
+    monkeypatch.setitem(sys.modules, "isaaclab", fake_isaaclab)
+    monkeypatch.setitem(sys.modules, "isaaclab.assets", fake_assets)
+    monkeypatch.setitem(sys.modules, "isaaclab.managers", fake_managers)
+
+    module_name = "gear_sonic.compliance_control.adapters.sonic._command_pure_test"
+    command_path = COMPLIANCE_PACKAGE / "adapters/sonic/command.py"
+    spec = importlib.util.spec_from_file_location(module_name, command_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, module_name, module)
+    spec.loader.exec_module(module)
+
+    def make_command(seed):
+        command = object.__new__(module.MotionComplianceCommand)
+        command.num_envs = 4
+        command.cfg = SimpleNamespace(resampling_time_range=(2.0, 3.0))
+        command.state = ComplianceCommandState(
+            4,
+            2,
+            3,
+            ComplianceSamplingSpec(
+                enable_probability=1.0,
+                site_activation_probability=0.0,
+            ),
+            seed=seed,
+        )
+        for name in (
+            "enabled",
+            "active_site_mask",
+            "force_threshold_n",
+            "stiffness_n_per_m",
+            "_condition",
+            "reference_offset_common",
+            "original_reference_common",
+            "compliant_reference_common",
+            "current_reference_common",
+            "force_common_future",
+            "site_force_world",
+            "site_torque_world",
+            "anchor_force_world",
+            "anchor_torque_world",
+        ):
+            tensor = getattr(command.state, name)
+            tensor.fill_(True if tensor.dtype == torch.bool else 7.0)
+        command.time_left = torch.tensor([11.0, 12.0, 13.0, 14.0])
+        command.command_counter = torch.tensor([3, 4, 5, 6], dtype=torch.long)
+        application_shape = (4, 3, 3)
+        command._application_force_world = torch.full(application_shape, 21.0)
+        command._application_torque_world = torch.full(application_shape, 22.0)
+        command._application_force_body = torch.full(application_shape, 23.0)
+        command._application_torque_body = torch.full(application_shape, 24.0)
+        return command
+
+    mixed = make_command(seed=37)
+    alternate = make_command(seed=37)
+    due_mask = torch.tensor([True, False, True, False])
+    alternate_due_mask = ~due_mask
+    state_names = (
+        "enabled",
+        "active_site_mask",
+        "force_threshold_n",
+        "stiffness_n_per_m",
+        "_condition",
+        "reference_offset_common",
+        "original_reference_common",
+        "compliant_reference_common",
+        "current_reference_common",
+        "force_common_future",
+        "site_force_world",
+        "site_torque_world",
+        "anchor_force_world",
+        "anchor_torque_world",
+    )
+    application_names = (
+        "_application_force_world",
+        "_application_torque_world",
+        "_application_force_body",
+        "_application_torque_body",
+    )
+    state_before = {name: getattr(mixed.state, name).clone() for name in state_names}
+    application_before = {
+        name: getattr(mixed, name).clone() for name in application_names
+    }
+    time_before = mixed.time_left.clone()
+    counter_before = mixed.command_counter.clone()
+
+    mixed._resample_masked_prevalidated(due_mask)
+    alternate._resample_masked_prevalidated(alternate_due_mask)
+
+    torch.testing.assert_close(mixed.time_left[~due_mask], time_before[~due_mask])
+    assert ((mixed.time_left[due_mask] >= 2.0) & (mixed.time_left[due_mask] <= 3.0)).all()
+    torch.testing.assert_close(
+        mixed.command_counter,
+        counter_before + due_mask.to(torch.long),
+        rtol=0.0,
+        atol=0.0,
+    )
+    for name in application_names:
+        actual = getattr(mixed, name)
+        torch.testing.assert_close(
+            actual[~due_mask],
+            application_before[name][~due_mask],
+            rtol=0.0,
+            atol=0.0,
+        )
+        torch.testing.assert_close(
+            actual[due_mask],
+            torch.zeros_like(actual[due_mask]),
+            rtol=0.0,
+            atol=0.0,
+        )
+    for name in state_names:
+        torch.testing.assert_close(
+            getattr(mixed.state, name)[~due_mask],
+            state_before[name][~due_mask],
+            rtol=0.0,
+            atol=0.0,
+        )
+    for name in (
+        "original_reference_common",
+        "compliant_reference_common",
+        "current_reference_common",
+        "force_common_future",
+        "site_force_world",
+        "site_torque_world",
+        "anchor_force_world",
+        "anchor_torque_world",
+    ):
+        actual = getattr(mixed.state, name)[due_mask]
+        torch.testing.assert_close(actual, torch.zeros_like(actual), rtol=0.0, atol=0.0)
+    assert mixed.state.enabled[due_mask].all()
+    assert mixed.state.active_site_mask[due_mask].sum(dim=-1).tolist() == [1, 1]
+    assert torch.equal(
+        mixed.state.generator.get_state(),
+        alternate.state.generator.get_state(),
+    )
 
 
 def test_independent_sampling_supports_simultaneous_single_and_disabled_masks():
@@ -620,8 +886,37 @@ def test_simulator_hot_path_uses_internal_no_sync_functions_and_cached_condition
     )
     resample_source = ast.get_source_segment(command_source, resample_node)
     assert "sample_resampling_time" in resample_source
+    assert "_env_ids_tensor_prevalidated" in resample_source
+    assert "_env_ids_tensor(" not in resample_source
     assert "torch.rand" not in resample_source
     assert ".uniform_" not in resample_source
+
+    resample_command_node = next(
+        node
+        for node in ast.walk(command_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_resample_command"
+    )
+    resample_command_source = ast.get_source_segment(command_source, resample_command_node)
+    assert "_resample_prevalidated" in resample_command_source
+    assert "_disable_prevalidated" in resample_command_source
+    assert "_env_ids_tensor" not in resample_command_source
+
+    compute_node = next(
+        node
+        for node in ast.walk(command_tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "compute"
+    )
+    compute_source = ast.get_source_segment(command_source, compute_node)
+    assert "_resample_masked_prevalidated" in compute_source
+    assert "self.time_left <= 0.0" in compute_source
+    assert ".nonzero(" not in compute_source
+    assert "super().compute" not in compute_source
+
+    masked_resample_source = inspect.getsource(
+        ComplianceCommandState._resample_masked_prevalidated
+    )
+    assert ".nonzero(" not in masked_resample_source
+    assert "_env_ids_tensor" not in masked_resample_source
 
     switch_source = inspect.getsource(transition_compliance_operational_state)
     assert switch_source.index("command._resample(slice(None))") < switch_source.rindex(

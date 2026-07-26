@@ -46,7 +46,11 @@ its tensors for the next physics loop.  No additional interval event exists,
 so the release interval-event names, ranges, order, and global RNG sequence stay
 unchanged.  Static configuration is validated at construction/resampling
 boundaries; private adapter-only unchecked tensor kernels avoid CUDA scalar
-extraction in the per-step command path.  Environment reset clears every
+extraction in the per-step command path.  Public state operations validate
+caller-supplied IDs exactly once.  The adapter overrides inherited command
+`compute(dt)` to avoid dynamic due-ID compaction altogether: while enabled it
+samples fixed-shape all-environment candidates and selects due rows in state,
+timer, wrench buffers, and counter with a boolean mask.  Environment reset clears every
 dynamic command tensor and the composer, so a previous episode cannot leak a
 wrench.  A full-environment reset while host-disabled releases the global dirty
 ownership flag; partial or active reset retains it for environments that may
@@ -81,4 +85,8 @@ bit.  It then enables the command and forces probability one/all sites for
 another 100 steps.  It checks returned and command/composer tensors for
 finiteness, requires nonzero applied force, and verifies reset clears force and
 torque in both command and composer buffers.  The enabled-to-disabled setter is
-also checked to clear the real composer immediately, before another step.
+also checked to clear the real composer immediately, before another step.  The
+smoke additionally forces the real timer due and audits the complete bound
+`command.compute(dt)` call with both `TorchDispatchMode` and the CPU/CUDA
+profiler; either trace containing `aten::_local_scalar_dense` or
+`aten::nonzero` fails.

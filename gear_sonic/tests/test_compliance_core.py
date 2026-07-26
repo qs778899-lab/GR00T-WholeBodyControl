@@ -371,6 +371,32 @@ def test_event_schedule_and_site_sampling_are_generic():
     assert not site_mask[2].any()
 
 
+def test_site_sampling_uses_fixed_shape_without_data_dependent_cuda_indices():
+    source = inspect.getsource(sample_site_mask)
+    assert ".nonzero(" not in source
+    assert ".item(" not in source
+
+    enabled = torch.tensor([True, True, False])
+    missing_generator = torch.Generator().manual_seed(41)
+    full_generator = torch.Generator().manual_seed(41)
+    missing_mask = sample_site_mask(
+        enabled,
+        num_sites=5,
+        site_activation_probability=0.0,
+        generator=missing_generator,
+    )
+    full_mask = sample_site_mask(
+        enabled,
+        num_sites=5,
+        site_activation_probability=1.0,
+        generator=full_generator,
+    )
+
+    assert missing_mask[:2].sum(dim=-1).tolist() == [1, 1]
+    assert full_mask[:2].all()
+    assert torch.equal(missing_generator.get_state(), full_generator.get_state())
+
+
 def test_metrics_hard_gate_and_detect_inactive_candidate_reference_pollution():
     original = torch.zeros((1, 2, 4, 3))
     compliant = original.clone()

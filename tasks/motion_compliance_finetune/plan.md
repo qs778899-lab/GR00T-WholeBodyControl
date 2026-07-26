@@ -91,6 +91,10 @@ Baseline: NVLabs upstream `main` at
   contracts outside the CUDA hot path and use adapter-private no-sync kernels
   only after that validation boundary.  Disabled reset/compute must not consume
   global CPU/CUDA RNG; enabled durations and state use a command-owned generator.
+  Override the inherited command `compute(dt)` so this added command does not
+  compact a dynamic due-ID tensor.  Enabled updates sample fixed-shape
+  all-environment candidates and select due rows with a boolean mask; public
+  index APIs retain checked validation.
 - Default physical sites are resolved by body name in the SONIC adapter; the
   core remains site-count agnostic and the configuration supports more sites
   without changing the policy contract.
@@ -102,6 +106,8 @@ Baseline: NVLabs upstream `main` at
 - Validate the real lifecycle in one headless CUDA environment: 100 disabled
   policy steps with an inactive composer, 100 forced-on/all-site policy steps,
   finite state/composer checks, and an explicit stale-wrench reset assertion.
+  Trace the actual bound `command.compute(dt)` with both Torch dispatch and the
+  CPU/CUDA profiler and reject `aten::_local_scalar_dense` and `aten::nonzero`.
 
 ### Phase 3 — Observation, reward, and experiment composition
 
@@ -141,6 +147,9 @@ Baseline: NVLabs upstream `main` at
   migration smoke; never mutate the source asset.
 - Add staged finetuning controls: initially freeze the robot-motion encoder and
   quantizer, train the dynamic decoder/critic, then optionally unfreeze.
+- During the prescribed 16-environment/5-iteration smoke, separately record the
+  fixed-shape all-environment candidate scheduler cost; keep the
+  synchronization-safe algorithm unchanged until it has measured evidence.
 
 ### Phase 5 — Export and deployment switch
 
@@ -158,9 +167,15 @@ Baseline: NVLabs upstream `main` at
 - Run single- and simultaneous-site compliant-force evaluation.
 - Record endpoint RMSE/P95, orientation error, MPJPE, success rate, force peak,
   yielded displacement, throughput, and memory.
+- Add a 4096-environment performance characterization for the fixed-shape
+  compliance candidate scheduler, including policy-step time and GPU memory
+  against host-off/baseline.  This is a measured Phase-4/6 performance item,
+  not a reason to reintroduce dynamic CUDA due-ID compaction.
 - Mark complete only if all phase-6 acceptance criteria in `test_matrix.md`
   pass or any difference has a documented explanation.
 - The prescribed low-resource smoke uses the `sonic_backup` environment, one
   audited robot PKL plus `sample_data/smpl_filtered`, 16 environments, 5
-  iterations, and `use_wandb=false`.  Record the current NVIDIA kernel/user-space
-  driver mismatch as an external blocker until GPU execution is available.
+  iterations, and `use_wandb=false`.  CUDA is currently usable through the
+  temporary NVIDIA 580.159 user-space compatibility libraries used by the real
+  Phase-2/3 smokes, so the old driver mismatch is not a current blocker.  Pin
+  that environment for every real test and revalidate it after a machine restart.

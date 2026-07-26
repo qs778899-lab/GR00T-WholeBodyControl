@@ -59,19 +59,14 @@ def sample_site_mask(
     if not 0.0 <= site_activation_probability <= 1.0:
         raise ValueError("site_activation_probability must be within [0, 1]")
 
-    sampled = torch.rand(
+    random_scores = torch.rand(
         (enabled.shape[0], num_sites), device=enabled.device, generator=generator
-    ) < site_activation_probability
+    )
+    sampled = random_scores < site_activation_probability
     sampled &= enabled_mask.unsqueeze(-1)
 
     missing = enabled_mask & ~sampled.any(dim=-1)
-    missing_rows = missing.nonzero(as_tuple=False).flatten()
-    if missing_rows.numel() > 0:
-        selected_sites = torch.randint(
-            num_sites,
-            (missing_rows.numel(),),
-            device=enabled.device,
-            generator=generator,
-        )
-        sampled[missing_rows, selected_sites] = True
-    return sampled
+    fallback_site = random_scores.argmax(dim=-1, keepdim=True)
+    fallback_mask = torch.arange(num_sites, device=enabled.device).reshape(1, -1)
+    fallback_mask = fallback_mask == fallback_site
+    return torch.where(missing.unsqueeze(-1), fallback_mask, sampled)

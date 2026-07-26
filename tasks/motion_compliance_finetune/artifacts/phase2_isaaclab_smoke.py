@@ -145,6 +145,57 @@ def _assert_disabled_rng_neutral(command: Any, env: Any, torch_module: Any) -> N
     torch_module.testing.assert_close(actual_cuda, expected_cuda, rtol=0.0, atol=0.0)
 
 
+def _assert_command_compute_has_no_internal_sync_ops(
+    command: Any,
+    torch_module: Any,
+) -> None:
+    """Audit the complete added CUDA command compute path with two traces."""
+
+    from torch.utils._python_dispatch import TorchDispatchMode
+
+    class OperationRecorder(TorchDispatchMode):
+        def __init__(self):
+            super().__init__()
+            self.operations = set()
+
+        def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+            self.operations.add(str(func))
+            return func(*args, **(kwargs or {}))
+
+    command.operational_enabled = True
+    command.time_left.zero_()
+    recorder = OperationRecorder()
+    with recorder:
+        command.compute(dt=0.02)
+
+    command.time_left.zero_()
+    activities = [
+        torch_module.profiler.ProfilerActivity.CPU,
+        torch_module.profiler.ProfilerActivity.CUDA,
+    ]
+    with torch_module.profiler.profile(activities=activities) as profiler:
+        command.compute(dt=0.02)
+    torch_module.cuda.synchronize(command.device)
+    command.set_operational_enabled(False)
+
+    synchronization_tokens = ("local_scalar", "nonzero")
+    dispatch_sync_ops = sorted(
+        operation
+        for operation in recorder.operations
+        if any(token in operation for token in synchronization_tokens)
+    )
+    profiler_sync_ops = sorted(
+        event.key
+        for event in profiler.key_averages()
+        if any(token in event.key for token in synchronization_tokens)
+    )
+    if dispatch_sync_ops or profiler_sync_ops:
+        raise AssertionError(
+            "CUDA command compute dispatched a host-synchronizing operation: "
+            f"dispatch={dispatch_sync_ops}, profiler={profiler_sync_ops}"
+        )
+
+
 def _run() -> None:
     args = _parse_args()
     _stage("before_app_launcher")
@@ -183,7 +234,7 @@ def _run() -> None:
             raise AssertionError("operationally disabled adapter activated the composer at reset")
         _assert_disabled_rng_neutral(command, env, torch)
         if composer.active:
-            raise AssertionError("disabled RNG check activated the composer")
+            raise AssertionError("disabled RNG lifecycle audit activated the composer")
         action = torch.zeros(
             (env.num_envs, env.action_manager.total_action_dim),
             dtype=torch.float32,
@@ -211,6 +262,12 @@ def _run() -> None:
                 if composer.active:
                     raise AssertionError("disabled adapter touched/activated the composer")
             _stage("disabled_100_complete")
+
+            _assert_command_compute_has_no_internal_sync_ops(command, torch)
+            if torch.count_nonzero(composer.composed_force_as_torch).item() != 0:
+                raise AssertionError("compute trace left force in the PhysX composer")
+            if torch.count_nonzero(composer.composed_torque_as_torch).item() != 0:
+                raise AssertionError("compute trace left torque in the PhysX composer")
 
             command.state.sampling = replace(
                 command.state.sampling,
@@ -283,6 +340,8 @@ def _run() -> None:
                     "composer_api": "permanent_wrench_composer",
                     "disabled_peak_force_n": disabled_peak,
                     "disabled_rng_neutral": True,
+                    "command_compute_host_scalar_free": True,
+                    "command_compute_internal_nonzero_free": True,
                     "disabled_composer_active": False,
                     "disabled_steps": args.steps_per_mode,
                     "forced_composer_peak_force_n": composer_peak,
