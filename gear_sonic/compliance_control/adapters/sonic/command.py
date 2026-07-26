@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from isaaclab.assets import Articulation
@@ -31,6 +32,20 @@ def _articulation_body_data(robot: Articulation, field: str) -> torch.Tensor:
         if hasattr(robot.data, candidate):
             return getattr(robot.data, candidate)
     raise AttributeError(f"articulation data has no world body {field} field")
+
+
+@dataclass(frozen=True)
+class SiteTrackingState:
+    """Current-anchor site state plus world data needed for wrench reconstruction."""
+
+    original_reference_common: torch.Tensor
+    compliant_reference_common: torch.Tensor
+    current_reference_common: torch.Tensor
+    site_body_position_world: torch.Tensor
+    site_offset_world: torch.Tensor
+    site_quaternion_world: torch.Tensor
+    anchor_position_world: torch.Tensor
+    anchor_quaternion_world: torch.Tensor
 
 
 class MotionComplianceCommand(CommandTerm):
@@ -108,6 +123,19 @@ class MotionComplianceCommand(CommandTerm):
             self.num_envs,
             device=self.device,
         )
+        for body_name in self.cfg.site_body_names:
+            self.metrics[f"endpoint_selected_position_error_m_{body_name}"] = torch.zeros(
+                self.num_envs,
+                device=self.device,
+            )
+            self.metrics[f"endpoint_original_position_error_m_{body_name}"] = torch.zeros(
+                self.num_envs,
+                device=self.device,
+            )
+            self.metrics[f"endpoint_orientation_error_rad_{body_name}"] = torch.zeros(
+                self.num_envs,
+                device=self.device,
+            )
 
     @property
     def command(self) -> torch.Tensor:
@@ -235,6 +263,65 @@ class MotionComplianceCommand(CommandTerm):
             quaternion[:, anchor_id],
         )
 
+    def _site_tracking_state(self) -> SiteTrackingState:
+        original_world = self._reference_world_state()
+        (
+            site_body_world,
+            site_point_world,
+            site_offset_world,
+            site_quaternion_world,
+            anchor_position_world,
+            anchor_quaternion_world,
+        ) = self._articulation_world_state()
+        original_common = _world_to_common_positions_unchecked(
+            original_world,
+            anchor_position_world[:, None, None, :],
+            anchor_quaternion_world[:, None, None, :],
+        )
+        current_common = _world_to_common_positions_unchecked(
+            site_point_world,
+            anchor_position_world[:, None, :],
+            anchor_quaternion_world[:, None, :],
+        )
+        compliant_common = original_common + self.state.reference_offset_common[:, None]
+        return SiteTrackingState(
+            original_reference_common=original_common,
+            compliant_reference_common=compliant_common,
+            current_reference_common=current_common,
+            site_body_position_world=site_body_world,
+            site_offset_world=site_offset_world,
+            site_quaternion_world=site_quaternion_world,
+            anchor_position_world=anchor_position_world,
+            anchor_quaternion_world=anchor_quaternion_world,
+        )
+
+    def _cache_site_tracking_state(self, site_state: SiteTrackingState) -> None:
+        self.state.original_reference_common.copy_(site_state.original_reference_common)
+        self.state.compliant_reference_common.copy_(site_state.compliant_reference_common)
+        self.state.current_reference_common.copy_(site_state.current_reference_common)
+
+    def record_endpoint_errors(
+        self,
+        selected_position_error_m: torch.Tensor | None = None,
+        original_position_error_m: torch.Tensor | None = None,
+        orientation_error_rad: torch.Tensor | None = None,
+    ) -> None:
+        """Keep independently reportable metrics in configured site order."""
+
+        for site_index, body_name in enumerate(self.cfg.site_body_names):
+            if selected_position_error_m is not None:
+                self.metrics[f"endpoint_selected_position_error_m_{body_name}"].copy_(
+                    selected_position_error_m[:, site_index]
+                )
+            if original_position_error_m is not None:
+                self.metrics[f"endpoint_original_position_error_m_{body_name}"].copy_(
+                    original_position_error_m[:, site_index]
+                )
+            if orientation_error_rad is not None:
+                self.metrics[f"endpoint_orientation_error_rad_{body_name}"].copy_(
+                    orientation_error_rad[:, site_index]
+                )
+
     def _update_metrics(self) -> None:
         if not self.operational_enabled:
             self.metrics["active_site_fraction"].zero_()
@@ -259,35 +346,13 @@ class MotionComplianceCommand(CommandTerm):
             if self._wrench_dirty:
                 self.clear_wrench()
             return
-        original_world = self._reference_world_state()
-        (
-            site_body_world,
-            site_point_world,
-            site_offset_world,
-            site_quaternion_world,
-            anchor_position_world,
-            anchor_quaternion_world,
-        ) = self._articulation_world_state()
-
-        frame_origin_future = anchor_position_world[:, None, None, :]
-        frame_quaternion_future = anchor_quaternion_world[:, None, None, :]
-        original_common = _world_to_common_positions_unchecked(
-            original_world,
-            frame_origin_future,
-            frame_quaternion_future,
-        )
-        current_common = _world_to_common_positions_unchecked(
-            site_point_world,
-            anchor_position_world[:, None, :],
-            anchor_quaternion_world[:, None, :],
-        )
-        compliant_common = original_common + self.state.reference_offset_common[:, None]
+        site_state = self._site_tracking_state()
         force_common_future = _virtual_force_from_reference_delta_unchecked(
-            original_common,
-            compliant_common,
+            site_state.original_reference_common,
+            site_state.compliant_reference_common,
             self.state.active_site_mask,
             self.state.force_threshold_n,
-            current_reference=current_common,
+            current_reference=site_state.current_reference_common,
             reference_displacement_m=self.cfg.reference_displacement_m,
             tracking_gain_n_per_m=self.cfg.tracking_gain_n_per_m,
             tracking_force_cap_n=self.cfg.tracking_force_cap_n,
@@ -295,19 +360,21 @@ class MotionComplianceCommand(CommandTerm):
         )
         site_force_world = _common_to_world_vectors_unchecked(
             force_common_future[:, 0],
-            anchor_quaternion_world[:, None, :],
+            site_state.anchor_quaternion_world[:, None, :],
         )
-        site_torque_world = torch.cross(site_offset_world, site_force_world, dim=-1)
+        site_torque_world = torch.cross(
+            site_state.site_offset_world,
+            site_force_world,
+            dim=-1,
+        )
         limited = self.wrench_limiter._limit_unchecked(
-            site_body_world,
-            anchor_position_world,
+            site_state.site_body_position_world,
+            site_state.anchor_position_world,
             site_force_world,
             site_torque_world,
         )
 
-        self.state.original_reference_common.copy_(original_common)
-        self.state.compliant_reference_common.copy_(compliant_common)
-        self.state.current_reference_common.copy_(current_common)
+        self._cache_site_tracking_state(site_state)
         self.state.force_common_future.copy_(force_common_future)
         self.state.site_force_world.copy_(limited.site_force_world)
         self.state.site_torque_world.copy_(limited.site_torque_world)
@@ -318,7 +385,10 @@ class MotionComplianceCommand(CommandTerm):
         self._application_torque_world[:, :-1] = limited.site_torque_world
         self._application_torque_world[:, -1] = limited.anchor_torque_world
         application_quaternion_world = torch.cat(
-            (site_quaternion_world, anchor_quaternion_world[:, None]),
+            (
+                site_state.site_quaternion_world,
+                site_state.anchor_quaternion_world[:, None],
+            ),
             dim=1,
         )
         self._application_force_body.copy_(

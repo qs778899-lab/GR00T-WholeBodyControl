@@ -181,3 +181,62 @@
 - Final source/cached diff checks and repository cache hygiene passed.  Phase 2
   is `PASSED`; `current_phase` advances to 3.  No Phase-3 implementation or
   test was executed.
+
+## 2026-07-27 — Phase 3 started
+
+- Confirmed `current_phase=3` and kept Phase 4 checkpoint/training work and
+  Phase 5 deployment outside this phase.
+- Audited the released encoder contract: G1 still consumes only `[10,58]`
+  joint-position/velocity data and `[10,6]` anchor orientation.  The complete
+  resolved tokenizer subtree is identical in the opt-in composition.
+- Added thin observation/reward manager adapters plus IsaacLab-free tensor
+  contracts.  Actor state is public condition only; configurable-site force,
+  mask, and raw threshold remain critic-only.
+- Factored the Phase-2 current-anchor reference calculation into one reusable
+  state reader.  Control caches it during command update; rewards invoke it
+  locally at reward time and never mutate command-owned cache or force state.
+  A full Phase-2 GPU smoke rerun passed after this compatibility refactor.
+- Added future-zero selected-target position reward, original orientation
+  reward, and independent per-site selected/original/orientation errors.  New
+  rewards are sampled-enable gated, so all off environments add exact zero.
+- Preserved all release dense rewards and the inline `feet_acc=-2.5e-6` weight;
+  selected endpoint position uses `weight=2.0,std=0.1` and orientation uses
+  `weight=0.5,std=0.4` pending later metric-driven tuning.
+- Preliminary combined pure tests passed: `54 passed in 3.52s`.  The real
+  Phase-3 one-environment smoke resolved policy/critic widths `933/1657`, G1
+  tokenizer shapes `[10,58]/[10,6]`, both hard-off rewards `0.0`, and bitwise
+  original target selection.  Final matrix/staged-diff hygiene remains pending.
+
+## 2026-07-27 — Phase 3 review fixes and final validation
+
+- Independent review caught that IsaacLab evaluates rewards before the next
+  command update.  The first enabled implementation therefore consumed a
+  one-physics-step-old endpoint cache.  The production reward now recomputes
+  current articulation/reference state locally, uses future frame zero, and
+  leaves the command cache and wrench state untouched.  A stale-cache unit
+  regression and a real-command enabled smoke both cover this lifecycle.
+- Replaced arithmetic enable gating with a boolean `torch.where` hard gate and
+  mask disabled errors before the Gaussian.  Disabled environments now return
+  exact zero even when their unused error tensor contains NaN.
+- Final combined pure matrix exited 0 with `54 passed in 3.46s`.  It also proves
+  complete tokenizer and termination subtree equality, release dense-reward
+  config equality, dynamic 1/2/5-site critic widths, actor privilege isolation,
+  inactive-site bitwise reference preservation, and original-only orientation.
+- The final Phase-2 real regression exited 0 after 100 disabled plus 100 forced
+  steps: disabled peak `0.0 N`, forced site/composer peaks
+  `8.3204117/8.3204098 N`, and `reset_zero=true`.
+- The final Phase-3 real smoke exited 0 in 13.93 seconds.  It resolved actual
+  policy/critic shapes `[1,933]/[1,1657]`, G1 tensors
+  `[1,10,58]/[1,10,6]`, independently reconstructed the tracking future-zero
+  reference, returned both hard-off rewards as `0.0`, and proved
+  `shared_total_reward_exact=true`.  With the real command's prior cache
+  poisoned, its enabled production position reward was exactly `1.0`; reward
+  evaluation changed neither the poisoned cache nor any wrench buffer.
+- IsaacSim's platform/NVML messages remained non-fatal; both GPU smokes used
+  the required NVIDIA 580.159 compatibility libraries and audited official
+  sample.  Phase 3 is `PASSED`; `current_phase` advances to 4, but no Phase-4
+  implementation or test was executed.
+- Final source and cached `diff --check` passed.  Exactly 23 Phase-3 files are
+  staged with no unstaged changes or repository-local Python/pytest caches;
+  the released `sonic_release.yaml` remains absent from the diff.  No commit or
+  push was performed in this phase.

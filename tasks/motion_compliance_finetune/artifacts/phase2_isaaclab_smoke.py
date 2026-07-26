@@ -66,7 +66,13 @@ def _assert_command_finite(command: Any, torch_module: Any) -> None:
     _assert_finite_tree(command.application_torque_body, torch_module, "application_torque_body")
 
 
-def _compose_config(repo_root: Path, asset_root: Path):
+def _compose_config(
+    repo_root: Path,
+    asset_root: Path,
+    *,
+    experiment_name: str = "sonic_release",
+    experiment_dir: str = "/tmp/motion_compliance_phase2_smoke",
+):
     from hydra import compose, initialize_config_dir
     from omegaconf import open_dict
 
@@ -82,13 +88,13 @@ def _compose_config(repo_root: Path, asset_root: Path):
     register_rl_resolvers()
     config_dir = str((repo_root / "gear_sonic/config").resolve())
     overrides = [
-        "+exp=manager/universal_token/all_modes/sonic_release",
+        f"+exp=manager/universal_token/all_modes/{experiment_name}",
         "manager_env/commands=tracking/motion_compliance",
         "manager_env/events=tracking/motion_compliance",
         "num_envs=1",
         "headless=true",
         "seed=0",
-        "experiment_dir=/tmp/motion_compliance_phase2_smoke",
+        f"experiment_dir={experiment_dir}",
         "manager_env.config.episode_length_s=100.0",
         "manager_env.commands.motion.debug_vis=false",
         "manager_env.commands.motion.motion_lib_cfg.multi_thread=false",

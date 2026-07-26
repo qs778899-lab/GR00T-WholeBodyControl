@@ -1,0 +1,7 @@
+tracking_compliant_endpoint_pos:
+  _target_: isaaclab.managers.RewardTermCfg
+  func: gear_sonic.compliance_control.adapters.sonic.mdp:tracking_compliant_endpoint_position
+  weight: 2.0
+  params:
+    command_name: motion_compliance
+    std: 0.1

@@ -1,0 +1,5 @@
+motion_compliance_threshold:
+  _target_: isaaclab.managers.ObservationTermCfg
+  func: gear_sonic.compliance_control.adapters.sonic.mdp:motion_compliance_threshold
+  params:
+    command_name: motion_compliance

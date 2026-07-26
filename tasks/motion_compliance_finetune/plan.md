@@ -102,14 +102,25 @@ Baseline: NVLabs upstream `main` at
 
 ### Phase 3 — Observation, reward, and experiment composition
 
-- Add the 3D public compliance condition to policy proprioception and
-  threshold/force/site-mask state to the critic only.
-- Keep the robot-motion tokenizer inputs unchanged.
-- Add compliance-specific rewards that use yielded targets only at active
-  interaction sites; retain original targets for every inactive site.
-- Add explicit upper-endpoint tracking metrics/rewards and an opt-in
-  `sonic_release_motion_compliance.yaml` experiment.
-- Verify off-mode config behavior against `sonic_release`.
+- Append the 3D public compliance condition to policy proprioception and expose
+  the same public condition plus raw threshold/current applied site force/site
+  mask to the critic.  Privileged widths follow the configured site count.
+- Keep the complete tokenizer subtree and robot-motion encoder term names,
+  shapes, order, functions, parameters, and noise unchanged.
+- Add a position reward that uses future frame zero and yielded targets only at
+  active sites, with current endpoint/reference tensors recomputed locally at
+  reward time to respect IsaacLab's reward-before-command-update lifecycle.
+  Inactive sites remain bitwise original.  Gate new rewards by the sampled
+  enable bit so every off environment adds exactly zero reward.
+- Keep orientation on the original reference because Phase 2 has no rotational
+  compliance.  Retain per-site selected-position, original-position, and
+  orientation errors so one-hand degradation is not hidden by a mean.
+- Preserve every released dense reward and add conservative endpoint terms at
+  the same scale: position `weight=2.0/std=0.1`, orientation
+  `weight=0.5/std=0.4`.
+- Add an opt-in `sonic_release_motion_compliance.yaml` experiment that defaults
+  physically off.  Verify resolved off-mode behavior against `sonic_release`
+  and in one real manager environment.
 
 ### Phase 4 — Released-checkpoint migration and finetune workflow
 

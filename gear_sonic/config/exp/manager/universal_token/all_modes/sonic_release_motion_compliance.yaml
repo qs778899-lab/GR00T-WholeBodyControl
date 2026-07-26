@@ -1,0 +1,18 @@
+# @package _global_
+# Pure opt-in extension of sonic_release; no released config is modified.
+
+defaults:
+  - /exp/manager/universal_token/all_modes/sonic_release
+  - override /manager_env/commands: tracking/motion_compliance
+  - override /manager_env/events: tracking/motion_compliance
+  - override /manager_env/observations/policy: local_dir_hist_motion_compliance
+  - override /manager_env/observations/critic: privileged_mf_hist_motion_compliance
+  - override /manager_env/rewards: tracking/base_5point_local_feet_acc_motion_compliance
+  - _self_
+
+exp_var: motion_compliance
+
+manager_env:
+  commands:
+    motion_compliance:
+      enabled: false

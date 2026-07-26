@@ -1,0 +1,7 @@
+tracking_endpoint_ori:
+  _target_: isaaclab.managers.RewardTermCfg
+  func: gear_sonic.compliance_control.adapters.sonic.mdp:tracking_endpoint_orientation
+  weight: 0.5
+  params:
+    command_name: motion_compliance
+    std: 0.4

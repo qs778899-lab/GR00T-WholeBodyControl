@@ -1,0 +1,5 @@
+motion_compliance_site_mask:
+  _target_: isaaclab.managers.ObservationTermCfg
+  func: gear_sonic.compliance_control.adapters.sonic.mdp:motion_compliance_site_mask
+  params:
+    command_name: motion_compliance

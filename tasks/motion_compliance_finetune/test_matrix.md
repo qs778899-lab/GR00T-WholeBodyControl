@@ -63,15 +63,46 @@ does not leave repository caches.
 
 ## Phase 3 — Observation, reward, and experiment composition
 
-1. Run all Phase-1 and Phase-2 tests.
-2. Hydra compose `sonic_release_motion_compliance` and inspect resolved groups.
-3. Assert robot-motion tokenizer term names and shapes equal `sonic_release`.
-4. Assert policy observation grows by exactly 3 and critic-only fields do not
-   enter actor observations.
-5. Off-mode reward/reference golden test: active-site mask is empty and every
-   original reference tensor is bitwise equal before/after adaptation.
-6. Active-site test: only selected endpoint targets yield; all inactive
-   reference targets remain bitwise equal.
+1. Run the combined Phase-1/2/3 pure suite:
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B -m pytest -p no:cacheprovider -q gear_sonic/tests/test_compliance_core.py gear_sonic/tests/test_compliance_sonic_adapter.py gear_sonic/tests/test_compliance_sonic_training.py`.
+2. Hydra-compose both `sonic_release` and
+   `sonic_release_motion_compliance`.  The resolved tokenizer subtree must be
+   fully equal, including keys, functions, parameters, and noise.  The G1 terms
+   remain `command_multi_future_nonflat [10,58]` and
+   `motion_anchor_ori_b_mf_nonflat [10,6]`, in that order.
+   The resolved termination subtree must also remain fully equal.
+3. Assert the policy group keeps all 930 released columns as a prefix and adds
+   only the final 3D public condition.  The critic adds the public condition,
+   scalar threshold, `3*S` current-frame applied site force, and `S` mask,
+   where `S` comes from command configuration; privileged fields must not enter
+   the actor.
+4. Off-mode golden: the active mask and condition are zero, selection preserves
+   every original reference bitwise, both new rewards contribute exactly zero,
+   all released dense reward configs remain equal, and the inline
+   `feet_acc.weight=-2.5e-6` override survives composition.  The hard gate must
+   still return exact zero when disabled errors contain NaN.
+5. Active-site test: future frame zero is aligned to current endpoint state,
+   only selected position targets yield, every inactive target remains bitwise
+   original, and per-site selected/original errors remain independently
+   reportable.  The reward must re-read current articulation/reference tensors
+   locally rather than consume the prior command-update cache.  Orientation
+   always uses original future-zero reference and is independently reportable
+   per site.
+6. Rerun the Phase-2 real 100-disabled/100-forced smoke after the command cache
+   refactor using the exact Phase-2 command above.
+7. Run the real Phase-3 resolved-shape/off-golden smoke:
+   `env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu LD_PRELOAD=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.580.159.03:/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libcuda.so.580.159.03 VK_ICD_FILENAMES=/tmp/nvidia_580_159_compat/extracted/usr/share/vulkan/icd.d/nvidia_icd.json PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase3_isaaclab_smoke.py`.
+   It must instantiate one real manager environment, observe policy/critic
+   shapes `[1,933]`/`[1,1657]` for the default two sites, preserve the two G1
+   tokenizer shapes, independently reconstruct the tracking command's
+   future-zero endpoint reference, return exact-zero new rewards while
+   host-disabled, and prove the manager total is bitwise equal to the sum of
+   released shared reward contributions.  Then set sampled enable/mask/offset
+   on the real command, poison its prior cache, and prove the production reward
+   re-reads current physics state without mutating cache or wrench buffers.
+8. `git diff --check` and, after staging only task-scoped Phase-3 files,
+   `git diff --cached --check`.
+9. Confirm no `__pycache__`, `.pytest_cache`, `.pyc`, or `.pyo` remains.
 
 ## Phase 4 — Checkpoint migration and finetune workflow
 
