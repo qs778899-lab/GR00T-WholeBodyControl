@@ -1,0 +1,53 @@
+{
+  "fixture_schema_version": "compliance.translation.mapping-fixture.v1",
+  "ir": {
+    "schema_version": "compliance.translation.v1",
+    "dtype": "float64",
+    "device": "cpu",
+    "units": {
+      "site_link_offset": "m",
+      "future_time_offset_s": "s",
+      "reference_timestamp_s": "s",
+      "sample_timestamp_s": "s",
+      "reference_target": "m",
+      "current_site": "m",
+      "compliance": "m/N",
+      "force_on_robot": "N"
+    },
+    "site_names": ["left_endpoint", "right_endpoint"],
+    "site_link_offset": [[0.05, 0.0, 0.0], [0.05, 0.0, 0.0]],
+    "link_offset_semantics": "link_origin_to_application_point_in_link_frame",
+    "force_semantics": "force_on_robot",
+    "common_frame": {
+      "kind": "anchor_local",
+      "anchor_name": "root",
+      "rotation_rule": "world_to_current_anchor",
+      "handedness": "right",
+      "up_axis": "+z",
+      "forward_axis": "+x",
+      "lateral_axis": "+y",
+      "quaternion_order": "wxyz"
+    },
+    "future_time_offset_s": [0.0, 0.02],
+    "motion_id": [17],
+    "reference_frame_index": [[120, 121]],
+    "reference_timestamp_s": [[2.4, 2.42]],
+    "sample_timestamp_s": [2.4],
+    "reference_target": [[[[0.5, 0.2, 1.0], [0.5, -0.2, 1.0]], [[0.51, 0.2, 1.0], [0.51, -0.2, 1.0]]]],
+    "current_site": [[[0.48, 0.2, 1.0], [0.5, -0.2, 1.0]]],
+    "site_mask": [[true, false]],
+    "compliance": [[[0.01, 0.01, 0.01], [0.02, 0.02, 0.02]]],
+    "force_on_robot": [[[5.0, 0.0, 0.0], [0.0, 0.0, 0.0]]],
+    "enable": [true]
+  },
+  "expected": {
+    "off_policy_target": [[[[0.5, 0.2, 1.0], [0.5, -0.2, 1.0]], [[0.51, 0.2, 1.0], [0.51, -0.2, 1.0]]]],
+    "chip_hindsight": {
+      "policy_target": [[[[0.45, 0.2, 1.0], [0.5, -0.2, 1.0]], [[0.46, 0.2, 1.0], [0.51, -0.2, 1.0]]]]
+    },
+    "motion_reference_selection": {
+      "compliant_reference_target": [[[[0.47, 0.2, 1.0], [0.5, -0.2, 1.0]], [[0.48, 0.2, 1.0], [0.51, -0.2, 1.0]]]],
+      "policy_target": [[[[0.47, 0.2, 1.0], [0.5, -0.2, 1.0]], [[0.48, 0.2, 1.0], [0.51, -0.2, 1.0]]]]
+    }
+  }
+}

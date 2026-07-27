@@ -1,0 +1,6 @@
+# Downloaded checkpoints and motion samples are local, reproducible test inputs.
+official_assets/*
+!official_assets/MANIFEST.md
+
+# Low-resource training/evaluation outputs are recorded by manifests, not committed.
+runs/
