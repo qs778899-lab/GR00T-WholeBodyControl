@@ -323,10 +323,155 @@ does not waive any real-GPU training or smoke requirement.
 
 ## Phase 5 — Tracking/compliance evaluation and export
 
-- Phase 4 matrix.
-- Frame/time-aligned stiff baseline versus compliant checkpoint evaluation.
-- Upper-limb endpoint, local/global MPJPE, success/fall, displacement, and force metrics.
-- ONNX export plus disabled-mode inference parity.
+Run from the repository root. Phase 5 retains the immutable accepted Phase-4
+checkpoint and reruns all portable/resolved regression tests because the
+evaluation code extends the reusable compliance package. It does not retrain or
+rewrite the accepted Phase-4 artifacts.
+
+1. Portable and resolved CPU suites
+
+   ```bash
+   PYTHONDONTWRITEBYTECODE=1 python -m unittest discover \
+     -s gear_sonic/tests/compliance -p 'test_*.py' -v
+   PYTHONDONTWRITEBYTECODE=1 \
+     /home/lab/miniconda3/envs/sonic_backup/bin/python \
+     -m unittest discover -s gear_sonic/tests/compliance -p 'test_*.py' -v
+   ```
+
+   Every discovered test must pass. The current final CPU regression discovers
+   127 tests: portable Python passes with 38 expected dependency skips, and
+   `sonic_backup` passes with four expected CUDA skips. Dependency-based skips
+   are allowed only in the portable interpreter, and CUDA-only tests may skip
+   in `sonic_backup` before compatibility libraries are activated. Phase-5
+   coverage must prove:
+   strict key/time/reference/force/gate alignment without interpolation; fixed
+   horizons and common valid prefixes; persisted structured local-frame metadata
+   and distinct reference/articulation index provenance; true paired
+   compliant-minus-stiff site
+   yielding with force projection; the temporal tail of each contiguous force
+   pulse; left/right position and orientation RMSE/P95 split into all/exposed/
+   unexposed frames; finite normalized `wxyz` and sign-invariant geodesic angle;
+   named per-site all-frame position/orientation RMSE and P95 acceptance checks;
+   arbitrary 17-site evaluation; bounded non-pickle NPZ/JSON round trips;
+   explicit residual ONNX I/O and dynamic axes; active PyTorch/ONNX parity; and
+   exact hard-off/zero-compliance output.
+
+   Trace/ONNX pair publication must also inject a failure after the binary has
+   been published but before metadata/manifest publication, then prove both
+   final paths and every same-directory hidden temporary are removed.
+   Standalone export/rollout negatives must place broken symlinks at requested
+   leaf outputs and prove no resolved target is created. Audit negatives must
+   reject substituted workflow run/runs roots, a checkpoint symlink alias, and
+   an incorrect per-rollout checkpoint SHA-256.
+
+   The tracker-neutral trace remains arbitrary-size, but the SONIC Hydra test
+   must compare eval and release `motion.body_names` element-for-element,
+   require exactly 14 bodies, and lock matching runtime/audit provenance.
+
+2. Entrypoint, dry-run, syntax, and import gates
+
+   ```bash
+   PYTHONDONTWRITEBYTECODE=1 \
+     /home/lab/miniconda3/envs/sonic_backup/bin/python -B \
+     gear_sonic/scripts/run_chip_phase5_eval_export.py --help
+   PYTHONDONTWRITEBYTECODE=1 \
+     /home/lab/miniconda3/envs/sonic_backup/bin/python -B \
+     gear_sonic/scripts/audit_chip_phase5.py --help
+   PYTHONDONTWRITEBYTECODE=1 \
+     /home/lab/miniconda3/envs/sonic_backup/bin/python -B \
+     gear_sonic/scripts/run_chip_phase5_eval_export.py \
+     --runs-root /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip \
+     --run-root /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/phase5_dry_run \
+     --checkpoint /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/phase4_acceptance_resume_fix/compliance_residual_step6_resume/last.pt \
+     --motion-file /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sample_data/robot_filtered/210531/walk_forward_amateur_001__A001.pkl \
+     --smpl-motion-dir /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sample_data/smpl_filtered \
+     --onnxruntime-python /home/lab/miniconda3/envs/sonic/bin/python \
+     --onnxruntime-version 1.25.0 \
+     --steps 300 --seed 0 --device cuda:0 --dry-run
+   ```
+
+   Both help commands and the dry-run must exit zero. The dry-run path must be
+   absent before and after execution; output must contain exactly one stiff and
+   one compliant serial rollout, dimensions `60/9/930 -> 64`, the complete
+   acceptance thresholds, and the matched-force zero-residual stiff semantics.
+   Compile all Phase-5 Python files with built-in `compile`, then import the
+   tracker-neutral evaluation and postprocess modules without Isaac Lab.
+
+   Run the focused deployment-runtime parity in the pinned CPU interpreter:
+
+   ```bash
+   PYTHONDONTWRITEBYTECODE=1 \
+     /home/lab/miniconda3/envs/sonic/bin/python -B -m unittest \
+     gear_sonic.tests.compliance.test_sonic_phase5_export.SonicPhase5ExportTest.test_separate_onnx_dynamic_and_hard_off_parity \
+     -v
+   ```
+
+   It must report a real `onnxruntime.InferenceSession` version `1.25.0` with
+   only `CPUExecutionProvider`; a reference-evaluator result is not accepted.
+
+3. One bounded real-GPU evaluation and export workflow
+
+   The destination below must not exist before launch. Run only after explicit
+   GPU authorization and with no concurrent training/Isaac process:
+
+   ```bash
+   env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu \
+     LD_PRELOAD=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.580.159.03:/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libcuda.so.580.159.03 \
+     VK_ICD_FILENAMES=/tmp/nvidia_580_159_compat/extracted/usr/share/vulkan/icd.d/nvidia_icd.json \
+     PYTHONDONTWRITEBYTECODE=1 \
+     /home/lab/miniconda3/envs/sonic_backup/bin/python -B \
+     gear_sonic/scripts/run_chip_phase5_eval_export.py \
+     --runs-root /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip \
+     --run-root /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/phase5_acceptance \
+     --checkpoint /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/phase4_acceptance_resume_fix/compliance_residual_step6_resume/last.pt \
+     --motion-file /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sample_data/robot_filtered/210531/walk_forward_amateur_001__A001.pkl \
+     --smpl-motion-dir /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sample_data/smpl_filtered \
+     --onnxruntime-python /home/lab/miniconda3/envs/sonic/bin/python \
+     --onnxruntime-version 1.25.0 \
+     --steps 300 --seed 0 --device cuda:0
+   ```
+
+   Required final marker: `CHIP_PHASE5_EVAL_EXPORT_PASS`. The stiff and
+   compliant logs must each contain `CHIP_PHASE5_ROLLOUT_PASS`; stiff peak
+   latent residual must be exactly zero, compliant peak residual positive, and
+   their reference/force schedules exactly aligned. Every named threshold from
+   the Phase-5 plan must pass, including at least `1e-6` m paired displacement
+   as a chain-activation check. The signed along-force result remains a reported
+   diagnostic and must not be described as a performance claim. The workflow
+   must also emit a checked residual
+   ONNX and manifest with dynamic shape parity, bit-exact hard-off and
+   zero-compliance results, and unchanged release-model semantics.
+
+4. Independent artifact and metric audit
+
+   ```bash
+   PYTHONDONTWRITEBYTECODE=1 \
+     /home/lab/miniconda3/envs/sonic/bin/python -B \
+     gear_sonic/scripts/audit_chip_phase5.py \
+     --runs-root /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip \
+     --run-root /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/phase5_acceptance \
+     --checkpoint /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/phase4_acceptance_resume_fix/compliance_residual_step6_resume/last.pt
+   ```
+
+   Required marker: `CHIP_PHASE5_INDEPENDENT_AUDIT_PASS`. A fresh process must
+   reload both traces with pickle disabled, recompute every metric/check,
+   compare it to the recorded JSON, re-run ONNX checker/parity, verify checkpoint
+   and ONNX hashes, and confirm the stiff/compliant policy semantics. It must
+   compare canonical workflow `run_root`, `runs_root`, and checkpoint paths to
+   the CLI arguments, then independently compare each rollout summary's
+   canonical checkpoint path and SHA-256 to that same checkpoint.
+
+5. Artifact, release-path, process, and patch hygiene
+
+   The workflow must stay below 500 MB and each log below 64 MB; all generated
+   files must stay inside `compliance_control/runs/chip`, contain no symlink, and
+   never overwrite the accepted checkpoint or official assets. Confirm no
+   training/Isaac process or GPU compute application remains. Run the Phase-1
+   compile/import/cache/EOF/trailing-whitespace and staged/unstaged diff gates.
+   The released `sonic_release.yaml`, release encoder/decoder ONNX and observation
+   contracts, generic PPO trainer, and generic `UniversalTokenModule` must have
+   no diff. Existing git refs must still match
+   `compliance_control/existing_refs_before.txt`.
 
 ## Phase 6 — Final regression and handoff
 

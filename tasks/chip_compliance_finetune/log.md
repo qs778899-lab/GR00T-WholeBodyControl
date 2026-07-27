@@ -236,3 +236,74 @@
 - Phase-4 syntax/import, EOF/trailing-whitespace/cache, staged/unstaged diff,
   and release/generic source gates passed after these corrections. Phase 4 is
   again `PASSED`; `current_phase` returns to 5 without starting Phase-5 work.
+
+## 2026-07-27 — Phase 5 CPU implementation ready; GPU acceptance pending
+
+- Added a tracker-neutral fixed-horizon trace/evaluator and bounded NPZ/JSON
+  postprocess layer. Exact pairing rejects key/time/reference/force/gate/frame
+  substitutions and evaluates only the common valid prefix without interpolation.
+- Tracking output includes global/local MPJPE and per ordered site position and
+  sign-invariant `wxyz` orientation RMSE/P95 for all/exposed/unexposed frames.
+  Acceptance gates aggregate endpoint errors plus every site's all-frame
+  position/orientation RMSE and P95, preventing one wrist from hiding another.
+- Compliance response is true paired yielding
+  `compliant_actual_site - stiff_actual_site`, including signed force projection.
+  Steady force uses the last 20 percent of each contiguous exposure pulse. A
+  `1e-6` m mean displacement gate proves only chain activation; along-force sign
+  remains diagnostic, and the six-batch checkpoint is not a performance claim.
+- Added a separate residual ONNX contract (`60/9/930 -> 64`) without rewriting
+  release models. The accepted path runs `onnxruntime.InferenceSession` 1.25.0
+  with only `CPUExecutionProvider`; the portable reference evaluator is labelled
+  as fallback and cannot satisfy acceptance. Dynamic shapes, exact hard-off/
+  zero-compliance behavior, and mixed active/off/no-site/zero-selected-
+  compliance rows pass.
+- Runtime outputs are contained under the collision-safe run root. Trace and
+  ONNX publication refuse existing files and symlinks; workflow completion
+  rejects symlinks, logs above 64 MB, total output above 500 MB, oversized NPZ
+  expansion, and out-of-root paths. Artifact roots are explicit/configurable for
+  worktree and universal-tracker migration.
+- Failure injection after NPZ/ONNX publication proves trace-metadata and
+  export-manifest failures roll back both final paths and all hidden temporary
+  files. A single fixed-horizon state-machine test locks pre-transition sample
+  `k`, inclusive termination, permanently invalid auto-reset suffixes, and the
+  all-300-frame success requirement.
+- Final portable discovery passed 124 tests with 38 expected dependency skips;
+  final `sonic_backup` discovery passed 124 tests with four expected CUDA skips.
+  Both help gates and the exact 300-frame dry-run passed, and the dry-run target
+  remained absent. No real rollout or GPU process was started.
+- The portable evaluator remains arbitrary-body, while a SONIC-only Hydra test
+  compares the eval and release ordered tracking names element-for-element and
+  requires all 14. Runtime summaries persist that contract and independent audit
+  rejects a missing, shortened, or reordered body list.
+- Paired displacement and force are explicitly world-frame trace quantities.
+  The `1e-6` m gate proves only different world trajectories, not task-space
+  impedance/admittance, contact regulation, or along-force performance; the
+  along-force value has no threshold.
+- Phase 5 remains `IN_PROGRESS`. The one serial stiff/compliant GPU workflow and
+  fresh-process artifact audit still require explicit authorization and must
+  pass before status can advance to Phase 6.
+
+## 2026-07-27 — Phase 5 GPU artifact and post-run provenance corrections
+
+- The authorized immutable `phase5_acceptance` workflow completed in 63.656 s
+  with `CHIP_PHASE5_EVAL_EXPORT_PASS`, 300 aligned frames, all named checks
+  passing, and ONNX Runtime 1.25.0 using only `CPUExecutionProvider`. The
+  acceptance directory is retained read-only during the corrections below.
+- Independent review identified two P2 fail-closed gaps. Standalone export and
+  rollout paths now reject existing/broken leaf symlinks before `resolve`, with
+  negatives proving the escaped targets remain absent. The artifact audit now
+  requires canonical workflow run/runs roots and checkpoint to match its CLI,
+  and checks both rollout summaries against that checkpoint path and SHA-256.
+- Portable/resolved focused regressions passed 11 tests with one expected ONNX
+  dependency skip portably and no skips in `sonic_backup`. Full discovery then
+  passed 127 tests with 38 expected dependency skips portably and 127 tests with
+  four expected CUDA skips in `sonic_backup`; real ORT focused parity passed
+  1/1. The corrected fresh-process artifact audit then passed with 300 aligned
+  frames, mean paired displacement `0.00131441758` m, and ONNX Runtime maximum
+  absolute error `5.82076609e-10`. The immutable workflow contains 14 files,
+  totals 1,655,744 bytes, and has digest
+  `31b836609702fd12284aad63343096e5254108ec0651847abee893d37571010f`.
+  No GPU rerun or acceptance-artifact rewrite occurred. Phase 5 is `PASSED`;
+  `current_phase` advances to 6. These results prove the finetune/evaluation/
+  export chain and short-checkpoint regression gates, not converged compliant
+  control performance.

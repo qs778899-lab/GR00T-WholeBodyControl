@@ -1,6 +1,7 @@
 """Portable compliance-control primitives and tracker-specific adapters."""
 
 from .core import (
+    AlignedTrackingTrace,
     COMPLIANCE_UNIT,
     FORCE_ON_ROBOT,
     CartesianFrameKind,
@@ -11,15 +12,22 @@ from .core import (
     ComplianceResidualMLP,
     ComplianceTargetSpec,
     ForceSignConvention,
+    PairedComplianceResponseMetrics,
+    PairedEvaluationResult,
+    PairedEvaluationThresholds,
     TargetDamper,
+    TrackingComplianceMetrics,
     apply_hindsight_target,
     apply_hindsight_target_prevalidated,
+    compare_aligned_tracking_traces,
     pyramid_phase_weight,
     summarize_compliance_response,
+    summarize_tracking_trace,
 )
 
 __all__ = [
     "COMPLIANCE_UNIT",
+    "AlignedTrackingTrace",
     "FORCE_ON_ROBOT",
     "CartesianFrameKind",
     "CartesianFrameSpec",
@@ -29,9 +37,15 @@ __all__ = [
     "ComplianceResidualMLP",
     "ComplianceTargetSpec",
     "ForceSignConvention",
+    "PairedComplianceResponseMetrics",
+    "PairedEvaluationResult",
+    "PairedEvaluationThresholds",
     "TargetDamper",
+    "TrackingComplianceMetrics",
     "apply_hindsight_target",
     "apply_hindsight_target_prevalidated",
+    "compare_aligned_tracking_traces",
     "pyramid_phase_weight",
     "summarize_compliance_response",
+    "summarize_tracking_trace",
 ]

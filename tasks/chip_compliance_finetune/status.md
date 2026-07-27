@@ -4,7 +4,7 @@ task: chip_compliance_finetune
 baseline_commit: 4141c34280abb67c82e115342a8720f4a83d750d
 branch: experiment/chip-compliance
 status: IN_PROGRESS
-current_phase: 5
+current_phase: 6
 
 phases:
   - id: 1
@@ -21,7 +21,7 @@ phases:
     status: PASSED
   - id: 5
     name: Tracking/compliance evaluation and export
-    status: IN_PROGRESS
+    status: PASSED
   - id: 6
     name: Final regression and handoff
     status: PENDING
@@ -173,4 +173,30 @@ phase_4_result:
   final_audit_dry_run: PASSED, target absent before and after
   final_audit_hygiene: PASSED
 
-next_action: EXECUTE_PHASE_5_ONLY
+phase_5_result:
+  completed_on: 2026-07-27
+  status: PASSED
+  portable_cpu_suite: PASSED, 127 tests / 38 expected dependency skips
+  resolved_cpu_suite: PASSED, 127 tests / 4 expected CUDA skips
+  focused_onnx_parity: PASSED, ORT 1.25.0 CPU dynamic shapes plus mixed BxS rows
+  portable_onnx_fallback: labelled onnx.reference.ReferenceEvaluator only
+  trace_schema: v2, structured frame / normalized wxyz / bounded non-pickle NPZ
+  paired_semantics: matched force / release-equivalent zero residual versus trained residual
+  per_site_tracking_gates: position RMSE/P95 and orientation RMSE/P95
+  sonic_release_body_contract: PASSED, ordered 14-body Hydra/runtime/audit gate
+  transactional_pair_rollback: PASSED, trace metadata and ONNX manifest injection
+  fixed_horizon_transition_semantics: PASSED, pre-step k valid / suffix permanently invalid
+  paired_activation_gate_m: 1.0e-6, chain validation only
+  help_gates: PASSED
+  dry_run_gate: PASSED, ORT subprocess pinned and target absent before and after
+  gpu_workflow: PASSED, immutable phase5_acceptance / 300 aligned frames / 63.656 s
+  gpu_workflow_marker: CHIP_PHASE5_EVAL_EXPORT_PASS
+  gpu_workflow_checks: PASSED, no failed named threshold
+  post_gpu_p2_leaf_symlink_gate: PASSED, focused and full CPU regressions
+  post_gpu_p2_provenance_gate: PASSED, focused and full CPU regressions
+  independent_artifact_audit: PASSED_CORRECTED, 300 aligned frames / mean paired displacement 0.00131441758 m / ORT max abs error 5.82076609e-10
+  accepted_artifact_digest: 31b836609702fd12284aad63343096e5254108ec0651847abee893d37571010f
+  accepted_workflow_bytes: 1655744
+  performance_claim: CHAIN_ACTIVATION_AND_REGRESSION_ONLY
+
+next_action: EXECUTE_PHASE_6_ONLY

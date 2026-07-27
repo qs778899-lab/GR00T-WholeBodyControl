@@ -7,6 +7,10 @@ from .body_names import (
     resolve_compliance_sites,
     resolve_site_indices,
 )
+from .contracts import (
+    SONIC_RELEASE_TRACKING_BODY_NAMES,
+    require_sonic_release_tracking_body_names,
+)
 from .frames import (
     frame_positions_to_world,
     frame_vectors_to_world,
@@ -18,6 +22,12 @@ from .frames import (
     world_positions_to_frame_prevalidated,
     world_vectors_to_frame,
     world_vectors_to_frame_prevalidated,
+)
+from .export import (
+    SonicResidualExportSpec,
+    export_sonic_actor_residual_onnx,
+    extract_actor_residual_state,
+    verify_sonic_actor_residual_onnx,
 )
 from .observation import (
     SonicComplianceTargets,
@@ -53,12 +63,16 @@ __all__ = [
     "SonicComplianceSites",
     "SonicComplianceCommandState",
     "SonicComplianceTargets",
+    "SonicResidualExportSpec",
+    "SONIC_RELEASE_TRACKING_BODY_NAMES",
     "WrenchWriteGate",
     "advance_pulse_countdown_prevalidated",
     "build_sonic_compliance_targets",
     "build_sonic_compliance_targets_prevalidated",
     "frame_positions_to_world",
     "frame_vectors_to_world",
+    "export_sonic_actor_residual_onnx",
+    "extract_actor_residual_state",
     "limit_peak_forces_by_net_wrench",
     "limit_peak_forces_by_net_wrench_prevalidated",
     "mask_requested_peak_forces",
@@ -71,6 +85,7 @@ __all__ = [
     "reschedule_pulse_countdown_prevalidated",
     "resolve_compliance_sites",
     "resolve_site_indices",
+    "require_sonic_release_tracking_body_names",
     "sample_compliance_pulses",
     "sample_compliance_pulses_prevalidated",
     "select_articulation_site_quaternions",
@@ -81,4 +96,5 @@ __all__ = [
     "world_positions_to_frame_prevalidated",
     "world_vectors_to_frame",
     "world_vectors_to_frame_prevalidated",
+    "verify_sonic_actor_residual_onnx",
 ]

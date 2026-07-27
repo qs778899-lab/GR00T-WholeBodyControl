@@ -1,0 +1,60 @@
+# @package _global_
+# Phase-5-only deterministic paired evaluation; release configs remain unchanged.
+
+defaults:
+  - /exp/manager/universal_token/all_modes/sonic_release_compliance_residual
+  - override /manager_env/terminations: tracking/eval
+  - _self_
+
+num_envs: 1
+headless: true
+use_wandb: false
+
+manager_env:
+  observations:
+    policy:
+      enable_corruption: false
+    tokenizer:
+      enable_corruption: false
+  commands:
+    motion:
+      use_paired_motions: true
+      start_from_first_frame: true
+      sample_from_n_initial_frames: null
+      randomize_heading: false
+      freeze_frame_aug: false
+      cat_upper_body_poses: false
+      randomize_wrist_poses: false
+      encoder_sample_probs:
+        g1: 1.0
+        teleop: 0.0
+        smpl: 0.0
+      pose_range:
+        x: [0.0, 0.0]
+        y: [0.0, 0.0]
+        z: [0.0, 0.0]
+        roll: [0.0, 0.0]
+        pitch: [0.0, 0.0]
+        yaw: [0.0, 0.0]
+      velocity_range:
+        x: [0.0, 0.0]
+        y: [0.0, 0.0]
+        z: [0.0, 0.0]
+        roll: [0.0, 0.0]
+        pitch: [0.0, 0.0]
+        yaw: [0.0, 0.0]
+      joint_position_range: [0.0, 0.0]
+      joint_velocity_range: [0.0, 0.0]
+      motion_lib_cfg:
+        adaptive_sampling:
+          enable: false
+    force:
+      enabled: true
+      enabled_probability: 1.0
+      site_probability: 1.0
+      force_magnitude_range_n: [5.0, 5.0]
+      compliance_values_m_per_n: [0.02]
+      force_duration_range_s: [1.0, 1.0]
+      pulse_interval_range_s: [0.02, 0.02]
+      max_active_sites: 2
+      target_damper_enabled: false

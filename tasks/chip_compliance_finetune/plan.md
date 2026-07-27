@@ -132,7 +132,88 @@ GPU training command and cannot substitute a CPU result.
 
 ### Phase 5 — Tracking/compliance evaluation and export
 
-Evaluate stiff tracking and force-response trade-offs with frame-aligned logs. Gate acceptance on upper-limb end-effector tracking, global/local MPJPE, fall/success rate, contact displacement, and peak/steady force metrics. Export ONNX and verify that the optional compliance input is explicit and disabled-mode behavior matches the release path.
+Add evaluation as a separate, portable layer rather than embedding metrics into
+SONIC's policy or simulator code. The tracker-neutral core owns a fixed-horizon
+`AlignedTrackingTrace`, exact pair alignment, finite metric calculations, and
+acceptance budgets. A small postprocess layer owns bounded NPZ/JSON I/O. The
+SONIC boundary owns only Isaac Lab trace collection and the separate residual
+ONNX adapter. This division allows another universal tracker to provide the same
+trace contract without importing SONIC, G1, Hydra, or Isaac Lab.
+
+The comparator is a matched-force A/B test. Both jobs use the same checkpoint,
+initial reference frame, motion/frame clock, force sample and schedule, ordered
+site mask, and compliance schedule. The compliant job passes its actor-safe
+compliance command to the trained residual. The stiff comparator zeros only
+that command, making the latent residual exactly zero and recovering the
+release-equivalent actor path while the same external force remains applied.
+It is not the unforced Phase-4 stiff training log. Pairing requires exact integer
+keys and boolean gates plus tolerance-bounded equality of times, references,
+forces, compliance, and normalized reference quaternions; no interpolation or
+nearest-frame substitution is permitted. If either rollout falls, metrics use
+only their common valid prefix while retaining the complete fixed horizon.
+Each trace persists a structured local-frame kind, semantic anchor, and rotation
+mode. The SONIC summary additionally records the ordered site names and both
+resolved reference/articulation index lists for provenance; metrics never treat
+those index spaces as interchangeable.
+The portable trace accepts arbitrary body/site counts, but the SONIC acceptance
+adapter additionally compares the derived experiment's ordered tracking bodies
+against `sonic_release` and requires all 14 names unchanged at Hydra, runtime,
+and independent-audit boundaries.
+
+Tracking preservation is measured with global and anchor-local MPJPE plus wrist
+endpoint position RMSE/P95 and sign-invariant quaternion geodesic-angle
+RMSE/P95. Endpoint summaries are reported per ordered left/right site for all,
+force-exposed, and unexposed frames. Reference quaternions are selected only in
+the motion-reference index space and actual quaternions only in the
+articulation index space, normalized as finite `wxyz`, and compared as
+`2*acos(abs(dot(q_ref, q_actual)))`. The overall upper-endpoint regressions and
+each site's all-frame position RMSE/P95 and orientation RMSE/P95 regressions are
+acceptance gates, so one wrist cannot hide behind the other. Exposed/unexposed
+per-site values remain separate diagnostics. Force response is true paired
+yielding, `compliant_actual_site - stiff_actual_site`, not actual-to-reference
+tracking error; it includes norm and signed projection along the matched force,
+overall and per site. Steady force is the last 20 percent of each contiguous
+exposure pulse in time, never a magnitude percentile or peak threshold.
+
+The pinned acceptance budgets are at least 200 aligned frames and 20 exposed
+frames per configured site; at most 0.05 m upper-endpoint position regression,
+0.25 rad upper-endpoint orientation regression, and 0.03 m global/local MPJPE
+regression; compliant success/fall rates of 1/0; and a measured peak force in
+`[1, 30]` N. Mean paired displacement must reach `1e-6` m only as a chain
+activation gate. Its signed along-force projection is reported but not
+thresholded; this six-batch smoke is not evidence of compliant-control
+performance quality. The deterministic smoke uses both wrist sites, 5 N sampled force,
+0.02 m/N compliance, one-second pulses, and 300 frames. The accepted Phase-4
+step-6 checkpoint is the candidate under test.
+
+Export only the trained actor residual to a new ONNX file. Its explicit inputs
+are `compliance_target [B,S,60]`, `compliance_command [B,S,9]`, and
+`actor_context [B,S,930]`; its output is `latent_residual [B,S,64]`, composed as
+`release_encoder_latent + latent_residual` before the unchanged release decoder.
+The adjacent manifest records ordered sites, command layout, frame, hashes,
+dynamic axes, and composition. ONNX checker plus pinned ONNX Runtime 1.25.0 CPU
+inference must match PyTorch at dynamic `(B,S)=(1,1)` and `(2,4)` and must return
+bit-exact zeros for hard-off inputs, including unused NaNs, and zero compliance.
+The ONNX reference evaluator remains only a truthfully labelled portable
+fallback and cannot satisfy accepted-artifact parity.
+One mixed `B x S` case must combine active, global-off, no-site, and
+zero-selected-compliance rows without batch/timestep broadcasting.
+Released encoder/decoder ONNX files are never rewritten.
+
+Standalone export and rollout boundaries inspect the requested final path with
+`lexists`/`is_symlink` before canonicalization, so a broken leaf symlink cannot
+redirect publication outside the requested path. The independent audit requires
+the workflow's canonical run root, runs root, and checkpoint to equal its CLI
+arguments. It also checks each stiff/compliant rollout summary against the same
+canonical checkpoint path and SHA-256; workflow-level provenance cannot mask a
+sub-rollout checkpoint substitution.
+
+The evaluation core and trace format support any positive ordered site count;
+the Phase-5 trained checkpoint/export remains the Phase-4 two-wrist layout. A
+14-site deployment therefore reuses the evaluator unchanged but requires a
+14-site residual checkpoint and matching export spec/config. Exact commands,
+output layout, comparator semantics, and metric definitions are recorded in
+`phase5_runbook.md` and `test_matrix.md`.
 
 ### Phase 6 — Final regression and handoff
 
