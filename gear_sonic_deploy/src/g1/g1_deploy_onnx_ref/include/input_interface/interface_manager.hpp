@@ -247,6 +247,27 @@ class InterfaceManager : public InputInterface {
       }
       return InputInterface::GetVR3PointOrientation();  // Fallback to base class
     }
+
+    std::array<double, 3> GetVR3PointCompliance() const override {
+      if (current_) {
+        return current_->GetVR3PointCompliance();
+      }
+      return InputInterface::GetVR3PointCompliance();
+    }
+
+    void SetVR3PointCompliance(
+        const std::array<double, 3>& compliance) override {
+      // Keep every delegate synchronized so the setting survives a run-time
+      // input-interface switch. Also retain a manager-local fallback for the
+      // short interval before a delegate is selected.
+      InputInterface::SetVR3PointCompliance(compliance);
+      if (keyboard_) keyboard_->SetVR3PointCompliance(compliance);
+      if (gamepad_) gamepad_->SetVR3PointCompliance(compliance);
+      if (zmq_) zmq_->SetVR3PointCompliance(compliance);
+#if HAS_ROS2
+      if (ros2_) ros2_->SetVR3PointCompliance(compliance);
+#endif
+    }
     
     std::pair<bool, std::array<double, 7>> GetHandPose(bool is_left) const override {
       if (current_) {
@@ -392,5 +413,4 @@ class InterfaceManager : public InputInterface {
 };
 
 #endif // INTERFACE_MANAGER_HPP
-
 

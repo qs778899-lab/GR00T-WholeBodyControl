@@ -1,0 +1,61 @@
+# Optional overlay only. The released encoder/decoder and observation configs
+# remain authoritative and are not copied or rewritten by this feature.
+motion_compliance_action_residual:
+  enabled: false
+  artifact_directory: null
+  metadata_sha256: null
+  checkpoint_sha256: 42dd92200da1e626436225414ddfa59ba2198953c304f25f217454f24fb84aba
+  checkpoint_global_step: 6
+  schema: universal-tracker.action-residual.onnx.v1
+  max_abs_delta: 0.25
+  # Host-owned base identity.  Enabled C++ deployment hashes the actual CLI
+  # decoder, encoder and observation config before creating the residual ORT
+  # session, so a same-shaped but incompatible base cannot be selected.
+  release_artifacts:
+    - {name: decoder, sha256: c7241a123eaa36b5d64bad19540efde93cac1ad443bd4572fd12ca99898118ed}
+    - {name: encoder, sha256: 013ab0287236aa2721e13f1e936d699db982302d0de0bfcdae76d5c3245362d3}
+    - {name: observation_config, sha256: 466d05947c78af6c76388adfb86e3a2a77b2a1d921a64883ed3d085ebf58de1b}
+  # Ordered, tracker-neutral artifact context.  SONIC's thin adapter owns the
+  # meanings of these names; the portable runtime only checks this declared
+  # layout against the host contract and the artifact metadata.
+  context_layout:
+    - {name: robot_motion_token, width: 64}
+    - {name: actor_observation, width: 930}
+  condition_width: 3
+  # SONIC interprets this fixed public condition as [enable, threshold_N, Kp].
+  # A different universal tracker can supply its own named context layout and
+  # condition values without changing the portable runtime.
+  default_enabled_condition: [1.0, 10.0, 200.0]
+  site_layout: [left_wrist_yaw_link, right_wrist_yaw_link]
+  # Release decoder output order (IsaacLab/BFS). Compose the residual before
+  # the existing deploy-side isaaclab_to_mujoco remap.
+  action_layout:
+    - left_hip_pitch_joint
+    - right_hip_pitch_joint
+    - waist_yaw_joint
+    - left_hip_roll_joint
+    - right_hip_roll_joint
+    - waist_roll_joint
+    - left_hip_yaw_joint
+    - right_hip_yaw_joint
+    - waist_pitch_joint
+    - left_knee_joint
+    - right_knee_joint
+    - left_shoulder_pitch_joint
+    - right_shoulder_pitch_joint
+    - left_ankle_pitch_joint
+    - right_ankle_pitch_joint
+    - left_shoulder_roll_joint
+    - right_shoulder_roll_joint
+    - left_ankle_roll_joint
+    - right_ankle_roll_joint
+    - left_shoulder_yaw_joint
+    - right_shoulder_yaw_joint
+    - left_elbow_joint
+    - right_elbow_joint
+    - left_wrist_roll_joint
+    - right_wrist_roll_joint
+    - left_wrist_pitch_joint
+    - right_wrist_pitch_joint
+    - left_wrist_yaw_joint
+    - right_wrist_yaw_joint

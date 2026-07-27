@@ -1747,7 +1747,8 @@ private:
         
         // Handle VR 3-point tracking: set buffers when vr_position is present
         // vr_position is required to enable VR mode; orientation uses default if not provided
-        // compliance is ALWAYS from keyboard-controlled values (ignoring ZMQ data)
+        // Compliance retains its current/startup value unless this message
+        // explicitly supplies a vr_compliance field.
         if (has_vr_position) {
             vr_3point_position_.SetData(vr_position_values);
             vr_3point_orientation_.SetData(vr_orientation_values);

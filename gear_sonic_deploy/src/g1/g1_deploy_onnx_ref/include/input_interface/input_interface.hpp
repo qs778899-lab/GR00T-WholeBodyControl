@@ -219,10 +219,10 @@ public:
     }
     
     /**
-     * @brief Get VR 3-point compliance values (keyboard-controlled).
+     * @brief Get the VR 3-point compliance controls owned by this interface.
      *
-     * Compliance is always controlled via keyboard (g/h keys for left, b/v for right)
-     * and is intentionally **not** overwritten by external sources (ROS2 / ZMQ).
+     * Composite manager interfaces may expose g/h/b/v shortcuts. Streaming
+     * interfaces may instead update this buffer from validated external data.
      * @return [left_arm_compliance, right_arm_compliance, head_compliance] in [0, 0.5].
      */
     virtual std::array<double, 3> GetVR3PointCompliance() const {
@@ -233,13 +233,13 @@ public:
         return {0.5, 0.5, 0.0};
     }
 
-    /// Set initial VR 3-point compliance values (called at startup from command-line args).
+    /// Set VR 3-point compliance values from startup, manager, or stream input.
     virtual void SetVR3PointCompliance(const std::array<double, 3>& compliance) {
         vr_3point_compliance_.SetData(compliance);
     }
     
     /// Adjust left-arm (index 0) compliance by @p delta, clamped to [0.0, 0.5].
-    /// Only takes effect if the active policy observes 'vr_3point_compliance'.
+    /// Takes effect when the policy or an optional residual overlay consumes it.
     virtual void AdjustLeftHandCompliance(double delta) {
         auto compliance = GetVR3PointCompliance();
         compliance[0] = std::clamp(compliance[0] + delta, 0.0, 0.5);
@@ -248,7 +248,7 @@ public:
     }
     
     /// Adjust right-arm (index 1) compliance by @p delta, clamped to [0.0, 0.5].
-    /// Only takes effect if the active policy observes 'vr_3point_compliance'.
+    /// Takes effect when the policy or an optional residual overlay consumes it.
     virtual void AdjustRightHandCompliance(double delta) {
         auto compliance = GetVR3PointCompliance();
         compliance[1] = std::clamp(compliance[1] + delta, 0.0, 0.5);

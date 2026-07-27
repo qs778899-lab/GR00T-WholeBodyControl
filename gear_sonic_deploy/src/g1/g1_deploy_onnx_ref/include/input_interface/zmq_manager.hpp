@@ -423,6 +423,14 @@ class ZMQManager : public InputInterface {
       return InputInterface::GetVR3PointCompliance();
     }
 
+    void SetVR3PointCompliance(
+        const std::array<double, 3>& compliance) override {
+      // The getter delegates to pose_interface_ in streamed mode, therefore a
+      // startup flag or keyboard adjustment must update both storage sites.
+      InputInterface::SetVR3PointCompliance(compliance);
+      if (pose_interface_) pose_interface_->SetVR3PointCompliance(compliance);
+    }
+
     std::pair<bool, std::array<double, 7>> GetHandPose(bool is_left) const override {
       if ((active_mode_ == ManagedMode::STREAMED_MOTION || (!is_planner_ready_ && switch_from_teleop_to_planner_)) && pose_interface_) {
         return pose_interface_->GetHandPose(is_left);

@@ -1,4 +1,7 @@
 set(EXECUTABLE_NAME g1_deploy_onnx_ref)
+set(G1_DEPLOY_RUNTIME_OUTPUT_DIRECTORY
+  "${PROJECT_SOURCE_DIR}/target/release/"
+  CACHE PATH "Output directory for G1 deployment executables")
 
 # ROS2 discovery can be controlled via env var HAS_ROS2:
 # - 1: try ROS2 (find_package QUIET)
@@ -175,6 +178,7 @@ find_package(Eigen3 REQUIRED)
 
 set(EXE_INCLUDES
   ${CMAKE_CURRENT_SOURCE_DIR}/include/
+  ${PROJECT_SOURCE_DIR}/src/motion_compliance/include
   ${ZMQ_INCLUDE_DIR}
   ${EIGEN3_INCLUDE_DIR}
 )
@@ -187,6 +191,7 @@ target_include_directories(g1_deploy_shared PUBLIC ${EXE_INCLUDES})
 # List of libs to link for both the main executable and the tests
 set(EXE_LIBS
   g1_deploy_shared
+  motion_compliance_action_residual
   audio_thread
   unitree_sdk2 ZLIB::ZLIB
   onnxruntime::onnxruntime TRTInference
@@ -210,7 +215,7 @@ target_link_libraries(
 # Setting our output directory and C++ standard
 set_target_properties(
   ${EXECUTABLE_NAME}
-  PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/target/release/"
+  PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${G1_DEPLOY_RUNTIME_OUTPUT_DIRECTORY}"
              OUTPUT_NAME ${EXECUTABLE_NAME}
              CXX_STANDARD 20
              CXX_STANDARD_REQUIRED ON
@@ -233,16 +238,17 @@ else()
 endif()
 
 # test executable:
-include(FetchContent)
-
-# Download and make GoogleTest available
-FetchContent_Declare(
-  googletest
-  URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
-)
-FetchContent_MakeAvailable(googletest)
-
-find_package(GTest REQUIRED)
+find_package(GTest QUIET)
+if(NOT GTest_FOUND)
+  include(FetchContent)
+  # Only download GoogleTest when the target system does not provide it.
+  FetchContent_Declare(
+    googletest
+    URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+  )
+  FetchContent_MakeAvailable(googletest)
+  find_package(GTest REQUIRED)
+endif()
 
 file(GLOB_RECURSE TEST_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/unit_tests/*.cpp)
 
@@ -254,7 +260,7 @@ target_include_directories(run_tests PUBLIC ${EXE_INCLUDES})
 # Setting our output directory and C++ standard
 set_target_properties(
   run_tests
-  PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/target/release/"
+  PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${G1_DEPLOY_RUNTIME_OUTPUT_DIRECTORY}"
              OUTPUT_NAME run_tests
              CXX_STANDARD 20
              CXX_STANDARD_REQUIRED ON

@@ -133,6 +133,26 @@ class GamepadManager : public InputInterface {
             is_manager_key = true;
             std::cout << "[GamepadManager] EMERGENCY STOP triggered (O/o key pressed)" << std::endl;
             break;
+          case 'g':
+          case 'G':
+            AdjustLeftHandCompliance(0.1);
+            is_manager_key = true;
+            break;
+          case 'h':
+          case 'H':
+            AdjustLeftHandCompliance(-0.1);
+            is_manager_key = true;
+            break;
+          case 'b':
+          case 'B':
+            AdjustRightHandCompliance(0.1);
+            is_manager_key = true;
+            break;
+          case 'v':
+          case 'V':
+            AdjustRightHandCompliance(-0.1);
+            is_manager_key = true;
+            break;
           case 'f':
           case 'F':
             report_temperature_flag_ = true;
@@ -288,6 +308,15 @@ class GamepadManager : public InputInterface {
         return current_->GetVR3PointCompliance();
       }
       return InputInterface::GetVR3PointCompliance();
+    }
+
+    void SetVR3PointCompliance(
+        const std::array<double, 3>& compliance) override {
+      // The manager owns the gamepad-side value while its streamed delegate
+      // owns the value in ZMQ mode. Seed both so startup flags and keyboard
+      // adjustments are independent of the currently active mode.
+      InputInterface::SetVR3PointCompliance(compliance);
+      if (zmq_) zmq_->SetVR3PointCompliance(compliance);
     }
 
     std::pair<bool, std::array<double, 7>> GetHandPose(bool is_left) const override {
@@ -1074,5 +1103,3 @@ class GamepadManager : public InputInterface {
 };
 
 #endif // GAMEPAD_MANAGER_HPP
-
-

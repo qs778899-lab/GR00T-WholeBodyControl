@@ -190,30 +190,50 @@ Baseline: NVLabs upstream `main` at
 
 - Leave the released robot-motion encoder and decoder ONNX files byte-for-byte
   untouched.  Export only the trained action-residual head as a separate,
-  versioned ONNX artifact with explicit `actor_context [B,S,997]` and
-  `motion_compliance_condition [B,S,3]` inputs and `action_delta [B,S,29]`
-  output.  Deployment composition remains `release_action + bounded_delta`.
+  versioned ONNX artifact with explicit `release_action_context [B,S,994]`
+  and `motion_compliance_condition [B,S,3]` inputs and
+  `action_delta [B,S,29]` output.  The graph concatenates these once into the
+  exact trained 997-D residual input; it must never append condition to an
+  already-997-D tensor.  Deployment composition remains
+  `release_action + bounded_delta`.
 - Keep export/runtime tensor contracts in a tracker-independent deployment
-  module.  A thin SONIC adapter owns observation names and assembly of the
-  released 930-D actor observation with the existing 64-D encoder token; no
-  robot name, 14-keypoint assumption, or IsaacLab import may enter the portable
+  module.  Provide both a Python validation/runtime layer and a C++ production
+  layer whose caller-owned contract accepts arbitrary ordered context segments
+  and an arbitrary non-empty set of named release-artifact pins.  A thin SONIC
+  adapter owns observation names and assembly of the
+  existing 64-D encoder token followed by the released 930-D actor observation;
+  the 3-D condition remains the graph's second input.  No robot name,
+  14-keypoint assumption, or IsaacLab import may enter the portable
   export/runtime layer.
 - Add an opt-in deployment configuration and explicit runtime switch without
-  changing released configs.  Disabled rows must bypass residual inference and
-  return the released action bit-for-bit; mixed `[B,S]` gates must isolate off
-  rows even when rejected condition/context rows contain NaN.
+  changing released configs.  Integrate only a thin load/compose hook into the
+  existing deploy executable, before its IsaacLab/BFS-to-MuJoCo/DFS remap.
+  Disabled rows must bypass residual inference and return the released action
+  bit-for-bit; mixed `[B,S]` gates must isolate off rows even when rejected
+  condition/context rows contain NaN.  The host-disabled path must not read the
+  artifact or create an ORT session.
+- Treat operator mode selection as a tested input contract.  An enabled overlay
+  uses the first two wrist controls as one global hard gate: both zero is off,
+  either positive is on.  Synchronize startup and keyboard adjustments through
+  every composite input manager and reject non-finite/out-of-range CLI values
+  before robot middleware initialization.
 - Compare PyTorch and ONNX Runtime output for dynamic batch/sequence shapes,
   all-off, all-on, and mixed gates.  Export atomically, record source checkpoint
   SHA/provenance beside the ONNX, and reject incompatible site/layout/version
-  metadata before inference.
+  metadata before inference.  Compile the real C++ runtime against the accepted
+  artifact and link the complete production target as a Phase-5 gate.
 
 ### Phase 6 — Integration, regression, and low-resource validation
 
 - Run config/help/compile/unit tests plus IsaacLab smoke tests.
 - Run paired stiff-mode baseline regression on fixed motion IDs/timestamps.
 - Run single- and simultaneous-site compliant-force evaluation.
+- Standardize simulator output behind a tracker-neutral aligned-trace schema.
+  Pair rows exactly by caller-owned motion, sequence, seed, frame, and timestamp
+  identities; keep all concrete body/endpoint mappings in thin adapters.
 - Record endpoint RMSE/P95, orientation error, MPJPE, success rate, force peak,
-  yielded displacement, throughput, and memory.
+  yielded displacement, inactive-site cross-coupling, fall/reset/finiteness,
+  throughput, and memory.  Publish only bounded atomic NPZ/JSON artifacts.
 - Add a 4096-environment performance characterization for the fixed-shape
   compliance candidate scheduler, including policy-step time and GPU memory
   against host-off/baseline.  This is a measured Phase-4/6 performance item,

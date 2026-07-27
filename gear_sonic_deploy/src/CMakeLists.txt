@@ -1,3 +1,4 @@
 add_subdirectory(TRTInference)
+add_subdirectory(motion_compliance)
 add_subdirectory(g1)
 add_subdirectory(audio_thread)

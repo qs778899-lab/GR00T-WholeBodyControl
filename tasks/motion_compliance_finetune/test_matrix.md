@@ -207,32 +207,91 @@ does not leave repository caches.
 
 ## Phase 5 — Export and deployment switch
 
-1. Run all earlier pure unit/config tests plus the Phase-5 deployment/export
-   suite.  The portable deployment package must import without IsaacLab and
-   contain no G1 body names, fixed 14-keypoint order, or filesystem assumptions.
-2. Export only the six trained action-residual tensors from the accepted step-6
-   checkpoint into a separate ONNX file.  Do not rewrite/copy the released
-   encoder or decoder.  Require inputs `actor_context [B,S,997]` and
-   `motion_compliance_condition [B,S,3]`, output
-   `action_delta [B,S,29]`, dynamic `B/S`, and a metadata JSON pinning schema,
-   site/layout contract, checkpoint SHA-256, and residual tensor names/shapes.
-3. Compare PyTorch and ONNX Runtime action deltas for at least two dynamic
-   `[B,S]` shapes.  Cover all-off, all-on, and mixed gates in the same tensor;
-   every off row must be exactly zero and every finite on row must agree within
-   `1e-5` absolute tolerance.  Poison rejected rows with NaN and require finite,
-   isolated output.
-4. Deployment composition must preserve the supplied release action bitwise for
-   disabled rows and bound enabled deltas by 0.25.  The hard-off path must not
-   call the optional residual session.  Test a multi-row/multi-step mixed gate,
-   not only global all-on/all-off switches.
-5. Add an opt-in SONIC deployment config/adapter that assembles the 997-D
-   residual context from the unchanged 930-D actor observation, unchanged 64-D
-   robot-motion token, and 3-D public condition.  The released deployment config,
-   encoder ONNX, and decoder ONNX must have no diff.
-6. CLI/config validation rejects incompatible schema/site/action widths,
-   mismatched metadata digest, non-binary/non-finite gates, and invalid
-   threshold/displacement combinations.  ONNX and JSON writes must be atomic;
-   failed export leaves neither a partial final file nor repository cache.
+1. Rerun the combined Phase-1/2/3/4 pure suite in the pinned IsaacLab
+   environment:
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B -m pytest -p no:cacheprovider -q gear_sonic/tests/test_compliance_core.py gear_sonic/tests/test_compliance_sonic_adapter.py gear_sonic/tests/test_compliance_sonic_training.py gear_sonic/tests/test_compliance_training_checkpoint.py`.
+   Rerun the Phase-4 help/config gates, then run the Phase-5 deployment suite in
+   the existing CPU ORT environment:
+   `env PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /home/lab/miniconda3/envs/sonic/bin/python -B -m pytest -p no:cacheprovider -q gear_sonic/tests/test_compliance_deployment.py`.
+   The `sonic` pytest plugin autoload is disabled because its unrelated
+   typeguard entry point is incompatible with that environment's
+   `typing_extensions`; torch 2.7, ONNX 1.21, and ONNX Runtime 1.25 remain the
+   tested application libraries.  The portable deployment package must also
+   import under `sonic_backup`, which has no Python ONNX Runtime installation.
+2. From a missing final bundle directory, export the accepted step-6 action
+   residual exactly once:
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic/bin/python -B tasks/motion_compliance_finetune/artifacts/phase5_export_action_residual.py --checkpoint /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_resume_tensordict_fix/last.pt --expected-checkpoint-sha256 42dd92200da1e626436225414ddfa59ba2198953c304f25f217454f24fb84aba --expected-global-step 6 --num-sites 2 --deployment-overlay gear_sonic_deploy/policy/motion_compliance/action_residual_overlay.yaml --output-directory /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase5_action_residual_export_isaaclab_order/bundle`.
+   Export only the six trained action-residual tensors.  Require inputs
+   `release_action_context [B,S,994]` (64-D token then unchanged 930-D actor
+   observation) and `motion_compliance_condition [B,S,3]`; concatenate once
+   inside the graph to recover the trained 997-D MLP context.  Require output
+   `action_delta [B,S,29]`, dynamic `B/S`, exactly six ONNX initializers, and
+   metadata pinning schema, site/action layouts, checkpoint SHA-256/global step,
+   residual tensor names/shapes, model digest, and framework versions.  Do not
+   rewrite or copy either released ONNX file.  The action layout must equal
+   `joint_utils.G1_ISAACLab_ORDER` item-for-item; compose residual and release
+   action before the existing deploy-side `isaaclab_to_mujoco` remap.  The
+   earlier `phase5_action_residual_export` directory used an incorrect
+   MuJoCo/DFS metadata layout and is retained only as invalid evidence.
+3. Independently validate the published model and externally pin the accepted
+   metadata digest:
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic/bin/python -B tasks/motion_compliance_finetune/artifacts/phase5_export_acceptance.py --artifact-directory /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase5_action_residual_export_isaaclab_order/bundle --metadata-sha256 e954d093603d910e8cde4c2a5842db4d734d1ec8fbc3180f03a9399b5c17d8c5 --checkpoint /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_resume_tensordict_fix/last.pt --checkpoint-sha256 42dd92200da1e626436225414ddfa59ba2198953c304f25f217454f24fb84aba --global-step 6 --num-sites 2 --deployment-overlay gear_sonic_deploy/policy/motion_compliance/action_residual_overlay.yaml --release-artifact decoder /home/lab/Desktop/GR00T-WholeBodyControl/gear_sonic_deploy/policy/release/model_decoder.onnx c7241a123eaa36b5d64bad19540efde93cac1ad443bd4572fd12ca99898118ed --release-artifact encoder /home/lab/Desktop/GR00T-WholeBodyControl/gear_sonic_deploy/policy/release/model_encoder.onnx 013ab0287236aa2721e13f1e936d699db982302d0de0bfcdae76d5c3245362d3 --release-artifact observation_config /home/lab/Desktop/GR00T-WholeBodyControl/gear_sonic_deploy/policy/release/observation_config.yaml 466d05947c78af6c76388adfb86e3a2a77b2a1d921a64883ed3d085ebf58de1b --report /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase5_action_residual_export_isaaclab_order/acceptance.json --overwrite-report`.
+   Compare PyTorch and ONNX Runtime for dynamic `[2,3]` and `[1,5]` shapes,
+   all-off/all-on/mixed gates, and NaN-poisoned rejected condition/context rows.
+   Off rows must be exact zero and finite on rows must agree within `1e-5`.
+4. Compile and run the actual portable C++ runtime plus thin SONIC adapter
+   against system ONNX Runtime 1.16 and the accepted artifact:
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase5_cpp_ort_smoke.py --bundle /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase5_action_residual_export_isaaclab_order/bundle --decoder /home/lab/Desktop/GR00T-WholeBodyControl/gear_sonic_deploy/policy/release/model_decoder.onnx --encoder /home/lab/Desktop/GR00T-WholeBodyControl/gear_sonic_deploy/policy/release/model_encoder.onnx --observation-config /home/lab/Desktop/GR00T-WholeBodyControl/gear_sonic_deploy/policy/release/observation_config.yaml`.
+   Require dynamic `[2,3]` mixed-row inference, one- and three-segment arbitrary
+   portable host contexts, default-disabled and all-off zero ORT calls, exact
+   release-action fallback, finite bounded deltas, actual release-file hashes,
+   and incompatible-base rejection.
+5. Configure and link the real deployment target without downloading GoogleTest:
+   `cmake -S gear_sonic_deploy -B /tmp/gr00t_motion_phase5_cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DTensorRT_ROOT=/home/lab/TensorRT -DG1_DEPLOY_RUNTIME_OUTPUT_DIRECTORY=/tmp/gr00t_motion_phase5_cmake/bin`,
+   `cmake --build /tmp/gr00t_motion_phase5_cmake --target g1_deploy_onnx_ref -j2`,
+   and `/tmp/gr00t_motion_phase5_cmake/bin/g1_deploy_onnx_ref`.
+   The executable must link the portable residual and SONIC adapter and show
+   `--motion-compliance-overlay` in help.  The dependency installer must declare
+   libmd for apt, yum, and pacman targets.  Then run
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase5_deploy_cli_acceptance.py --binary /tmp/gr00t_motion_phase5_cmake/bin/g1_deploy_onnx_ref --compile-commands /tmp/gr00t_motion_phase5_cmake/compile_commands.json`.
+   It must reject NaN, Inf, out-of-range, trailing-character, trailing-empty,
+   wrong-width, and missing compliance values before DDS/model initialization even though the
+   production target is compiled with `-ffast-math`.  The small portable
+   residual target must place `-fno-fast-math` after the global flag so its
+   internal finite-value checks remain effective.
+6. Runtime composition must preserve supplied release-action bytes for disabled
+   rows and bound enabled deltas by 0.25.  The host-disabled and all-row-off
+   paths must not call the optional session.  Cover a multi-row/multi-step mixed
+   gate in both unit and accepted-artifact tests.
+7. The opt-in SONIC overlay remains disabled by default.  Its thin adapter must
+   assemble token then actor observation as 994 columns and pass condition only
+   as the second graph input.  The production entrypoint may contain only the
+   additive CLI/load/compose hook and must compose in IsaacLab/BFS order before
+   the existing remap while storing the composed action in `last_action`.
+   `--set-compliance 0` must be an explicit run-time residual-off setting.  The
+   startup value and `g/h/b/v` adjustments must reach the storage read by
+   `InterfaceManager`, `GamepadManager`, and `ZMQManager`, including their
+   switched ZMQ/pose delegates; switching an input manager must not silently
+   restore the default-on gate.
+   Confirm the immutable release boundary with
+   `git diff --exit-code 4141c34280abb67c82e115342a8720f4a83d750d -- gear_sonic_deploy/policy/release gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/include/control_policy.hpp gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/include/encoder.hpp`.
+8. The portable Python and C++ layers must contain no SONIC/G1/IsaacLab/wrist
+   names and must accept an ordered caller-owned context layout and an arbitrary
+   non-empty vector of named base-artifact pins.  Concrete release hashes,
+   token/actor names, wrist sites, action order, and operator-gate semantics
+   belong only to the SONIC adapters.
+9. Unit and CLI/config validation must reject incompatible schema/site/action
+   widths, checkpoint/model/metadata digests, non-binary/non-finite gates, and
+   invalid enabled-condition combinations.  Artifact schema v1 must require
+   ONNX opset exactly 17 in both Python export/validation and C++ loading.
+   ONNX and JSON publishing must
+   be atomic; a failed export leaves neither a final partial file nor a staging
+   directory.
+10. Run `git diff --check`.  Confirm no repository-local `__pycache__`,
+   `.pytest_cache`, `.pyc`, or `.pyo` remains, and confirm the released encoder,
+   decoder, release observation config, generic trainer, and Phase-1/2/3/4
+   training/environment source have no Phase-5 diff.  The additive SONIC export
+   symbols in its adapter `__init__` are explicitly allowed.
 
 ## Phase 6 — Integration and regression validation
 
@@ -244,7 +303,12 @@ does not leave repository caches.
    tests and revalidate it after a machine restart.
 3. Characterize fixed-shape compliance-candidate overhead at 4096 environments:
    report policy-step time and GPU memory for host-off/baseline and enabled
-   scheduling without changing the synchronization-safe algorithm first.
+   scheduling without changing the synchronization-safe algorithm first.  From
+   a missing output path, run:
+   `env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu LD_PRELOAD=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.580.159.03:/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libcuda.so.580.159.03 VK_ICD_FILENAMES=/tmp/nvidia_580_159_compat/extracted/usr/share/vulkan/icd.d/nvidia_icd.json PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase6_scheduler_benchmark.py --num-envs 4096 --num-sites 2 --output /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase6_scheduler_4096.json`.
+   The report must label itself scheduler-only, record CUDA-event time per
+   policy update plus allocated/reserved peak increments, and refuse to replace
+   an existing evidence file.
 4. Paired baseline regression, same seeds/motion IDs/timestamps:
    - success-rate drop no more than 1 percentage point;
    - local MPJPE regression no more than 3 mm or 10%, whichever is larger;
@@ -255,3 +319,29 @@ does not leave repository caches.
    behavior; no NaN/Inf or persistent wrench is permitted.
 7. Confirm output directories contain no unintended caches, duplicate JSON, or
    multi-GB debug logs.
+8. Run the tracker-neutral aligned-evaluation CPU contract:
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B -m pytest -p no:cacheprovider -q gear_sonic/tests/test_compliance_evaluation.py`
+   and the thin runner help gate:
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase6_evaluate_aligned_traces.py --help`.
+   Also run the non-GPU scheduler CLI gate:
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase6_scheduler_benchmark.py --help`.
+   It must reject any motion/sequence/seed/frame/timestamp or ordered-layout
+   mismatch, including a one-bit timestamp change.  With caller-owned site and
+   point layouts it reports per-site original/selected endpoint RMSE/P95,
+   quaternion orientation error, local/global MPJPE, force/yield, paired
+   inactive-site cross-coupling, success/fall/reset state, stale post-reset
+   force, and input/derived finiteness for baseline, hard-off, enabled/no-contact,
+   single-site, and simultaneous multi-site trials.
+   Every sequence must have one first-row post-reset snapshot and one final-row
+   terminal outcome; falls are terminal-only.  Every expected interaction site
+   must show caller-thresholded nonzero active force and reference yield, while
+   every inactive site remains below the configured force/yield tolerances.
+9. The portable evaluation package must contain no SONIC/G1/IsaacLab/MuJoCo,
+   concrete body-name, fixed action-width, or fixed tracking-point-count
+   dependency.  Persisted traces/reports use bounded atomic NPZ/JSON writers;
+   loading disables pickle, bounds both compressed and uncompressed sizes, and
+   publication refuses accidental overwrite by default.  Concrete endpoint
+   roles and simulator log mapping belong only to a thin collector/adapter.
+   Loading must use one `O_NOFOLLOW` file descriptor for regular-file, ZIP-size,
+   duplicate-member, schema/dtype/rank validation and NumPy decoding, so a path
+   replacement cannot swap the verified inode.

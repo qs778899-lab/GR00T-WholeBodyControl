@@ -643,3 +643,211 @@
   repository-local Python/pytest cache remains.  Phase 4 is `PASSED`; Phase 5
   starts with a separate residual-only ONNX/deployment switch design so the
   released encoder and decoder remain untouched.
+
+## 2026-07-27 — Phase 5 passed with standalone residual export
+
+- The release interface audit found that the trained action MLP does not accept
+  a 997-D tensor plus condition.  Its exact input is
+  `token64 + actor_obs930 + condition3 = 997`.  The standalone ONNX therefore
+  accepts `release_action_context [B,S,994]` and condition `[B,S,3]`, concatenates
+  exactly once, and emits only `action_delta [B,S,29]`.  This closes a potential
+  1000-vs-997 first-layer mismatch without touching the frozen encoder/decoder.
+- A tracker-independent deployment package now owns versioned metadata,
+  six-tensor graph reconstruction, atomic directory publication, digest/layout
+  verification, lazy ORT loading, hard-off inference bypass, mixed-row NaN
+  isolation, and byte-preserving action composition.  It contains no IsaacLab
+  import, robot/body name, 14-keypoint order, or hard-coded repository path.
+  The thin SONIC adapter alone assembles token then actor observation, encodes
+  the public threshold/Kp condition, and owns concrete site/action layouts.
+- A first exported metadata bundle incorrectly declared MuJoCo/DFS action order.
+  Code audit at `g1_deploy_onnx_ref.cpp:3123` showed that decoder output is still
+  IsaacLab/BFS and the deploy remaps it afterward.  That directory remains
+  unchanged as invalid evidence.  The accepted fresh bundle pins
+  `joint_utils.G1_ISAACLab_ORDER` item-for-item and requires composition before
+  the existing `isaaclab_to_mujoco` remap.
+- The accepted bundle is
+  `phase5_action_residual_export_isaaclab_order/bundle`.  Its checkpoint SHA is
+  `42dd92200da1e626436225414ddfa59ba2198953c304f25f217454f24fb84aba`,
+  checkpoint step is 6, metadata SHA is
+  `e954d093603d910e8cde4c2a5842db4d734d1ec8fbc3180f03a9399b5c17d8c5`,
+  and ONNX SHA is
+  `9e7a30ae8485eb153b63db81575c9b0fd24522523510560ed5d6292652568a81`.
+  The 1,317,966-byte graph contains exactly six initializers; the 2,679-byte
+  manifest records torch 2.7.0, ONNX 1.21.0, and ONNX Runtime 1.25.0.
+- Independent PT/ORT acceptance passed six all-off/all-on/mixed cases at
+  dynamic `[2,3]` and `[1,5]` leading shapes.  Maximum absolute difference was
+  `7.450580596923828e-09`; rejected NaN rows were finite exact zero.  The
+  disabled and all-off paths made zero session calls, mixed `[3,4]` made one,
+  off action rows stayed byte-exact, and maximum enabled delta was
+  `0.021564483642578125`, below the declared 0.25 bound.  This is interface
+  evidence from the six-step smoke checkpoint, not tracking/performance proof.
+- Final tests passed: Phase-1/2/3/4 pure regression `87 passed, 1 skipped in
+  35.83s`; Phase-5 deployment/export `26 passed in 1.26s`; Hydra help/config,
+  ORT-free `sonic_backup` import, accepted-artifact audit, release-source diff,
+  generic-trainer/prior-phase diff, and `git diff --check` all exited 0.  The
+  ORT CPU run emitted only a non-fatal GPU-discovery warning.  No repository
+  cache remains.  Phase 5 is `PASSED`; Phase 6 is now `IN_PROGRESS` and was not
+  executed in this handoff.
+
+## 2026-07-27 — Phase 5 reopened for production C++ closure
+
+- The earlier Python-only export result remains valid, but its log entry marked
+  Phase 5 passed before the production deploy executable consumed the artifact.
+  Phase 5 was therefore reopened; task status remains `IN_PROGRESS` until the
+  complete updated matrix and independent review pass.
+- Added a tracker-neutral C++ action-residual runtime with a PImpl ORT boundary,
+  arbitrary ordered context fields, arbitrary named/hash-pinned release
+  artifacts, schema/layout/digest checks, lazy disabled behavior, hard-off
+  zero-session behavior, mixed-row sanitization, a 0.25 delta bound, and
+  release-action fallback.  Concrete 994-D SONIC context, release hashes,
+  wrist sites, BFS action order, and operator-gate semantics remain in a thin
+  adapter.
+- The accepted ONNX bundle compiled and ran through system ORT 1.16 with marker
+  `MOTION_COMPLIANCE_PHASE5_CPP_ORT_PASS`: dynamic `[2,3]`, six mixed rows,
+  zero hard-off calls, action width 29, context width 994, and additional
+  generic one-/three-field host contexts passed.  The complete
+  `g1_deploy_onnx_ref` target then configured and linked successfully without a
+  test dependency download.
+- A read-only review found that composite input getters could read a child
+  value different from the startup/keyboard value stored on the manager.  The
+  startup value and adjustments now propagate through `InterfaceManager`,
+  `GamepadManager`, and `ZMQManager`, including ZMQ/pose delegates.  The enabled
+  overlay uses either positive wrist value as one global gate; both zero is an
+  exact bypass.  Help and runtime diagnostics state this limitation explicitly.
+- CLI compliance values now require one or three finite values in `[0.0,0.5]`.
+  Because the production target uses `-ffast-math`, finite validation inspects
+  IEEE-754 exponent bits rather than relying on an optimizable
+  `std::isfinite`.  The compiled CLI gate rejected NaN, Inf, negative,
+  over-range, trailing-character, wrong-width, and missing inputs before DDS or
+  model initialization, with marker
+  `MOTION_COMPLIANCE_PHASE5_DEPLOY_CLI_PASS invalid_values=8 dds_initializations=0 portable_fast_math=off`.
+- The reusable C++ runtime itself also performs finite checks.  Its small target
+  now appends `-fno-fast-math` after the repository-wide flag; the compiled
+  command is an acceptance input.  This leaves the release inference target's
+  arithmetic flags unchanged.
+- Final read-only review reported no P0/P1 issue and three P2 contract/document
+  gaps, all addressed before phase closure: trailing comma fields are now
+  rejected and covered by the production CLI acceptance; keyboard shortcut
+  claims are limited to the three composite managers and ZMQ comments match
+  actual optional external updates; Python export/schema validation and C++
+  loading now all pin artifact-v1 ONNX opset exactly 17.
+- A second final audit found that only the C++ generic loader, not the Python
+  generic loader, pinned the actual unchanged release files.  Python now uses
+  the same arbitrary non-empty `(name, path, sha256)` host contract; the SONIC
+  loader compares YAML declarations to those caller-owned pins before hashing
+  each file or creating ORT.  The independent acceptance CLI takes the three
+  released files and hashes as explicit inputs and records them in its report.
+
+## 2026-07-27 — Phase 5 production closure passed
+
+- The final combined Phase-1/2/3/4 suite passed with `87 passed, 1 skipped in
+  25.52s`; the expanded deployment/export suite passed with `33 passed in
+  2.54s`.  Both Hydra entrypoint/config gates exited 0.
+- Independent accepted-artifact validation passed six dynamic-shape parity
+  cases with maximum PT/ORT error `7.450580596923828e-09`, exact hard-off
+  bypass, model SHA
+  `9e7a30ae8485eb153b63db81575c9b0fd24522523510560ed5d6292652568a81`,
+  metadata payload SHA
+  `e954d093603d910e8cde4c2a5842db4d734d1ec8fbc3180f03a9399b5c17d8c5`,
+  and explicit hashes for the unchanged decoder, encoder, and observation
+  config.  The regenerated acceptance report SHA is
+  `86481c92d9d395d579c0ca30770a821698c7c23e0ba7ba42ae5a3571cc770ac1`.
+- The system-ORT portable/SONIC C++ smoke passed, the complete production
+  target configured and linked, its help exposed the opt-in overlay, and the
+  compiled CLI acceptance rejected all eight invalid compliance inputs before
+  DDS initialization.  The portable target retained `-fno-fast-math` after the
+  repository-wide flag.
+- Final diff gates passed: release artifacts and loader interfaces are
+  unchanged from upstream; the generic PPO trainer and Phase-1/2/3/4
+  training/environment sources have no Phase-5 diff; the portable Python/C++
+  packages contain no SONIC/G1/IsaacLab/wrist vocabulary; `git diff --check`
+  passed and no repository-local Python/pytest cache was present.
+- Two independent reviews found no remaining P0/P1 issue.  Phase 5 is now
+  `PASSED`; Phase 6 is `IN_PROGRESS`.  This phase proves a portable deployment
+  boundary and operational switch, not learned tracking/compliance quality.
+
+## 2026-07-27 — Phase 6 portable aligned-evaluation layer
+
+- Read the Phase-6 status/matrix before changing code and kept the task in
+  `IN_PROGRESS`.  No GPU, simulator, 4096-environment benchmark, paired real
+  rollout, git staging, or commit was run in this work item.
+- Added a tracker-neutral standard trace with exact motion/sequence/seed/frame/
+  timestamp pairing, caller-owned site and tracking-point layouts, explicit
+  enabled/active masks, endpoint/reference/pose/force tensors, and terminal,
+  success, fall, and post-reset snapshot events.  Portable source contains no
+  concrete robot/body mapping or fixed action/keypoint count.
+- Added reports for per-site original/selected endpoint RMSE/P95, quaternion
+  orientation, local/global MPJPE, force peak/RMS, reference yield and yield
+  along force, inactive-site force/yield, paired cross-coupling shift,
+  success/fall/reset behavior, stale post-reset force, and input/derived
+  finiteness.  Baseline, overlay-off, enabled/no-contact, arbitrary single-site,
+  and simultaneous multi-site protocols are validated separately.
+- NPZ traces and JSON reports publish atomically with hard compressed and
+  uncompressed size limits, pickle-disabled loading, schema-exact fields, and
+  no-overwrite defaults.  The thin CPU runner exposes only caller-provided
+  endpoint roles; a future simulator collector remains the sole owner of
+  concrete endpoint/body names.
+- Focused evaluation tests initially passed with `13 passed in 0.84s`; the runner
+  `--help` gate and scoped `git diff --check` also exited 0.  The corrected
+  environment-split regression passed with `100 passed, 1 skipped in 22.96s`
+  for Phase-1/2/3/4 plus evaluation in `sonic_backup`, and `33 passed, 96
+  warnings in 2.61s` for deployment in the ORT-equipped `sonic` environment.
+- An earlier combined invocation incorrectly ran deployment tests in
+  `sonic_backup`; it produced nine `ModuleNotFoundError: onnxruntime` failures
+  while `124 passed, 1 skipped`.  This was an environment-selection error, not
+  a product-code failure, and was replaced by the passing split runs above.
+- Independent review then found five strictness paths that could accept
+  incomplete evidence.  The suite now requires baseline, off, no-contact,
+  exactly one single-site trial per caller-selected endpoint, and a simultaneous
+  multi-site trial; enabled protocols remain enabled on every row; every trial
+  constrains force/yield at inactive sites; every trial requires post-reset
+  evidence; and alignment compares dtype plus exact bytes so `+0.0/-0.0`
+  timestamps cannot match.  Interaction reports now include active-window
+  endpoint/orientation/force/yield statistics and cross-coupling paired to the
+  overlay-off trace rather than only the released baseline.  New negative tests
+  cover each case; the final focused suite passed with `14 passed in 0.91s`,
+  CLI help, scoped diff, portable-vocabulary, and cache-hygiene gates all passed.
+- Final IO/lifecycle review closed four additional false-accept paths.  NPZ
+  loading now uses one `O_NOFOLLOW` descriptor and `fstat` through ZIP and NumPy
+  decoding, rejects duplicate members and non-Unicode/non-vector name fields,
+  and therefore has no path-reopen TOCTOU.  Each sequence now requires exactly
+  one first-row reset snapshot and one final-row terminal, with falls limited to
+  terminal rows.  Single/multi interaction sites must exceed configurable
+  active-force and active-yield minima, so a mask-only zero-exposure trial
+  cannot pass.  The focused suite remained `14 passed in 0.91s`; final scoped
+  diff, portable-vocabulary, and cache scans were clean.
+
+## 2026-07-27 — Phase 6 CPU contract final audit
+
+- A final code read found the inactive-yield acceptance check indented after
+  the expected-active-site loop, so only its last site was checked.  It now
+  applies to every caller-owned site in every trial; a single-site regression
+  injects yield only at the other inactive endpoint and requires the named
+  failure.
+- The complete Phase-1/2/3/4 plus evaluation suite passed with `101 passed, 1
+  skipped in 25.00s`; the correctly separated ORT deployment suite passed with
+  `33 passed, 96 warnings in 2.75s`.  Both Phase-6 CLI help gates and
+  `git diff --check` exited 0, and repository cache scanning was clean.
+- Added a separate 4096-environment fixed-shape scheduler benchmark entrypoint.
+  It records CUDA-event time per policy update plus allocated/reserved peak
+  increments for host-off and enabled candidates, labels the result
+  scheduler-only rather than end-to-end policy latency, and atomically refuses
+  an existing evidence path.  Only its CPU `--help` gate ran in this handoff;
+  the required compatibility-CUDA measurement remains pending.
+- Phase 6 remains `IN_PROGRESS`.  No synthetic CPU trace or prior Phase-4 GPU
+  smoke is accepted as the missing real paired baseline/off/no-contact,
+  single-left, single-right, simultaneous, or 4096-environment evidence.
+
+## 2026-07-27 — Phase 6 resumable handoff prepared
+
+- Added `phase6_handoff.md` as the branch-local source of truth for implemented
+  architecture, accepted model/artifact hashes, validation results, known
+  limitations, portable migration boundaries, and the exact continuation
+  order after a machine restart.
+- Expanded `status.md` so the current CPU/evaluation work and every missing
+  GPU/simulator gate are visible without reconstructing the full log.
+- Phase 6 remains `IN_PROGRESS`; no prior smoke or CPU-generated trace was
+  promoted to final tracking/compliance evidence.
+- Prepared all Phase-5 deployment and Phase-6 CPU evaluation work for
+  publication on the isolated `experiment/motion-compliance` branch only. The
+  protected main branch and all pre-existing remote refs remain out of scope.

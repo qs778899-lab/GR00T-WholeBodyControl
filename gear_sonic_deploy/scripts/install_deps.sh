@@ -198,6 +198,7 @@ case $PACKAGE_MANAGER in
             libmsgpack-dev \
             libzmq3-dev \
             nlohmann-json3-dev \
+            libmd-dev \
             libgtest-dev
         ;;
     yum)
@@ -208,6 +209,7 @@ case $PACKAGE_MANAGER in
             zeromq-devel \
             cppzmq-devel \
             nlohmann-json-devel \
+            libmd-devel \
             gtest-devel
         ;;
     pacman)
@@ -218,6 +220,7 @@ case $PACKAGE_MANAGER in
             zeromq \
             cppzmq \
             nlohmann-json \
+            libmd \
             gtest
         ;;
 esac

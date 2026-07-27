@@ -130,6 +130,9 @@
 // Control policy
 #include "../include/control_policy.hpp"
 
+// Optional motion-compliance action-residual overlay
+#include "../include/motion_compliance_action_residual.hpp"
+
 // Dex3 hands
 #include "../include/dex3_hands.hpp"
 
@@ -190,7 +193,7 @@ class G1Deploy {
     bool has_vr_3point_data_ = false;
     std::array<double, 9> vr_3point_position_buffer_;
     std::array<double, 12> vr_3point_orientation_buffer_;
-    std::array<double, 3> vr_3point_compliance_buffer_;
+    std::array<double, 3> vr_3point_compliance_buffer_{0.5, 0.5, 0.0};
     bool has_vr_5point_data_ = false;
     std::array<double, 15> vr_5point_position_buffer_;
     std::array<double, 20> vr_5point_orientation_buffer_;
@@ -357,6 +360,13 @@ class G1Deploy {
     
     // Control policy
     std::unique_ptr<PolicyEngine> policy_engine_;
+
+    // Optional CPU ONNX residual composed in release/IsaacLab action order.
+    // This remains null unless the operator supplies an overlay path.
+    std::unique_ptr<SonicMotionComplianceActionResidual>
+        motion_compliance_action_residual_;
+    std::vector<float> motion_compliance_composed_action_;
+    std::uint64_t motion_compliance_failure_count_ = 0;
     
     // =========================================================================
     // Observation system configuration and runtime state
@@ -2159,7 +2169,8 @@ class G1Deploy {
       std::string zmq_out_topic = "g1_debug",
       bool enable_motion_recording = false,
       std::array<double, 3> initial_compliance = {0.05, 0.05, 0.0},
-      double initial_max_close_ratio = 1.0)
+      double initial_max_close_ratio = 1.0,
+      std::string motion_compliance_overlay_path = "")
       : time_(0.0),
         publish_dt_(0.002),
         control_dt_(0.02),
@@ -2377,6 +2388,21 @@ class G1Deploy {
         }
         is_using_encoder_ = false;
       }
+
+      // The overlay is a separate, opt-in deployment component.  Its loader
+      // owns all artifact/schema/hash validation and does not read the base or
+      // create an ORT session when its YAML switch is disabled.
+      if (!motion_compliance_overlay_path.empty()) {
+        motion_compliance_action_residual_ =
+            SonicMotionComplianceActionResidual::Load(
+                motion_compliance_overlay_path, model_file_path,
+                encoder_file_path, obs_config_path);
+        motion_compliance_composed_action_.resize(G1_NUM_MOTOR, 0.0F);
+        std::cout << "[INFO] Motion-compliance action residual loaded (enabled="
+                  << (motion_compliance_action_residual_->enabled() ? "true"
+                                                                     : "false")
+                  << ")" << std::endl;
+      }
       
       // =========================================================================
       // Initialize encode_mode for all loaded reference motions and planner motion
@@ -2525,21 +2551,38 @@ class G1Deploy {
                   << initial_vr_3point_compliance_[2] << "]" << std::endl;
         std::cout << "[INFO] Initial hand max close ratio: " << initial_max_close_ratio_ 
                   << " (1.0 = full closure allowed, 0.2 = limited)" << std::endl;
-        std::cout << "[INFO] Keyboard controls: g/h = left hand +/- 0.1, b/v = right hand +/- 0.1 (range: 0.01-0.5)" << std::endl;
+        const bool has_manager_compliance_shortcuts =
+            input_type == "manager" || input_type == "gamepad_manager" ||
+            input_type == "zmq_manager";
+        if (has_manager_compliance_shortcuts) {
+          std::cout << "[INFO] Manager keyboard controls: g/h = left hand +/- 0.1, b/v = right hand +/- 0.1 (range: 0.0-0.5)" << std::endl;
+        }
         std::cout << "[INFO] Keyboard controls: x/c = hand max close ratio +/- 0.1 (range: 0.2-1.0)" << std::endl;
         
         // Info message about compliance observation status
-        if (!has_vr_3point_compliance_obs_) {
+        const bool residual_compliance_enabled =
+            motion_compliance_action_residual_ &&
+            motion_compliance_action_residual_->enabled();
+        if (!has_vr_3point_compliance_obs_ &&
+            !residual_compliance_enabled) {
           std::cout << "\n┌─────────────────────────────────────────────────────────────────────────────┐" << std::endl;
           std::cout << "│  Compliance control: DISABLED                                               │" << std::endl;
           std::cout << "│  Policy does not observe 'vr_3point_compliance'.                            │" << std::endl;
-          std::cout << "│  Keyboard controls (g/h/b/v) will be ignored for this policy.               │" << std::endl;
-          std::cout << "│  To enable, use a compliance-aware policy that observes it natively.        │" << std::endl;
+          std::cout << "│  No enabled action-residual overlay consumes the controls.                  │" << std::endl;
+          std::cout << "└─────────────────────────────────────────────────────────────────────────────┘\n" << std::endl;
+        } else if (!has_vr_3point_compliance_obs_) {
+          std::cout << "\n┌─────────────────────────────────────────────────────────────────────────────┐" << std::endl;
+          std::cout << "│  Compliance action-residual overlay: ENABLED                               │" << std::endl;
+          std::cout << "│  Release policy remains unchanged; the overlay consumes the controls.       │" << std::endl;
+          std::cout << "│  Either positive wrist value enables one global residual; both zero = off.  │" << std::endl;
           std::cout << "└─────────────────────────────────────────────────────────────────────────────┘\n" << std::endl;
         } else {
           std::cout << "\n┌─────────────────────────────────────────────────────────────────────────────┐" << std::endl;
           std::cout << "│  Compliance control: ENABLED                                                │" << std::endl;
-          std::cout << "│  Policy observes 'vr_3point_compliance'. Keyboard controls (g/h/b/v) work.  │" << std::endl;
+          std::cout << "│  Policy observes 'vr_3point_compliance'; configured inputs are consumed.    │" << std::endl;
+          if (residual_compliance_enabled) {
+            std::cout << "│  The enabled action-residual overlay also consumes the wrist controls.      │" << std::endl;
+          }
           std::cout << "└─────────────────────────────────────────────────────────────────────────────┘\n" << std::endl;
         }
       }
@@ -3116,12 +3159,35 @@ class G1Deploy {
       
       // Access actions from control policy's internal buffer (already populated by Infer)
       auto& action_buffer = policy_engine_->GetActionBuffer();
-      float* floatarr = action_buffer.data();
+      std::span<const float> selected_action(action_buffer);
+      if (motion_compliance_action_residual_) {
+        std::string residual_error;
+        const bool residual_ok = motion_compliance_action_residual_->Compose(
+            obs_buffer_float, action_buffer, vr_3point_compliance_buffer_,
+            motion_compliance_composed_action_, &residual_error);
+        // Compose is fail-closed and has already copied the release action on
+        // failure.  Rate-limit diagnostics so a bad external control cannot
+        // flood the 50 Hz loop.
+        if (!residual_ok) {
+          ++motion_compliance_failure_count_;
+          if (motion_compliance_failure_count_ == 1 ||
+              motion_compliance_failure_count_ % 250 == 0) {
+            std::cerr << "[WARN] Motion-compliance residual bypassed after "
+                      << motion_compliance_failure_count_
+                      << " failure(s): " << residual_error << std::endl;
+          }
+        }
+        selected_action = motion_compliance_composed_action_;
+      }
       
       MotorCommand motor_command_tmp;
       for (int i = 0; i < G1_NUM_MOTOR; i++) {
-        const double action_value = static_cast<double>(floatarr[isaaclab_to_mujoco[i]]) * g1_action_scale[i];
-        last_action[i] = static_cast<double>(floatarr[i]);
+        const double action_value =
+            static_cast<double>(selected_action[isaaclab_to_mujoco[i]]) *
+            g1_action_scale[i];
+        // `last_action` is part of the policy observation.  Store the action
+        // actually sent through the existing remap, not the pre-overlay base.
+        last_action[i] = static_cast<double>(selected_action[i]);
         motor_command_tmp.q_target.at(i) = static_cast<float>(default_angles[i] + action_value);
         motor_command_tmp.tau_ff.at(i) = 0.0;
         motor_command_tmp.kp.at(i) = kps[i];
@@ -4063,8 +4129,11 @@ class G1Deploy {
                         << ", Total: " << planner_->last_timing_.total_duration.count() << "us";
             }
             
-            // Only print compliance levels if the policy observes them
-            if (has_vr_3point_compliance_obs_) {
+            // Print controls whenever either the native policy or the optional
+            // action-residual overlay consumes them.
+            if (has_vr_3point_compliance_obs_ ||
+                (motion_compliance_action_residual_ &&
+                 motion_compliance_action_residual_->enabled())) {
               std::cout << " | Compliance [L,R,H]: [" 
                         << vr_3point_compliance_buffer_[0] << ", "
                         << vr_3point_compliance_buffer_[1] << ", "
@@ -4119,6 +4188,9 @@ int main(int argc, char const* argv[]) {
     std::cout << "  --disable-crc-check: disable CRC validation for MuJoCo simulation" << std::endl;
     std::cout << "  --obs-config <path>: specify observation configuration YAML file" << std::endl;
     std::cout << "  --encoder-file <path>: specify encoder ONNX file (optional)" << std::endl;
+    std::cout << "  --motion-compliance-overlay <path>: opt in to the validated action-residual overlay YAML" << std::endl;
+    std::cout << "                                      The first two VR compliance controls form one global residual gate" << std::endl;
+    std::cout << "                                      Enabled overlay starts on with defaults; use --set-compliance 0 for off" << std::endl;
     std::cout << "  --planner-precision <16|32>: specify precision to run the planner model at (default: 16)" << std::endl;
     std::cout << "  --policy-precision <16|32>: specify precision to run the policy model at (default: 32)" << std::endl;
     std::cout << "  --zmq-host <host>: ZMQ server host (default: localhost)" << std::endl;
@@ -4131,9 +4203,9 @@ int main(int argc, char const* argv[]) {
     std::cout << "  --logs-dir <path>: optional logs output base directory (default: logs/<timestamp>/)" << std::endl;
     std::cout << "  --enable-csv-logs: enable writing CSV logs (default: OFF)" << std::endl;
     std::cout << "  --enable-motion-recording: enable motion recording for ZMQ/planner (default: OFF)" << std::endl;
-    std::cout << "  --set-compliance <value>: set initial VR 3-point compliance (0.01=rigid, 0.5=compliant; default: [0.5, 0.5, 0.0])" << std::endl;
+    std::cout << "  --set-compliance <value>: set initial VR 3-point compliance (0.0=off/rigid, 0.5=compliant; default: [0.5, 0.5, 0.0])" << std::endl;
     std::cout << "                                 Can specify 1 value (both hands) or 3 values (left_wrist,right_wrist,head)" << std::endl;
-    std::cout << "                                 Keyboard controls: g/h = left hand +/- 0.1, b/v = right hand +/- 0.1" << std::endl;
+    std::cout << "                                 Manager input shortcuts only: g/h = left +/- 0.1, b/v = right +/- 0.1" << std::endl;
     std::cout << "  --max-close-ratio <value>: set initial hand max close ratio (0.2-1.0; default: 1.0 = full closure)" << std::endl;
     std::cout << "                             0.2 = limited (80% open), 1.0 = full closure allowed" << std::endl;
     std::cout << "                             Keyboard controls: x/c = +/- 0.1 (always available)" << std::endl;
@@ -4159,6 +4231,7 @@ int main(int argc, char const* argv[]) {
   bool disableCrcCheck = false;\
   std::string obsConfigPath = "";
   std::string encoderFile = "";
+  std::string motionComplianceOverlayPath = "";
   std::string targetMotionLogfile = "";
   std::string plannerMotionLogfile = "";
   std::string policyInputLogfile = "";
@@ -4200,6 +4273,17 @@ int main(int argc, char const* argv[]) {
         i++; // Skip the next argument since it's the encoder file path
       } else {
         std::cerr << "Error: --encoder-file requires a path argument" << std::endl;
+        exit(1);
+      }
+    } else if (std::string(argv[i]) == "--motion-compliance-overlay") {
+      if (i + 1 < argc) {
+        motionComplianceOverlayPath = argv[i + 1];
+        std::cout << "[INFO] Using motion-compliance overlay: "
+                  << motionComplianceOverlayPath << std::endl;
+        i++;
+      } else {
+        std::cerr << "Error: --motion-compliance-overlay requires a path argument"
+                  << std::endl;
         exit(1);
       }
     } else if (std::string(argv[i]) == "--planner-file") {
@@ -4361,14 +4445,44 @@ int main(int argc, char const* argv[]) {
       if (i + 1 < argc) {
         // Parse compliance values (can be 1 or 3 values)
         std::string compliance_str = argv[i + 1];
+        if (compliance_str.empty() || compliance_str.back() == ',') {
+          std::cerr << "Error: Invalid compliance value: empty field" << std::endl;
+          exit(1);
+        }
         std::vector<double> values;
         std::stringstream ss(compliance_str);
         std::string token;
         while (std::getline(ss, token, ',')) {
           try {
-            values.push_back(std::stod(token));
+            std::size_t parsed = 0;
+            const double value = std::stod(token, &parsed);
+            if (parsed != token.size()) {
+              throw std::invalid_argument("trailing compliance characters");
+            }
+            values.push_back(value);
           } catch (...) {
             std::cerr << "Error: Invalid compliance value: " << token << std::endl;
+            exit(1);
+          }
+        }
+        if (values.size() != 1 && values.size() != 3) {
+          std::cerr << "Error: --set-compliance requires 1 or 3 comma-separated values" << std::endl;
+          exit(1);
+        }
+        for (double value : values) {
+          // This target is built with -ffast-math, under which std::isfinite
+          // may be optimized to true. Inspect the IEEE-754 exponent bits so
+          // NaN/Inf command-line controls are rejected in the production build.
+          std::uint64_t bits = 0;
+          static_assert(sizeof(bits) == sizeof(value));
+          std::memcpy(&bits, &value, sizeof(bits));
+          if ((bits & 0x7ff0000000000000ULL) ==
+              0x7ff0000000000000ULL) {
+            std::cerr << "Error: --set-compliance values must be finite and between 0.0 and 0.5" << std::endl;
+            exit(1);
+          }
+          if (value < 0.0 || value > 0.5) {
+            std::cerr << "Error: --set-compliance values must be finite and between 0.0 and 0.5" << std::endl;
             exit(1);
           }
         }
@@ -4376,13 +4490,10 @@ int main(int argc, char const* argv[]) {
           initial_compliance = {values[0], values[0], 0.0};
           std::cout << "[INFO] Initial VR 3-point compliance set to: [" << values[0] 
                     << ", " << values[0] << ", 0.0]" << std::endl;
-        } else if (values.size() == 3) {
+        } else {
           initial_compliance = {values[0], values[1], values[2]};
           std::cout << "[INFO] Initial VR 3-point compliance set to: ["
                     << values[0] << ", " << values[1] << ", " << values[2] << "]" << std::endl;
-        } else {
-          std::cerr << "Error: --set-compliance requires 1 or 3 comma-separated values" << std::endl;
-          exit(1);
         }
         i++; // Skip the next argument since it's the compliance value
       } else {
@@ -4441,7 +4552,8 @@ int main(int argc, char const* argv[]) {
     zmq_out_topic,
     enableMotionRecording,
     initial_compliance,
-    initial_max_close_ratio
+    initial_max_close_ratio,
+    motionComplianceOverlayPath
   );
   std::cout << "[DEBUG] G1Deploy object created successfully!" << std::endl;
   
@@ -4468,4 +4580,3 @@ int main(int argc, char const* argv[]) {
   std::cout << "[DEBUG] Program exiting normally..." << std::endl;
   return 0;
 }
-
