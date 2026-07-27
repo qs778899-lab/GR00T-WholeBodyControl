@@ -19,10 +19,16 @@ from isaaclab.app import AppLauncher
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--motion-file", type=Path, required=True)
-    parser.add_argument("--smpl-motion-dir", type=Path, required=True)
-    parser.add_argument("--checkpoint", type=Path, required=True)
+    motion_file = parser.add_argument("--motion-file", type=Path)
+    smpl_motion_dir = parser.add_argument("--smpl-motion-dir", type=Path)
+    checkpoint = parser.add_argument("--checkpoint", type=Path)
+    # Delay only the required flags across AppLauncher's preliminary parse.
+    # Final parsing still rejects missing launch assets, while ``--help`` shows
+    # both application and AppLauncher options and exits zero.
     AppLauncher.add_app_launcher_args(parser)
+    motion_file.required = True
+    smpl_motion_dir.required = True
+    checkpoint.required = True
     return parser.parse_args()
 
 
@@ -225,6 +231,8 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         exit_code = main()
+    except SystemExit as error:
+        exit_code = error.code if isinstance(error.code, int) else 1
     except BaseException:
         traceback.print_exc()
         exit_code = 1

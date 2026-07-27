@@ -307,3 +307,85 @@
   `current_phase` advances to 6. These results prove the finetune/evaluation/
   export chain and short-checkpoint regression gates, not converged compliant
   control performance.
+
+## 2026-07-27 — Phase 6 final regression; compatibility-NVML gate pending
+
+- Refined Phase 6 into a repeatable final matrix: complete Phase-1-through-5
+  portable/resolved regression, every entrypoint help and both no-write dry
+  runs, real ONNX Runtime parity, independent 300-frame metric audit, complete
+  accepted-tree/checkpoint golden checks, release/ref invariants, bounded output
+  layout, source hygiene, and idle process/NVML gates. The accepted Phase-4 and
+  Phase-5 GPU directories remain read-only and were not rerun or rewritten.
+- The first expanded help group exposed three thin AppLauncher entrypoints that
+  returned 1 for bare `--help`: AppLauncher preliminarily parsed required
+  application arguments, and the module guard converted argparse's normal
+  `SystemExit(0)` into failure. Required flags are now enabled after
+  AppLauncher registration and `SystemExit` codes are preserved. No runtime
+  `main()` body changed.
+- Added focused help tests. Their pinned AST digests exactly match the three
+  accepted pre-Phase-6 runtime `main()` bodies; bare help is zero-exit and
+  non-writing, while missing required launch arguments remain exit 2 without a
+  traceback. Portable focused execution passed two tests with one expected
+  Isaac Lab skip; `sonic_backup` passed 2/2.
+- After the CLI-only repair, complete discovery passed 129 tests with 39
+  expected dependency skips portably and 129 tests with only four CUDA skips in
+  `sonic_backup`. All eight help gates then exited zero. Phase-4 and Phase-5 dry
+  runs printed their exact three-job/two-rollout contracts and left both target
+  directories absent before and after.
+- Real ONNX Runtime 1.25.0 CPU parity passed 1/1. The independent accepted
+  Phase-5 audit passed again at 300 aligned frames, mean paired displacement
+  `0.00131441758 m`, maximum ORT error `5.82076609e-10`, and 1655744 bytes.
+- Added a read-only final audit with configurable repository/asset/run paths.
+  It reloads both trained checkpoints; pins official config/checkpoint/sample
+  data, step-5/step-6 checkpoints, ONNX, refs, and release paths; and hashes
+  complete evidence layouts without depending on the root location. Structural
+  execution passed: Phase 4 digest
+  `34cba4405dee146c7dd5f29d4731001737e8ae85f6f4d79e3928317b5bb02503`
+  over 31 files/9 directories/the one internal resume link/318016496 bytes;
+  Phase 5 digest
+  `9efef42178353072faa457f49934c6fa67ffbf852628470e1f9bbc384046c81e`
+  over 14 files/3 directories/zero links/1655744 bytes. The `/proc` CHIP
+  workflow-process gate also passed.
+- The audit verifies that `nvidia-smi` resolves a real GPU before accepting an
+  empty compute-process list. Its explicitly labelled
+  `--skip-gpu-process-check` path emits only
+  `CHIP_PHASE6_STRUCTURAL_AUDIT_PASS` with
+  `gpu_process_gate=SKIPPED_NOT_ACCEPTED`; a fake executable cannot produce the
+  final acceptance marker. A focused `/usr/bin/true` negative exited nonzero at
+  the real-GPU discovery gate after all structural checks passed.
+- The exact compatibility-NVML command in Phase-6 matrix item 4 was requested
+  as a read-only escalated execution. Auto-review rejected it because the
+  account usage limit was reached; a main-thread retry received the same
+  external rejection, and sandboxed NVML cannot access the driver. No bypass
+  was attempted. The Phase-5 final gate had already found no residual
+  CHIP/Isaac process and no GPU compute application, but Phase 6 remains
+  `IN_PROGRESS` until the fresh item-4 command emits
+  `CHIP_PHASE6_FINAL_AUDIT_PASS` and final hygiene is repeated.
+
+## 2026-07-27 — Phase 6 Phase-5-head immutability gate
+
+- Independent review found that the original final audit only required all
+  official-baseline changes to be additive and under CHIP-owned directories.
+  Because every accepted Phase-1..5 implementation file is itself an addition,
+  that check could not detect a Phase-6 edit to an already-accepted core,
+  adapter, training, export, or evaluation file.
+- The repository audit now pins accepted Phase-5 commit
+  `c925a0da115d1d6e0cc296c4a94b00a57c6461b8` and requires the exact ten-path
+  Phase-6 diff with fixed `A`/`M` status.  The original official-baseline and
+  release-boundary checks remain independent and unchanged.
+- Phase 6 remains `IN_PROGRESS`: a fresh compatibility-NVML process audit is
+  still mandatory, and repository hygiene currently detects an unintended
+  Phase-6 audit bytecode cache whose precise cleanup was rejected by the
+  platform approval layer after the account usage limit was reached.
+
+## 2026-07-27 — Phase 6 resumable handoff prepared
+
+- Consolidated the delivered architecture, accepted assets/artifact hashes,
+  engineering evidence, evidence limitations, portability boundary, exact
+  remaining gates, and safe cleanup/rerun rules in `phase6_handoff.md`.
+- The task remains `IN_PROGRESS`. This documentation does not convert the
+  previously blocked cache/NVML checks into passes and does not modify either
+  immutable accepted evidence root.
+- Prepared the existing Phase-6 entrypoint/help/audit/task diff for publication
+  on the isolated `experiment/chip-compliance` branch only. The protected main
+  branch and all pre-existing remote refs remain outside this change boundary.

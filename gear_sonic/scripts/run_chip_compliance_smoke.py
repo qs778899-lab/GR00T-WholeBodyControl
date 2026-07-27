@@ -20,9 +20,14 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--enabled", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--steps", type=int, default=100)
-    parser.add_argument("--motion-file", type=Path, required=True)
-    parser.add_argument("--smpl-motion-dir", type=Path, required=True)
+    motion_file = parser.add_argument("--motion-file", type=Path)
+    smpl_motion_dir = parser.add_argument("--smpl-motion-dir", type=Path)
+    # AppLauncher performs a preliminary parse before adding its options.  Make
+    # the application arguments required only after that parse so bare help is
+    # complete and successful while a real launch still validates both paths.
     AppLauncher.add_app_launcher_args(parser)
+    motion_file.required = True
+    smpl_motion_dir.required = True
     return parser.parse_args()
 
 
@@ -598,6 +603,8 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         exit_code = main()
+    except SystemExit as error:
+        exit_code = error.code if isinstance(error.code, int) else 1
     except BaseException:
         traceback.print_exc()
         exit_code = 1

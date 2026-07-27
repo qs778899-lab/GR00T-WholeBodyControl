@@ -475,6 +475,187 @@ rewrite the accepted Phase-4 artifacts.
 
 ## Phase 6 — Final regression and handoff
 
-- All earlier matrices.
-- Full documented regression/golden comparison and output-layout check.
-- Final artifact/temporary-file audit.
+Run from the repository root.  Phase 6 is a final regression and evidence
+handoff; it changes no policy/model, simulator behavior, trainer, or export
+graph.  The
+complete earlier CPU matrices are rerun below.  The accepted Phase-4 GPU
+training and Phase-5 300-frame GPU workflow are immutable inputs: do not launch
+them again and do not modify their files.  Their GPU-only claims are inherited
+only after the fresh semantic/hash/metric/ORT audits below pass.
+
+1. Complete portable and resolved Phase-1-through-Phase-5 regression
+
+   ```bash
+   PYTHONDONTWRITEBYTECODE=1 python -B -m unittest discover \
+     -s gear_sonic/tests/compliance -p 'test_*.py' -v
+   PYTHONDONTWRITEBYTECODE=1 \
+     /home/lab/miniconda3/envs/sonic_backup/bin/python -B \
+     -m unittest discover -s gear_sonic/tests/compliance -p 'test_*.py' -v
+   ```
+
+   Both commands must discover and pass all 129 tests.  The portable interpreter
+   has 39 explicitly dependency-gated skips; `sonic_backup` has only four
+   CUDA-only skips when the compatibility libraries are not preloaded.  This is
+   the complete CPU/Hydra/official-checkpoint regression for Phases 1-5, not a
+   selected subset.
+
+2. Entrypoint help, derived-config, and collision-free dry-run gates
+
+   Run every shipped CHIP entrypoint help path in `sonic_backup`:
+
+   ```bash
+   PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/train_agent_trl.py --help
+   PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/scripts/run_chip_compliance_smoke.py --help
+   PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/scripts/run_chip_phase3_shape_smoke.py --help
+   PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/scripts/run_chip_phase4_finetune.py --help
+   PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/scripts/run_chip_phase5_rollout.py --help
+   PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/scripts/run_chip_phase5_eval_export.py --help
+   PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/scripts/audit_chip_phase5.py --help
+   PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/chip_compliance_finetune/artifacts/phase6_final_audit.py --help
+   ```
+
+   Every command must exit zero without creating a simulator/runtime output.
+   The three AppLauncher entrypoints have a focused regression:
+
+   ```bash
+   PYTHONDONTWRITEBYTECODE=1 python -B -m unittest \
+     gear_sonic.tests.compliance.test_phase6_entrypoint_help -v
+   PYTHONDONTWRITEBYTECODE=1 \
+     /home/lab/miniconda3/envs/sonic_backup/bin/python -B -m unittest \
+     gear_sonic.tests.compliance.test_phase6_entrypoint_help -v
+   ```
+
+   Portable execution must pass the source/AST test with one expected Isaac Lab
+   skip; `sonic_backup` must pass both tests.  The tests pin each accepted
+   runtime `main()` AST, require bare help to exit zero without warning or
+   traceback, and require missing launch arguments to remain an argparse exit 2.
+   The full resolved suite in item 1 remains the derived Hydra configuration
+   composition gate.  Then run both exact orchestration dry runs, with each
+   destination absent before and after:
+
+   ```bash
+   test ! -e /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/phase6_phase4_dry_run
+   PYTHONDONTWRITEBYTECODE=1 \
+     /home/lab/miniconda3/envs/sonic_backup/bin/python -B \
+     gear_sonic/scripts/run_chip_phase4_finetune.py \
+     --run-root /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/phase6_phase4_dry_run \
+     --dry-run
+   test ! -e /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/phase6_phase4_dry_run
+   test ! -e /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/phase6_phase5_dry_run
+   PYTHONDONTWRITEBYTECODE=1 \
+     /home/lab/miniconda3/envs/sonic_backup/bin/python -B \
+     gear_sonic/scripts/run_chip_phase5_eval_export.py \
+     --runs-root /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip \
+     --run-root /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/phase6_phase5_dry_run \
+     --checkpoint /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/phase4_acceptance_resume_fix/compliance_residual_step6_resume/last.pt \
+     --motion-file /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sample_data/robot_filtered/210531/walk_forward_amateur_001__A001.pkl \
+     --smpl-motion-dir /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sample_data/smpl_filtered \
+     --onnxruntime-python /home/lab/miniconda3/envs/sonic/bin/python \
+     --onnxruntime-version 1.25.0 \
+     --steps 300 --seed 0 --device cuda:0 --dry-run
+   test ! -e /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/phase6_phase5_dry_run
+   ```
+
+   Phase 4 must still print one release warm start, one residual warm start, and
+   one one-batch resume.  Phase 5 must print exactly one serial stiff rollout,
+   one serial compliant rollout, the `60/9/930 -> 64` residual export, all
+   thresholds, and the matched-force release-equivalent comparator semantics.
+
+3. Real ONNX Runtime and independent Phase-5 accepted-artifact audit
+
+   ```bash
+   PYTHONDONTWRITEBYTECODE=1 \
+     /home/lab/miniconda3/envs/sonic/bin/python -B -m unittest \
+     gear_sonic.tests.compliance.test_sonic_phase5_export.SonicPhase5ExportTest.test_separate_onnx_dynamic_and_hard_off_parity \
+     -v
+   PYTHONDONTWRITEBYTECODE=1 \
+     /home/lab/miniconda3/envs/sonic/bin/python -B \
+     gear_sonic/scripts/audit_chip_phase5.py \
+     --runs-root /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip \
+     --run-root /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/phase5_acceptance \
+     --checkpoint /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/phase4_acceptance_resume_fix/compliance_residual_step6_resume/last.pt
+   ```
+
+   The focused test must use `onnxruntime.InferenceSession` 1.25.0 with only
+   `CPUExecutionProvider`.  The second command must emit
+   `CHIP_PHASE5_INDEPENDENT_AUDIT_PASS`, reload NPZ with pickle disabled,
+   recompute every metric/check, repeat real-ORT dynamic/mixed/hard-off parity,
+   and revalidate workflow plus per-rollout checkpoint provenance.
+
+4. Read-only golden, checkpoint, layout, refs, and process audit
+
+   Run the audit with the validated compatibility libraries so its NVML process
+   query is meaningful.  This command reads the accepted artifacts and must not
+   rewrite them:
+
+   ```bash
+   env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu \
+     LD_PRELOAD=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.580.159.03:/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libcuda.so.580.159.03 \
+     VK_ICD_FILENAMES=/tmp/nvidia_580_159_compat/extracted/usr/share/vulkan/icd.d/nvidia_icd.json \
+     PYTHONDONTWRITEBYTECODE=1 \
+     /home/lab/miniconda3/envs/sonic_backup/bin/python -B \
+     tasks/chip_compliance_finetune/artifacts/phase6_final_audit.py \
+     --refs-snapshot /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/existing_refs_before.txt \
+     --official-checkpoint /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sonic_release/last.pt \
+     --official-config /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sonic_release/config.yaml \
+     --robot-motion /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sample_data/robot_filtered/210531/walk_forward_amateur_001__A001.pkl \
+     --smpl-motion-dir /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sample_data/smpl_filtered \
+     --phase4-root /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/phase4_acceptance_resume_fix \
+     --phase5-root /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/phase5_acceptance
+   ```
+
+   Required marker: `CHIP_PHASE6_FINAL_AUDIT_PASS`.  The audit must reload both
+   Phase-4 checkpoints and re-prove 55/17 legacy tensors, 6+6 residual tensors,
+   12 optimizer slots/770753 scalars, finite loss/exposure/gradient evidence,
+   step-5-to-step-6 advancement, and official frozen-tensor identity.  It must
+   pin the official/sample assets, checkpoint/ONNX hashes, and complete evidence
+   trees.  Expected layout digests and inventories are:
+
+   - Phase 4: digest
+     `34cba4405dee146c7dd5f29d4731001737e8ae85f6f4d79e3928317b5bb02503`,
+     31 files, 9 directories, exactly one internal resume symlink, and
+     318016496 bytes including the link entry.
+   - Phase 5: digest
+     `9efef42178353072faa457f49934c6fa67ffbf852628470e1f9bbc384046c81e`,
+     14 files, 3 directories, zero symlinks, and 1655744 bytes.
+
+   It must also prove that every difference from the official base commit is an
+   addition and that the exact diff after accepted Phase-5 commit
+   `c925a0da115d1d6e0cc296c4a94b00a57c6461b8` contains only the ten declared
+   Phase-6 entrypoint/help/audit/task paths.  Any Phase-6 edit to an accepted
+   core/adapter/training/export/evaluation path must fail.  All release
+   config/model/trainer/reward/deployment paths are
+   byte-exact, every ref in `existing_refs_before.txt` is unchanged, source/task
+   trees contain no symlink/cache/temp/trailing whitespace, no CHIP training or
+   rollout process remains, and NVML reports no GPU compute application.
+   `--skip-gpu-process-check` is available only to diagnose all structural and
+   `/proc` gates when NVML cannot be accessed; it emits
+   `CHIP_PHASE6_STRUCTURAL_AUDIT_PASS` plus
+   `gpu_process_gate=SKIPPED_NOT_ACCEPTED` and cannot satisfy this item.
+
+5. Final syntax, portable import, and patch hygiene
+
+   ```bash
+   PYTHONDONTWRITEBYTECODE=1 python -B - <<'PY'
+   from pathlib import Path
+
+   roots = (
+       Path("gear_sonic/compliance_control"),
+       Path("gear_sonic/scripts"),
+       Path("gear_sonic/tests/compliance"),
+       Path("tasks/chip_compliance_finetune"),
+   )
+   for root in roots:
+       for path in root.rglob("*.py"):
+           if root.name == "scripts" and "chip" not in path.name:
+               continue
+           compile(path.read_bytes(), str(path), "exec")
+   PY
+   PYTHONDONTWRITEBYTECODE=1 python -B -c "from gear_sonic.compliance_control import AlignedTrackingTrace, CartesianFrameSpec, ComplianceTargetSpec, TargetDamper, apply_hindsight_target; from gear_sonic.compliance_control.postprocess import load_tracking_trace; print(AlignedTrackingTrace, CartesianFrameSpec, ComplianceTargetSpec, TargetDamper, apply_hindsight_target, load_tracking_trace)"
+   git diff --check
+   git diff --cached --check
+   ```
+
+   The compile path must create no bytecode.  Repeat the cache/temporary/final-
+   newline audit after every preceding command.  `git status --short` may list
+   only the Phase-6 task/audit/handoff changes before the final commit is made.

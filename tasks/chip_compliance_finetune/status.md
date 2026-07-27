@@ -24,7 +24,7 @@ phases:
     status: PASSED
   - id: 6
     name: Final regression and handoff
-    status: PENDING
+    status: IN_PROGRESS
 
 phase_1_scope:
   - Record the released SONIC robot-motion-encoder and 14-body reference contracts.
@@ -199,4 +199,29 @@ phase_5_result:
   accepted_workflow_bytes: 1655744
   performance_claim: CHAIN_ACTIVATION_AND_REGRESSION_ONLY
 
-next_action: EXECUTE_PHASE_6_ONLY
+phase_6_result:
+  completed_on: null
+  status: IN_PROGRESS
+  portable_cpu_suite: PASSED, 129 tests / 39 expected dependency skips
+  resolved_cpu_suite: PASSED, 129 tests / 4 expected CUDA skips
+  focused_entrypoint_suite_portable: PASSED, 2 tests / 1 expected Isaac Lab skip
+  focused_entrypoint_suite_resolved: PASSED, 2 tests / 0 skips
+  cli_help_gate: PASSED, all 8 entrypoints exit zero without simulator launch
+  cli_runtime_semantics: PASSED, three accepted runtime main AST digests unchanged
+  phase4_dry_run: PASSED, target absent before and after
+  phase5_dry_run: PASSED, target absent before and after
+  real_onnxruntime_gate: PASSED, 1 test / ORT 1.25.0 CPU
+  independent_phase5_audit: PASSED, 300 frames / 0.00131441758 m / 5.82076609e-10
+  structural_final_audit: PASSED_BEFORE_PHASE5_HEAD_BOUNDARY, invalidated until full post-boundary rerun
+  phase5_head_exact_diff_gate: PASSED, c925a0d / exact ten paths and A-M statuses
+  post_boundary_structural_audit: FAILED_CACHE_HYGIENE, artifacts/__pycache__/phase6_final_audit.cpython-310.pyc
+  fake_nvidia_smi_rejection: PASSED, empty-output executable exits nonzero
+  phase4_tree_digest: 34cba4405dee146c7dd5f29d4731001737e8ae85f6f4d79e3928317b5bb02503
+  phase5_tree_digest: 9efef42178353072faa457f49934c6fa67ffbf852628470e1f9bbc384046c81e
+  source_compile_and_portable_import: PASSED_BEFORE_PHASE5_HEAD_BOUNDARY, final hygiene rerun pending
+  fresh_compatibility_nvml_gate: PENDING_EXTERNAL_EXECUTION
+  nvml_blocker: auto-review rejected the read-only escalated command because the account usage limit was reached; sandbox has no driver access
+  inherited_phase5_process_evidence: PASSED_BEFORE_PHASE6, no residual CHIP/Isaac process and no GPU compute application
+  completion_claim: NOT_YET_COMPLETE
+
+next_action: REMOVE_ONLY_THE_RECORDED_PHASE6_AUDIT_CACHE_THEN_RUN_MATRIX_ITEM_4_WITH_COMPATIBILITY_NVML_THEN_FINAL_HYGIENE

@@ -20,15 +20,20 @@ def _parse_args() -> argparse.Namespace:
     from isaaclab.app import AppLauncher
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("stiff", "compliant"), required=True)
+    mode = parser.add_argument("--mode", choices=("stiff", "compliant"))
     parser.add_argument("--steps", type=int, default=300)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--motion-file", type=Path, required=True)
-    parser.add_argument("--smpl-motion-dir", type=Path, required=True)
-    parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--trace", type=Path, required=True)
-    parser.add_argument("--summary", type=Path, required=True)
+    motion_file = parser.add_argument("--motion-file", type=Path)
+    smpl_motion_dir = parser.add_argument("--smpl-motion-dir", type=Path)
+    checkpoint = parser.add_argument("--checkpoint", type=Path)
+    trace = parser.add_argument("--trace", type=Path)
+    summary = parser.add_argument("--summary", type=Path)
+    # AppLauncher temporarily parses application options to detect collisions.
+    # Required flags are enabled only for the final parse so help remains a
+    # complete, zero-exit, non-writing operation.
     AppLauncher.add_app_launcher_args(parser)
+    for action in (mode, motion_file, smpl_motion_dir, checkpoint, trace, summary):
+        action.required = True
     return parser.parse_args()
 
 
@@ -494,6 +499,8 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         exit_code = main()
+    except SystemExit as error:
+        exit_code = error.code if isinstance(error.code, int) else 1
     except BaseException:
         traceback.print_exc()
         exit_code = 1

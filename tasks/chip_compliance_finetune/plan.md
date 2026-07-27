@@ -217,4 +217,30 @@ output layout, comparator semantics, and metric definitions are recorded in
 
 ### Phase 6 — Final regression and handoff
 
-Run the complete matrix, document data/environment requirements and cleanup, record metrics against the release baseline, and mark the task complete only if every phase passes.
+Run the complete Phase-1-through-Phase-5 CPU/Hydra/checkpoint regression from
+one clean worktree, then repeat the real ONNX Runtime parity and independent
+Phase-5 metric audit.  Phase 6 adds no policy/model, simulator behavior,
+trainer, or export-graph change, so it must not rerun or rewrite the already
+accepted GPU training and 300-frame evaluation directories.  A CLI-only repair
+keeps bare `--help` non-writing and zero-exit while pinning each affected
+entrypoint's runtime `main()` AST.  A fresh read-only audit must load
+both accepted checkpoints, repeat the strict legacy/residual/optimizer checks,
+recompute Phase-5 metrics and ONNX parity, and pin the complete artifact trees
+with location-independent layout/content digests.
+
+The final audit also requires the official checkpoint/config and sample motion
+hashes, the original git-ref snapshot, an additive-only diff from
+`4141c34280ab`, byte-exact release paths, bounded output inventories, no
+Phase-5 symlink, and no cache/temporary file.  Phase 4 retains exactly one
+documented internal resume symlink; it is accepted only when it resolves to the
+step-5 checkpoint inside the same immutable workflow.  A compatibility-NVML
+query must find no compute application, and `/proc` must contain no CHIP
+training/rollout process.
+
+Record the environment, commands, output layout, migration boundary, hashes,
+and measured tracking/activation values in `phase6_handoff.md`.  The short
+six-batch checkpoint and 300-frame matched-force rollout are evidence that the
+finetune/evaluation/export chain works and preserves the gated tracking budgets;
+they are not a converged compliant-control, impedance, or contact-regulation
+performance claim.  Mark the task complete only after every Phase-6 command in
+`test_matrix.md` passes.
