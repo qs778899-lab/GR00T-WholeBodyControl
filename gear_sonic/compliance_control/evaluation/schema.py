@@ -242,6 +242,10 @@ class RegressionCriteria:
     inactive_yield_tolerance_m: float = 1.0e-9
     minimum_active_force_peak_n: float = 1.0e-6
     minimum_active_yield_peak_m: float = 1.0e-9
+    minimum_active_measured_yield_peak_m: float = 1.0e-6
+    minimum_active_measured_yield_along_force_peak_m: float = 1.0e-6
+    inactive_cross_coupling_rmse_m: float = 0.005
+    inactive_cross_coupling_p95_m: float = 0.005
 
     def __post_init__(self) -> None:
         if isinstance(self.endpoint_site_ids, (str, bytes)):
@@ -265,6 +269,10 @@ class RegressionCriteria:
             "inactive_yield_tolerance_m",
             "minimum_active_force_peak_n",
             "minimum_active_yield_peak_m",
+            "minimum_active_measured_yield_peak_m",
+            "minimum_active_measured_yield_along_force_peak_m",
+            "inactive_cross_coupling_rmse_m",
+            "inactive_cross_coupling_p95_m",
         ):
             value = getattr(self, field_name)
             if not isinstance(value, Real) or not np.isfinite(value) or value < 0.0:

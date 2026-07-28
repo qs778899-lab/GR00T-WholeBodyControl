@@ -851,3 +851,73 @@
 - Prepared all Phase-5 deployment and Phase-6 CPU evaluation work for
   publication on the isolated `experiment/motion-compliance` branch only. The
   protected main branch and all pre-existing remote refs remain out of scope.
+
+## 2026-07-28 — Phase 6 SONIC collector/evidence implementation, paused before GPU
+
+- Re-read Phase-6 status and matrix and stayed within the current phase. No GPU
+  training, real IsaacLab protocol collection, or 4096-environment benchmark
+  was launched in this work item. The user then requested an explicit pause;
+  Phase 6 remains `IN_PROGRESS` and the task remains `NOT_COMPLETE`.
+- Added a thin SONIC evaluation adapter and IsaacLab recorder bridge. They map
+  simulator state into the tracker-neutral trace using the reference
+  `torso_link` full-pose frame for endpoints/force and one shared reference-
+  pelvis orientation basis for root-relative 14-point errors. Original
+  reference arrays are read directly, so candidate robot-anchor pose cannot
+  contaminate strict alignment.
+- Added a one-trial real collector with five formal roles: official baseline is
+  host-off; overlay-off uses the accepted step-6 actor with host plumbing on but
+  logical condition/sites off; no-contact/single/multi use host and logical
+  compliance on. It pins G1-only robot-motion encoder selection, release
+  14-point body order, plane terrain, 50 Hz policy timing, first-frame audited
+  motion selection, relaxed eval termination names/order, and reset-only event
+  names. A 2500-step limit is only a fail-safe: publication requires the
+  observed natural motion timeout exactly once on the final expected full-clip
+  step.
+- The collector distinguishes official versus step-6 checkpoint schemas and
+  hashes, records exact per-step action bytes, requires baseline/overlay-off
+  parity, reads actual body-local rows from the permanent wrench composer,
+  transforms site force into the shared reference frame, compares composer
+  rows against command buffers, and explicitly clears every owned force/torque
+  row after timeout. It records the exact 10 N, 0.05 m, derived 200 N/m
+  stimulus, actual initial condition/gates, motion provenance, step timing,
+  coordinate semantics, and a full trace SHA-256.
+- Extended portable alignment to pin exact reference global/local points and
+  original endpoint poses in addition to identity/layout fields. Added measured
+  endpoint yield versus overlay-off, yield projection along actual force,
+  inactive-hand RMSE/P95 cross-coupling, and zero-fall/full-success requirements.
+  Fixed a real false rejection: an always-active wrist has no inactive samples,
+  so inactive checks are now emitted only when an inactive sample exists;
+  genuinely inactive sites/rows remain checked.
+- Added same-descriptor `load_trace_npz_with_sha256`. The portable runner writes
+  all six full-file hashes into its report. A separate SONIC final validator
+  safely loads summaries/traces, binds collection/observed/paired hashes,
+  reloads and recomputes the complete portable report under exact criteria,
+  pins six-protocol wrist semantics, audited motion/checkpoint hashes,
+  environment/gates/stimulus/timing/termination/composer evidence, and exact
+  baseline/off action parity. Its JSON equality is recursive and type-aware so
+  `false` cannot impersonate integer zero.
+- Adversarial CPU tests cover changed reference bytes, lax criteria, deleted
+  portable checks, rebound/replaced NPZ hashes, altered motion hash, changed
+  stimulus or frame time, duplicate/wrong wrist protocols, boolean IDs, stale
+  force, missing measured yield, cross-coupling, fall/success, and checkpoint/
+  event role errors. Final focused result was `38 passed in 1.46s`; independent
+  review reran `38 passed in 1.41s`. Related CLI help, AST parsing, and
+  `git diff --check` passed. Compile-generated repository caches were removed.
+- Before the final collector patches, continuity checks also passed for the
+  Phase-5 deployment suite (`33 passed`), official residual contract,
+  trainer help/config, generic/SONIC C++ ORT smoke, production target build and
+  CLI acceptance, accepted artifact revalidation, pinned file hashes, and the
+  immutable release boundary. Because the collector changed afterward, this is
+  not recorded as the final full Phase-6 matrix-item-1 regression.
+- Two P1 evidence gaps remain deliberately open at the pause boundary:
+  termination/event validation pins names but not exact function targets and
+  all config parameters; and Phase 6 uses explicit post-timeout cleanup rather
+  than exercising the configured reset event after nonzero force. The source
+  config is currently correct and Phase 2 covered real reset, but both items
+  must be made fail-closed before formal six-protocol collection.
+- Formal pending work remains unchanged: final full regression and Phase-2/3
+  smokes; fresh 16-environment/five-iteration FPS-memory smoke; real 4096-env
+  scheduler measurement; six full paired traces; portable plus SONIC final
+  acceptance; active-mode wrist endpoint/orientation/whole-body tracking review;
+  and final output/cache/diff hygiene. See `phase6_handoff.md` for exact paths
+  and continuation order.

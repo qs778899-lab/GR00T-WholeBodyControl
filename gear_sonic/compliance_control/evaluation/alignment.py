@@ -22,6 +22,19 @@ def _update_names(digest: "hashlib._Hash", field_name: str, values: tuple[str, .
         digest.update(encoded)
 
 
+def _update_array_exact(
+    digest: "hashlib._Hash",
+    field_name: str,
+    array: np.ndarray,
+) -> None:
+    """Include dtype, shape, and the caller-provided C-order bytes verbatim."""
+
+    digest.update(field_name.encode("ascii"))
+    digest.update(str(array.dtype).encode("ascii"))
+    digest.update(np.asarray(array.shape, dtype="<i8").tobytes())
+    digest.update(array.tobytes(order="C"))
+
+
 def alignment_digest(trace: EvaluationTrace) -> str:
     """Return a stable digest of ordered sample and layout identities."""
 
@@ -35,6 +48,13 @@ def alignment_digest(trace: EvaluationTrace) -> str:
         digest.update(str(canonical.dtype).encode("ascii"))
         digest.update(np.asarray(canonical.shape, dtype="<i8").tobytes())
         digest.update(canonical.tobytes())
+    for field_name in (
+        "reference_points_global_m",
+        "reference_points_local_m",
+        "original_site_positions_m",
+        "original_site_orientations_xyzw",
+    ):
+        _update_array_exact(digest, field_name, getattr(trace, field_name))
     return digest.hexdigest()
 
 
@@ -50,7 +70,15 @@ def assert_strict_alignment(reference: EvaluationTrace, candidate: EvaluationTra
     for field_name in named_fields:
         if getattr(reference, field_name) != getattr(candidate, field_name):
             raise TraceAlignmentError(f"unaligned {field_name}")
-    for field_name in ("seed_ids", "frame_indices", "timestamps_s"):
+    for field_name in (
+        "seed_ids",
+        "frame_indices",
+        "timestamps_s",
+        "reference_points_global_m",
+        "reference_points_local_m",
+        "original_site_positions_m",
+        "original_site_orientations_xyzw",
+    ):
         reference_array = getattr(reference, field_name)
         candidate_array = getattr(candidate, field_name)
         if (

@@ -11,9 +11,11 @@ that adapter boundary.
 
 Every paired row must match exactly on ordered motion ID, sequence ID, seed,
 frame index, and floating timestamp.  Ordered site and tracking-point layouts
-must also match exactly.  Frame indices and timestamps increase strictly within
-each `(motion, sequence, seed)` stream.  A one-bit timestamp difference rejects
-the pair instead of being silently resampled.
+must also match exactly. Reference global/local point arrays and original site
+positions/orientations match on dtype, shape, and bytes, preventing a changed
+reference from being hidden as a candidate result. Frame indices and timestamps
+increase strictly within each `(motion, sequence, seed)` stream. A one-bit
+timestamp difference rejects the pair instead of being silently resampled.
 
 ## Standard trace fields
 
@@ -31,15 +33,17 @@ the pair instead of being silently resampled.
   exactly one terminal on its last row; a fall is terminal-only.
 
 The report includes per-site original/selected endpoint RMSE and P95,
-orientation error, force peak/RMS, reference yield and yield along force,
+orientation error, force peak/RMS, reference yield, candidate measured yield
+against overlay-off, measured-yield projection along actual force,
 active-contact-window endpoint/orientation/force/yield summaries,
-inactive-site force/yield, paired inactive-site position shift against both the
+inactive-site force/yield, inactive-hand RMSE/P95 position shift against both the
 released baseline and overlay-off trace, local/global MPJPE, paired pose shift,
 success/fall/reset counts, and input/derived finiteness.  Endpoint roles used
 for the stiff-mode threshold are supplied on the CLI; they are not embedded in
 the portable package.  Every declared interaction site must exceed
 caller-selected active-force and active-yield minima; every inactive site is
-independently bounded for residual force and unintended reference yield.
+independently bounded for residual force and unintended reference yield. Every
+formal trial also requires zero falls and success rate exactly one.
 
 ## Persistence and runner
 
@@ -62,6 +66,20 @@ python -B tasks/motion_compliance_finetune/artifacts/phase6_evaluate_aligned_tra
   --endpoint-site endpoint_a --endpoint-site endpoint_b \
   --output /path/evaluation.json
 ```
+
+The runner uses `load_trace_npz_with_sha256`, so the report records the full
+file hash from the same verified descriptor used for decoding. The separate
+SONIC validator reloads the six trace files, binds those hashes to collection
+summaries, and recomputes the complete report under the fixed formal criteria;
+it does not trust a self-declared acceptance flag or check list.
+
+The implemented SONIC collector is
+`phase6_collect_sonic_trace.py`; concrete body/checkpoint/motion/IsaacLab
+semantics stay there and in `phase6_validate_sonic_collection_reports.py`, not
+in the portable package. At the 2026-07-28 pause boundary, their CPU contract
+passes but no formal simulator trace exists. Before collection, exact
+termination/event function targets and parameters plus a configured reset event
+after nonzero force still need Phase-6-specific provenance coverage.
 
 The CPU contract does not manufacture performance evidence.  Real Phase 6
 acceptance still requires strictly paired simulator traces plus the prescribed

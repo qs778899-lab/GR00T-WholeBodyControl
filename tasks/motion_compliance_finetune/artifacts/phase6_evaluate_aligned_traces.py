@@ -17,7 +17,7 @@ from gear_sonic.compliance_control.evaluation import (  # noqa: E402
     TrialMode,
     TrialSpec,
     evaluate_trial_suite,
-    load_trace_npz,
+    load_trace_npz_with_sha256,
     write_report_json_atomic,
 )
 
@@ -69,23 +69,36 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-contact-endpoint-delta-m", type=float, default=0.005)
     parser.add_argument("--reset-wrench-tolerance-n", type=float, default=1.0e-6)
     parser.add_argument("--inactive-force-tolerance-n", type=float, default=1.0e-6)
-    parser.add_argument("--inactive-yield-tolerance-m", type=float, default=1.0e-9)
-    parser.add_argument("--minimum-active-force-peak-n", type=float, default=1.0e-6)
-    parser.add_argument("--minimum-active-yield-peak-m", type=float, default=1.0e-9)
+    parser.add_argument("--inactive-yield-tolerance-m", type=float, default=1.0e-7)
+    parser.add_argument("--minimum-active-force-peak-n", type=float, default=5.0)
+    parser.add_argument("--minimum-active-yield-peak-m", type=float, default=0.049)
+    parser.add_argument("--minimum-active-measured-yield-peak-m", type=float, default=0.0005)
+    parser.add_argument(
+        "--minimum-active-measured-yield-along-force-peak-m",
+        type=float,
+        default=0.0001,
+    )
+    parser.add_argument("--inactive-cross-coupling-rmse-m", type=float, default=0.005)
+    parser.add_argument("--inactive-cross-coupling-p95-m", type=float, default=0.010)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     traces = {}
+    trace_sha256_by_trial = {}
     specs = []
     for name, mode_value, trace_path, active_value in args.trial:
         if name in traces:
             raise ValueError(f"duplicate trial name: {name}")
-        trace = load_trace_npz(trace_path, max_bytes=args.max_trace_bytes)
+        trace, trace_sha256 = load_trace_npz_with_sha256(
+            trace_path,
+            max_bytes=args.max_trace_bytes,
+        )
         if trace.trial_name != name:
             raise ValueError(f"trace name mismatch: expected {name}, got {trace.trial_name}")
         traces[name] = trace
+        trace_sha256_by_trial[name] = trace_sha256
         specs.append(
             TrialSpec(
                 name=name,
@@ -106,6 +119,14 @@ def main(argv: list[str] | None = None) -> int:
         inactive_yield_tolerance_m=args.inactive_yield_tolerance_m,
         minimum_active_force_peak_n=args.minimum_active_force_peak_n,
         minimum_active_yield_peak_m=args.minimum_active_yield_peak_m,
+        minimum_active_measured_yield_peak_m=(
+            args.minimum_active_measured_yield_peak_m
+        ),
+        minimum_active_measured_yield_along_force_peak_m=(
+            args.minimum_active_measured_yield_along_force_peak_m
+        ),
+        inactive_cross_coupling_rmse_m=args.inactive_cross_coupling_rmse_m,
+        inactive_cross_coupling_p95_m=args.inactive_cross_coupling_p95_m,
     )
     report = evaluate_trial_suite(
         traces,
@@ -113,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         baseline_name=args.baseline,
         criteria=criteria,
     )
+    report["trace_sha256_by_trial"] = trace_sha256_by_trial
     write_report_json_atomic(
         report,
         args.output,

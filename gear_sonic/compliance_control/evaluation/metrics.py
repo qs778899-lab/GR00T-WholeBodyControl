@@ -217,9 +217,22 @@ def compare_aligned_traces(reference: EvaluationTrace, candidate: EvaluationTrac
     assert_strict_alignment(reference, candidate)
     reference_report = evaluate_trace(reference)
     candidate_report = evaluate_trace(candidate)
-    paired_shift = _vector_norm(
+    measured_yield_vector = (
         candidate.measured_site_positions_m - reference.measured_site_positions_m
     )
+    paired_shift = _vector_norm(measured_yield_vector)
+    candidate_force_norm = _vector_norm(candidate.force_on_robot_n)
+    valid_force = np.isfinite(candidate_force_norm) & (candidate_force_norm > 0.0)
+    force_direction = np.zeros_like(candidate.force_on_robot_n, dtype=np.float64)
+    force_direction[valid_force] = (
+        candidate.force_on_robot_n[valid_force]
+        / candidate_force_norm[valid_force, None]
+    )
+    measured_yield_along_force = np.sum(
+        measured_yield_vector * force_direction,
+        axis=-1,
+    )
+    measured_yield_along_force[~valid_force] = np.nan
     global_pose_shift = _vector_norm(
         candidate.measured_points_global_m - reference.measured_points_global_m
     )
@@ -236,6 +249,13 @@ def compare_aligned_traces(reference: EvaluationTrace, candidate: EvaluationTrac
             "paired_endpoint_shift_m": _finite_summary(paired_shift[:, site_index]),
             "active_paired_endpoint_shift_m": _masked_summary(
                 paired_shift[:, site_index], candidate.active_site_mask[:, site_index]
+            ),
+            "active_measured_yield_m": _masked_summary(
+                paired_shift[:, site_index], candidate.active_site_mask[:, site_index]
+            ),
+            "active_measured_yield_along_force_m": _masked_summary(
+                measured_yield_along_force[:, site_index],
+                candidate.active_site_mask[:, site_index],
             ),
             "inactive_cross_coupling_shift_m": _masked_summary(
                 paired_shift[:, site_index], inactive
@@ -493,6 +513,22 @@ def _assess_suite(
         report = trial_reports[spec.name]
         checks.append(
             {
+                "name": f"zero_falls:{spec.name}",
+                "value": report["lifecycle"]["fall_count"],
+                "limit": 0,
+                "passed": report["lifecycle"]["fall_count"] == 0,
+            }
+        )
+        checks.append(
+            {
+                "name": f"success_rate_one:{spec.name}",
+                "value": report["lifecycle"]["success_rate"],
+                "limit": 1.0,
+                "passed": report["lifecycle"]["success_rate"] == 1.0,
+            }
+        )
+        checks.append(
+            {
                 "name": f"finite_and_valid:{spec.name}",
                 "value": report["validity"]["all_valid"],
                 "limit": True,
@@ -517,23 +553,27 @@ def _assess_suite(
         )
         for site_id in traces[spec.name].site_ids:
             site_report = report["sites"][site_id]
-            checks.append(
-                _upper_bound_check(
-                    f"inactive_force_peak_n:{spec.name}:{site_id}",
-                    site_report["inactive_force_norm_n"]["peak"],
-                    criteria.inactive_force_tolerance_n,
+            if site_report["inactive_force_norm_n"]["count"] > 0:
+                checks.append(
+                    _upper_bound_check(
+                        f"inactive_force_peak_n:{spec.name}:{site_id}",
+                        site_report["inactive_force_norm_n"]["peak"],
+                        criteria.inactive_force_tolerance_n,
+                    )
                 )
-            )
-            checks.append(
-                _upper_bound_check(
-                    f"inactive_yield_peak_m:{spec.name}:{site_id}",
-                    site_report["inactive_reference_yield_m"]["peak"],
-                    criteria.inactive_yield_tolerance_m,
+            if site_report["inactive_reference_yield_m"]["count"] > 0:
+                checks.append(
+                    _upper_bound_check(
+                        f"inactive_yield_peak_m:{spec.name}:{site_id}",
+                        site_report["inactive_reference_yield_m"]["peak"],
+                        criteria.inactive_yield_tolerance_m,
+                    )
                 )
-            )
         if spec.mode in {TrialMode.SINGLE_SITE, TrialMode.MULTI_SITE}:
+            paired_to_off = compare_aligned_traces(traces[off_name], traces[spec.name])
             for site_id in spec.expected_active_site_ids:
                 site_report = report["sites"][site_id]
+                paired_site = paired_to_off["sites"][site_id]
                 checks.append(
                     _lower_bound_check(
                         f"active_force_peak_n:{spec.name}:{site_id}",
@@ -546,6 +586,41 @@ def _assess_suite(
                         f"active_yield_peak_m:{spec.name}:{site_id}",
                         site_report["active_reference_yield_m"]["peak"],
                         criteria.minimum_active_yield_peak_m,
+                    )
+                )
+                checks.append(
+                    _lower_bound_check(
+                        f"active_measured_yield_peak_m:{spec.name}:{site_id}",
+                        paired_site["active_measured_yield_m"]["peak"],
+                        criteria.minimum_active_measured_yield_peak_m,
+                    )
+                )
+                checks.append(
+                    _lower_bound_check(
+                        f"active_measured_yield_along_force_peak_m:{spec.name}:{site_id}",
+                        paired_site["active_measured_yield_along_force_m"]["peak"],
+                        criteria.minimum_active_measured_yield_along_force_peak_m,
+                    )
+                )
+            inactive_site_ids = set(traces[spec.name].site_ids) - set(
+                spec.expected_active_site_ids
+            )
+            for site_id in sorted(inactive_site_ids):
+                cross_coupling = paired_to_off["sites"][site_id][
+                    "inactive_cross_coupling_shift_m"
+                ]
+                checks.append(
+                    _upper_bound_check(
+                        f"inactive_cross_coupling_rmse_m:{spec.name}:{site_id}",
+                        cross_coupling["rmse"],
+                        criteria.inactive_cross_coupling_rmse_m,
+                    )
+                )
+                checks.append(
+                    _upper_bound_check(
+                        f"inactive_cross_coupling_p95_m:{spec.name}:{site_id}",
+                        cross_coupling["p95"],
+                        criteria.inactive_cross_coupling_p95_m,
                     )
                 )
     return {
@@ -562,6 +637,14 @@ def _assess_suite(
             "inactive_yield_tolerance_m": criteria.inactive_yield_tolerance_m,
             "minimum_active_force_peak_n": criteria.minimum_active_force_peak_n,
             "minimum_active_yield_peak_m": criteria.minimum_active_yield_peak_m,
+            "minimum_active_measured_yield_peak_m": (
+                criteria.minimum_active_measured_yield_peak_m
+            ),
+            "minimum_active_measured_yield_along_force_peak_m": (
+                criteria.minimum_active_measured_yield_along_force_peak_m
+            ),
+            "inactive_cross_coupling_rmse_m": criteria.inactive_cross_coupling_rmse_m,
+            "inactive_cross_coupling_p95_m": criteria.inactive_cross_coupling_p95_m,
         },
         "checks": checks,
     }

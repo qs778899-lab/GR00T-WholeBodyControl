@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 from dataclasses import replace
+import hashlib
 import json
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from gear_sonic.compliance_control.evaluation import (
     evaluate_trace,
     evaluate_trial_suite,
     load_trace_npz,
+    load_trace_npz_with_sha256,
     write_report_json_atomic,
     write_trace_npz_atomic,
 )
@@ -70,6 +72,7 @@ def _make_trace(
         site_index = SITE_IDS.index(site_id)
         active_mask[1:3, site_index] = True
         selected_site[1:3, site_index, 0] += 0.02
+        measured_site[1:3, site_index, 0] += 0.01
         force[1:3, site_index, 0] = 4.0
 
     terminal = np.zeros(row_count, dtype=np.bool_)
@@ -169,7 +172,7 @@ def test_trace_reports_per_site_pose_force_yield_lifecycle_and_finiteness():
     assert report["site_count"] == len(SITE_IDS)
     assert report["point_count"] == len(POINT_IDS)
     assert report["sites"]["endpoint_a"]["original_endpoint_error_m"]["rmse"] == pytest.approx(
-        0.012
+        0.013
     )
     assert report["sites"]["endpoint_a"]["orientation_error_rad"]["p95"] == pytest.approx(
         0.1
@@ -178,7 +181,7 @@ def test_trace_reports_per_site_pose_force_yield_lifecycle_and_finiteness():
     assert report["sites"]["endpoint_a"]["active_force_norm_n"]["count"] == 2
     assert report["sites"]["endpoint_a"]["active_original_endpoint_error_m"][
         "p95"
-    ] == pytest.approx(0.012)
+    ] == pytest.approx(np.hypot(0.012, 0.01))
     assert report["sites"]["endpoint_a"]["reference_yield_m"]["peak"] == pytest.approx(
         0.02
     )
@@ -210,6 +213,17 @@ def test_strict_alignment_rejects_motion_seed_frame_timestamp_and_layout_changes
     assert_strict_alignment(reference, aligned)
     assert alignment_digest(reference) == alignment_digest(aligned)
 
+    changed_reference_global = aligned.reference_points_global_m.copy()
+    changed_reference_global.flat[0] = np.nextafter(changed_reference_global.flat[0], 1.0)
+    changed_reference_local = aligned.reference_points_local_m.copy()
+    changed_reference_local.flat[0] = np.nextafter(changed_reference_local.flat[0], 1.0)
+    changed_original_site = aligned.original_site_positions_m.copy()
+    changed_original_site.flat[0] = np.nextafter(changed_original_site.flat[0], 1.0)
+    changed_original_orientation = aligned.original_site_orientations_xyzw.copy()
+    changed_original_orientation.flat[0] = np.nextafter(
+        changed_original_orientation.flat[0],
+        1.0,
+    )
     mutations = {
         "motion_ids": ("different",) * 4 + aligned.motion_ids[4:],
         "sequence_ids": ("different",) * 4 + aligned.sequence_ids[4:],
@@ -221,6 +235,10 @@ def test_strict_alignment_rejects_motion_seed_frame_timestamp_and_layout_changes
         ),
         "site_ids": ("different",) + aligned.site_ids[1:],
         "point_ids": ("different",) + aligned.point_ids[1:],
+        "reference_points_global_m": changed_reference_global,
+        "reference_points_local_m": changed_reference_local,
+        "original_site_positions_m": changed_original_site,
+        "original_site_orientations_xyzw": changed_original_orientation,
     }
     for field_name, value in mutations.items():
         candidate = replace(aligned, **{field_name: value})
@@ -372,6 +390,75 @@ def test_inactive_force_or_yield_fails_off_mode_acceptance():
     assert "active_yield_peak_m:single_a:endpoint_a" in failed
 
 
+def test_interaction_requires_measured_yield_along_actual_force():
+    traces, specs, criteria = _suite_inputs()
+    single = traces["single_a"]
+    traces["single_a"] = replace(
+        single,
+        measured_site_positions_m=traces["overlay_off"].measured_site_positions_m.copy(),
+    )
+
+    report = evaluate_trial_suite(
+        traces,
+        specs,
+        baseline_name="released_baseline",
+        criteria=criteria,
+    )
+    failed = {
+        check["name"]
+        for check in report["acceptance"]["checks"]
+        if not check["passed"]
+    }
+    assert "active_measured_yield_peak_m:single_a:endpoint_a" in failed
+    assert "active_measured_yield_along_force_peak_m:single_a:endpoint_a" in failed
+
+
+def test_inactive_hand_measured_cross_coupling_fails_rmse_and_p95():
+    traces, specs, criteria = _suite_inputs()
+    single = traces["single_a"]
+    measured = single.measured_site_positions_m.copy()
+    measured[:, SITE_IDS.index("endpoint_b"), 0] += 0.02
+    traces["single_a"] = replace(single, measured_site_positions_m=measured)
+
+    report = evaluate_trial_suite(
+        traces,
+        specs,
+        baseline_name="released_baseline",
+        criteria=criteria,
+    )
+    failed = {
+        check["name"]
+        for check in report["acceptance"]["checks"]
+        if not check["passed"]
+    }
+    assert "inactive_cross_coupling_rmse_m:single_a:endpoint_b" in failed
+    assert "inactive_cross_coupling_p95_m:single_a:endpoint_b" in failed
+
+
+def test_each_formal_trial_requires_no_fall_and_full_success():
+    traces, specs, criteria = _suite_inputs()
+    single = traces["single_a"]
+    success = single.success_mask.copy()
+    fall = single.fall_mask.copy()
+    success[-1] = False
+    fall[-1] = True
+    traces["single_a"] = replace(single, success_mask=success, fall_mask=fall)
+
+    report = evaluate_trial_suite(
+        traces,
+        specs,
+        baseline_name="released_baseline",
+        criteria=criteria,
+    )
+    failed = {
+        check["name"]
+        for check in report["acceptance"]["checks"]
+        if not check["passed"]
+    }
+    assert "zero_falls:single_a" in failed
+    assert "success_rate_one:single_a" in failed
+
+
 def test_suite_requires_complete_protocol_enabled_rows_and_reset_evidence():
     traces, specs, criteria = _suite_inputs()
     incomplete_specs = tuple(spec for spec in specs if spec.mode is not TrialMode.NO_CONTACT)
@@ -486,7 +573,10 @@ def test_atomic_bounded_json_and_npz_round_trip(tmp_path: Path):
 
     write_trace_npz_atomic(trace, trace_path)
     loaded = load_trace_npz(trace_path)
+    loaded_with_hash, trace_sha256 = load_trace_npz_with_sha256(trace_path)
     assert alignment_digest(loaded) == alignment_digest(trace)
+    assert alignment_digest(loaded_with_hash) == alignment_digest(trace)
+    assert trace_sha256 == hashlib.sha256(trace_path.read_bytes()).hexdigest()
     np.testing.assert_array_equal(loaded.measured_site_positions_m, trace.measured_site_positions_m)
     assert loaded.trial_name == trace.trial_name
     with pytest.raises(FileExistsError):

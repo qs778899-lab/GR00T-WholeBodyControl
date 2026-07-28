@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -158,8 +159,12 @@ def write_trace_npz_atomic(
             temporary_path.unlink(missing_ok=True)
 
 
-def load_trace_npz(path: str | Path, *, max_bytes: int = 64 * 1024 * 1024) -> EvaluationTrace:
-    """Load one bounded schema-exact trace with NumPy pickle support disabled."""
+def _load_trace_npz_with_sha256(
+    path: str | Path,
+    *,
+    max_bytes: int,
+) -> tuple[EvaluationTrace, str]:
+    """Decode and hash one bounded trace through the same verified descriptor."""
 
     _validate_byte_limit(max_bytes)
     source = Path(path)
@@ -174,6 +179,8 @@ def load_trace_npz(path: str | Path, *, max_bytes: int = 64 * 1024 * 1024) -> Ev
             raise ValueError("trace path must be a regular non-symlink file")
         if status.st_size > max_bytes:
             raise ValueError("serialized trace exceeds max_bytes")
+        trace_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
+        stream.seek(0)
         try:
             with zipfile.ZipFile(stream) as zip_archive:
                 members = zip_archive.infolist()
@@ -217,7 +224,7 @@ def load_trace_npz(path: str | Path, *, max_bytes: int = 64 * 1024 * 1024) -> Ev
             if str(string_arrays["schema_version"].item()) != TRACE_SCHEMA_VERSION:
                 raise ValueError("unsupported trace schema version")
             values = {name: np.array(archive[name], copy=True) for name in _TRACE_ARRAY_FIELDS}
-            return EvaluationTrace(
+            trace = EvaluationTrace(
                 trial_name=str(string_arrays["trial_name"].item()),
                 motion_ids=tuple(string_arrays["motion_ids"].tolist()),
                 sequence_ids=tuple(string_arrays["sequence_ids"].tolist()),
@@ -225,3 +232,21 @@ def load_trace_npz(path: str | Path, *, max_bytes: int = 64 * 1024 * 1024) -> Ev
                 point_ids=tuple(string_arrays["point_ids"].tolist()),
                 **values,
             )
+    return trace, trace_sha256
+
+
+def load_trace_npz(path: str | Path, *, max_bytes: int = 64 * 1024 * 1024) -> EvaluationTrace:
+    """Load one bounded schema-exact trace with NumPy pickle support disabled."""
+
+    trace, _ = _load_trace_npz_with_sha256(path, max_bytes=max_bytes)
+    return trace
+
+
+def load_trace_npz_with_sha256(
+    path: str | Path,
+    *,
+    max_bytes: int = 64 * 1024 * 1024,
+) -> tuple[EvaluationTrace, str]:
+    """Load a trace and return its full-file SHA-256 from the verified descriptor."""
+
+    return _load_trace_npz_with_sha256(path, max_bytes=max_bytes)

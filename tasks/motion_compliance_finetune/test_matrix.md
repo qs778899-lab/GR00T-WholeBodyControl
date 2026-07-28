@@ -320,11 +320,14 @@ does not leave repository caches.
 7. Confirm output directories contain no unintended caches, duplicate JSON, or
    multi-GB debug logs.
 8. Run the tracker-neutral aligned-evaluation CPU contract:
-   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B -m pytest -p no:cacheprovider -q gear_sonic/tests/test_compliance_evaluation.py`
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B -m pytest -p no:cacheprovider -q gear_sonic/tests/test_compliance_evaluation.py gear_sonic/tests/test_compliance_sonic_evaluation_collector.py`
    and the thin runner help gate:
    `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase6_evaluate_aligned_traces.py --help`.
    Also run the non-GPU scheduler CLI gate:
    `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase6_scheduler_benchmark.py --help`.
+   Run the SONIC collector/final-validator help gates:
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase6_collect_sonic_trace.py --help --headless` and
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase6_validate_sonic_collection_reports.py --help`.
    It must reject any motion/sequence/seed/frame/timestamp or ordered-layout
    mismatch, including a one-bit timestamp change.  With caller-owned site and
    point layouts it reports per-site original/selected endpoint RMSE/P95,
@@ -336,6 +339,13 @@ does not leave repository caches.
    terminal outcome; falls are terminal-only.  Every expected interaction site
    must show caller-thresholded nonzero active force and reference yield, while
    every inactive site remains below the configured force/yield tolerances.
+   The portable report must include each input NPZ full-file SHA-256 obtained
+   through the same verified descriptor used for decoding. The SONIC final
+   validator must bind that hash to the collection summary and observed file,
+   recompute the complete portable report from all six traces under the exact
+   Phase-6 criteria, and reject deleted/fabricated checks, boolean-for-integer
+   substitutions, changed motion/checkpoint/protocol/stimulus/timing evidence,
+   and any baseline/off action-byte difference.
 9. The portable evaluation package must contain no SONIC/G1/IsaacLab/MuJoCo,
    concrete body-name, fixed action-width, or fixed tracking-point-count
    dependency.  Persisted traces/reports use bounded atomic NPZ/JSON writers;
@@ -345,3 +355,9 @@ does not leave repository caches.
    Loading must use one `O_NOFOLLOW` file descriptor for regular-file, ZIP-size,
    duplicate-member, schema/dtype/rank validation and NumPy decoding, so a path
    replacement cannot swap the verified inode.
+   The thin SONIC provenance gate must additionally pin exact termination and
+   reset-event function targets, modes, thresholds, body names, command names,
+   and parameters rather than accepting names alone. At least one nonzero-force
+   Phase-6 trial must exercise the configured `motion_compliance_reset` event
+   and prove both command-owned and actual composer force/torque rows are clear;
+   explicit post-timeout cleanup alone is insufficient for this final gate.

@@ -225,6 +225,10 @@ Baseline: NVLabs upstream `main` at
 
 ### Phase 6 — Integration, regression, and low-resource validation
 
+- Current execution state (2026-07-28): paused by user after the collector,
+  portable metrics, and final SONIC evidence validator reached `38 passed` in
+  focused CPU tests. No formal Phase-6 GPU/six-protocol evidence has run, so
+  this phase remains `IN_PROGRESS`.
 - Run config/help/compile/unit tests plus IsaacLab smoke tests.
 - Run paired stiff-mode baseline regression on fixed motion IDs/timestamps.
 - Run single- and simultaneous-site compliant-force evaluation.
@@ -232,8 +236,20 @@ Baseline: NVLabs upstream `main` at
   Pair rows exactly by caller-owned motion, sequence, seed, frame, and timestamp
   identities; keep all concrete body/endpoint mappings in thin adapters.
 - Record endpoint RMSE/P95, orientation error, MPJPE, success rate, force peak,
-  yielded displacement, inactive-site cross-coupling, fall/reset/finiteness,
-  throughput, and memory.  Publish only bounded atomic NPZ/JSON artifacts.
+  reference and measured yielded displacement (including projection along the
+  actual force), inactive-hand cross-coupling, fall/reset/finiteness,
+  throughput, and memory. Publish only bounded atomic NPZ/JSON artifacts.
+- Bind each collection summary, full NPZ, and portable report by SHA-256. The
+  SONIC final gate must reload the six bounded traces and recompute the complete
+  tracker-neutral report under fixed criteria; it may not trust a report's
+  self-declared `passed` field or an incomplete check list.
+- Before real collection, extend the provenance gate to pin exact termination/
+  event function targets and parameters, and add one Phase-6 nonzero-force
+  configured-reset-event check. These are evidence hardening only; do not mix
+  policy/optimizer/force-algorithm tuning into that change.
+- Treat active-mode left/right endpoint, wrist orientation, and whole-body
+  tracking accuracy as first-class outputs. Do not accept force/yield success
+  alone when those tracking errors regress without explicit explanation.
 - Add a 4096-environment performance characterization for the fixed-shape
   compliance candidate scheduler, including policy-step time and GPU memory
   against host-off/baseline.  This is a measured Phase-4/6 performance item,
