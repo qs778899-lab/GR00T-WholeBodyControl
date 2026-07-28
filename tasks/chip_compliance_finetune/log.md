@@ -389,3 +389,33 @@
 - Prepared the existing Phase-6 entrypoint/help/audit/task diff for publication
   on the isolated `experiment/chip-compliance` branch only. The protected main
   branch and all pre-existing remote refs remain outside this change boundary.
+
+## 2026-07-28 — Phase 6 final audit passed; task complete
+
+- Re-read the Phase-6 status/matrix after restart and removed only the recorded
+  audit bytecode cache plus its now-empty `__pycache__` directory. Both accepted
+  Phase-4/5 evidence roots remained byte-for-byte unchanged.
+- Repeated matrix items 1–3: portable and `sonic_backup` discoveries passed
+  129 tests with 39/four expected skips, all eight help paths and both focused
+  help tests passed, both dry-run roots remained absent, real ORT 1.25 parity
+  passed, and the independent 300-frame Phase-5 audit passed again.
+- The first current structural run correctly rejected a protected-ref change.
+  Reflog and commit inspection proved one external fast-forward of local/main,
+  origin/main, and origin/HEAD from `345c3f4` to `6d6d8ae`; it adds exactly the
+  twelve central `compliance_control` documentation/test files and nothing
+  else. The original snapshot was retained unchanged.
+- Added a fail-closed pinned exception that requires the exact three refs,
+  old/new commits, one direct non-merge commit, ancestry/count, and exact twelve
+  `A` paths. Seven new tests reject partial/future/unrelated moves, multiple
+  commits, modified paths, and extra paths. Final discoveries passed 136 tests
+  with the same 39/four expected skips; focused suites passed 9 tests with
+  one/zero skips.
+- The complete structural audit passed with protected-ref marker
+  `PINNED_DOCS_ONLY_FAST_FORWARD`. The exact compatibility-NVML item-4 command
+  resolved the RTX 4090 through 580.159.03, found no GPU compute application or
+  CHIP/Isaac workflow, revalidated both tree digests and all pinned assets, and
+  emitted `CHIP_PHASE6_FINAL_AUDIT_PASS`.
+- Final compile covered 56 Python files; portable imports, staged/unstaged diff,
+  cache/temporary/final-newline hygiene all passed. Phase 6 is `PASSED` and the
+  task is `COMPLETE`. This remains an engineering/short-rollout handoff, not a
+  claim of converged multi-motion compliance performance.

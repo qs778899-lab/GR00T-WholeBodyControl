@@ -493,7 +493,7 @@ only after the fresh semantic/hash/metric/ORT audits below pass.
      -m unittest discover -s gear_sonic/tests/compliance -p 'test_*.py' -v
    ```
 
-   Both commands must discover and pass all 129 tests.  The portable interpreter
+   Both commands must discover and pass all 136 tests.  The portable interpreter
    has 39 explicitly dependency-gated skips; `sonic_backup` has only four
    CUDA-only skips when the compatibility libraries are not preloaded.  This is
    the complete CPU/Hydra/official-checkpoint regression for Phases 1-5, not a
@@ -525,10 +525,12 @@ only after the fresh semantic/hash/metric/ORT audits below pass.
      gear_sonic.tests.compliance.test_phase6_entrypoint_help -v
    ```
 
-   Portable execution must pass the source/AST test with one expected Isaac Lab
-   skip; `sonic_backup` must pass both tests.  The tests pin each accepted
+   Portable execution must pass nine tests with one expected Isaac Lab skip;
+   `sonic_backup` must pass all nine tests.  Besides pinning each accepted
    runtime `main()` AST, require bare help to exit zero without warning or
    traceback, and require missing launch arguments to remain an argparse exit 2.
+   The same focused suite must reject partial/future protected-ref advances,
+   multi-commit advances, and modified or extra documentation paths.
    The full resolved suite in item 1 remains the derived Hydra configuration
    composition gate.  Then run both exact orchestration dry runs, with each
    destination absent before and after:
@@ -625,7 +627,16 @@ only after the fresh semantic/hash/metric/ORT audits below pass.
    Phase-6 entrypoint/help/audit/task paths.  Any Phase-6 edit to an accepted
    core/adapter/training/export/evaluation path must fail.  All release
    config/model/trainer/reward/deployment paths are
-   byte-exact, every ref in `existing_refs_before.txt` is unchanged, source/task
+   byte-exact.  Every ref in `existing_refs_before.txt` must remain unchanged
+   except the exact externally published documentation advance of
+   `refs/heads/main`, `refs/remotes/origin/main`, and
+   `refs/remotes/origin/HEAD` from
+   `345c3f442b2d33e7eb784afd2f5d7c17066d794e` to
+   `6d6d8ae9a04b67a977b027acecfe20c65aca0647`.  This exception must preserve
+   the original snapshot, prove one direct non-merge fast-forward commit, and
+   contain exactly the twelve centrally documented `compliance_control` files
+   pinned by the audit, all with status `A`.  Partial, future, multi-commit,
+   modified-path, extra-path, or any other ref movement must fail.  Source/task
    trees contain no symlink/cache/temp/trailing whitespace, no CHIP training or
    rollout process remains, and NVML reports no GPU compute application.
    `--skip-gpu-process-check` is available only to diagnose all structural and

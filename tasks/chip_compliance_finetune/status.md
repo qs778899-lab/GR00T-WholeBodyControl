@@ -3,7 +3,7 @@
 task: chip_compliance_finetune
 baseline_commit: 4141c34280abb67c82e115342a8720f4a83d750d
 branch: experiment/chip-compliance
-status: IN_PROGRESS
+status: COMPLETE
 current_phase: 6
 
 phases:
@@ -24,7 +24,7 @@ phases:
     status: PASSED
   - id: 6
     name: Final regression and handoff
-    status: IN_PROGRESS
+    status: PASSED
 
 phase_1_scope:
   - Record the released SONIC robot-motion-encoder and 14-body reference contracts.
@@ -200,28 +200,32 @@ phase_5_result:
   performance_claim: CHAIN_ACTIVATION_AND_REGRESSION_ONLY
 
 phase_6_result:
-  completed_on: null
-  status: IN_PROGRESS
-  portable_cpu_suite: PASSED, 129 tests / 39 expected dependency skips
-  resolved_cpu_suite: PASSED, 129 tests / 4 expected CUDA skips
-  focused_entrypoint_suite_portable: PASSED, 2 tests / 1 expected Isaac Lab skip
-  focused_entrypoint_suite_resolved: PASSED, 2 tests / 0 skips
+  completed_on: 2026-07-28
+  status: PASSED
+  portable_cpu_suite: PASSED, 136 tests / 39 expected dependency skips
+  resolved_cpu_suite: PASSED, 136 tests / 4 expected CUDA skips
+  focused_entrypoint_suite_portable: PASSED, 9 tests / 1 expected Isaac Lab skip
+  focused_entrypoint_suite_resolved: PASSED, 9 tests / 0 skips
   cli_help_gate: PASSED, all 8 entrypoints exit zero without simulator launch
   cli_runtime_semantics: PASSED, three accepted runtime main AST digests unchanged
   phase4_dry_run: PASSED, target absent before and after
   phase5_dry_run: PASSED, target absent before and after
   real_onnxruntime_gate: PASSED, 1 test / ORT 1.25.0 CPU
   independent_phase5_audit: PASSED, 300 frames / 0.00131441758 m / 5.82076609e-10
-  structural_final_audit: PASSED_BEFORE_PHASE5_HEAD_BOUNDARY, invalidated until full post-boundary rerun
+  structural_final_audit: PASSED_CURRENT, complete golden/checkpoint/layout/source/process audit
   phase5_head_exact_diff_gate: PASSED, c925a0d / exact ten paths and A-M statuses
-  post_boundary_structural_audit: FAILED_CACHE_HYGIENE, artifacts/__pycache__/phase6_final_audit.cpython-310.pyc
+  post_boundary_structural_audit: PASSED, recorded cache removed and no source/task cache remains
+  protected_ref_gate: PASSED_PINNED_DOCS_ONLY_FAST_FORWARD, exact three refs / one direct commit / exact twelve A paths
+  protected_ref_old: 345c3f442b2d33e7eb784afd2f5d7c17066d794e
+  protected_ref_new: 6d6d8ae9a04b67a977b027acecfe20c65aca0647
   fake_nvidia_smi_rejection: PASSED, empty-output executable exits nonzero
   phase4_tree_digest: 34cba4405dee146c7dd5f29d4731001737e8ae85f6f4d79e3928317b5bb02503
   phase5_tree_digest: 9efef42178353072faa457f49934c6fa67ffbf852628470e1f9bbc384046c81e
-  source_compile_and_portable_import: PASSED_BEFORE_PHASE5_HEAD_BOUNDARY, final hygiene rerun pending
-  fresh_compatibility_nvml_gate: PENDING_EXTERNAL_EXECUTION
-  nvml_blocker: auto-review rejected the read-only escalated command because the account usage limit was reached; sandbox has no driver access
-  inherited_phase5_process_evidence: PASSED_BEFORE_PHASE6, no residual CHIP/Isaac process and no GPU compute application
-  completion_claim: NOT_YET_COMPLETE
+  source_compile_and_portable_import: PASSED_CURRENT, 56 files and portable API import
+  final_diff_cache_temporary_hygiene: PASSED
+  fresh_compatibility_nvml_gate: PASSED, NVIDIA 580.159.03 / no GPU compute application
+  workflow_process_gate: PASSED, no residual CHIP/Isaac process
+  prior_external_execution_blocker: RESOLVED_ON_2026-07-28
+  completion_claim: COMPLETE_ENGINEERING_HANDOFF_NOT_CONVERGED_PERFORMANCE_PROOF
 
-next_action: REMOVE_ONLY_THE_RECORDED_PHASE6_AUDIT_CACHE_THEN_RUN_MATRIX_ITEM_4_WITH_COMPATIBILITY_NVML_THEN_FINAL_HYGIENE
+next_action: TASK_COMPLETE; preserve accepted Phase-4/5 roots and rerun the complete Phase-6 matrix after any implementation or environment change

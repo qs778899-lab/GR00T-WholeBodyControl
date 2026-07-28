@@ -10,6 +10,7 @@ worktree or adapting the compliance package to another universal tracker.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 import hashlib
 import json
 import os
@@ -33,6 +34,31 @@ PHASE6_ALLOWED_CHANGES = {
     "tasks/chip_compliance_finetune/status.md": "M",
     "tasks/chip_compliance_finetune/test_matrix.md": "M",
 }
+PRE_EXPERIMENT_MAIN_COMMIT = "345c3f442b2d33e7eb784afd2f5d7c17066d794e"
+DOCUMENTATION_MAIN_COMMIT = "6d6d8ae9a04b67a977b027acecfe20c65aca0647"
+DOCUMENTATION_ADVANCED_REFS = frozenset(
+    {
+        "refs/heads/main",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/main",
+    }
+)
+DOCUMENTATION_ADDED_PATHS = frozenset(
+    {
+        "compliance_control/.gitignore",
+        "compliance_control/PORTING.md",
+        "compliance_control/README.md",
+        "compliance_control/STATUS_HANDOFF.md",
+        "compliance_control/design.md",
+        "compliance_control/evidence.md",
+        "compliance_control/existing_refs_before.txt",
+        "compliance_control/implementation_branches.md",
+        "compliance_control/official_assets/MANIFEST.md",
+        "compliance_control/tests/fixtures/translation_v1_two_site.json",
+        "compliance_control/tests/test_sonic_contracts.py",
+        "compliance_control/tests/test_translation_ir.py",
+    }
+)
 OFFICIAL_CHECKPOINT_SHA256 = (
     "e6bdab3f64a39336b3d41877d4f497d05f58af275f288ec0e6746c283ded8909"
 )
@@ -356,7 +382,104 @@ def _git(repository: Path, *arguments: str, check: bool = True) -> str:
     return result.stdout.strip()
 
 
-def _audit_repository(args: argparse.Namespace) -> None:
+def _parse_ref_snapshot(text: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) != 2:
+            raise AssertionError(f"invalid refs snapshot line: {line!r}")
+        ref_name, commit = fields
+        if ref_name in result:
+            raise AssertionError(f"duplicate refs snapshot entry: {ref_name}")
+        result[ref_name] = commit
+    if not result:
+        raise AssertionError("refs snapshot must not be empty")
+    return result
+
+
+def _classify_ref_state(
+    expected_by_ref: Mapping[str, str],
+    actual_by_ref: Mapping[str, str],
+) -> str:
+    """Accept unchanged refs or one exact, pinned documentation-only advance."""
+
+    for ref_name in DOCUMENTATION_ADVANCED_REFS:
+        if expected_by_ref.get(ref_name) != PRE_EXPERIMENT_MAIN_COMMIT:
+            raise AssertionError(
+                f"pre-experiment snapshot no longer pins {ref_name} to "
+                f"{PRE_EXPERIMENT_MAIN_COMMIT}"
+            )
+    mismatches = {
+        ref_name: (expected, actual_by_ref.get(ref_name))
+        for ref_name, expected in expected_by_ref.items()
+        if actual_by_ref.get(ref_name) != expected
+    }
+    if not mismatches:
+        return "UNCHANGED"
+    accepted = {
+        ref_name: (PRE_EXPERIMENT_MAIN_COMMIT, DOCUMENTATION_MAIN_COMMIT)
+        for ref_name in DOCUMENTATION_ADVANCED_REFS
+    }
+    if mismatches != accepted:
+        raise AssertionError(f"existing refs moved outside pinned exception: {mismatches}")
+    return "PINNED_DOCS_ONLY_FAST_FORWARD"
+
+
+def _validate_single_addition_commit(
+    repository: Path,
+    old_commit: str,
+    new_commit: str,
+    expected_added_paths: frozenset[str],
+) -> None:
+    """Prove ``new_commit`` is one non-merge commit adding exactly the paths."""
+
+    for label, commit in (("old", old_commit), ("new", new_commit)):
+        if _git(repository, "cat-file", "-t", commit) != "commit":
+            raise AssertionError(f"pinned documentation {label} object is not a commit")
+    parents = _git(repository, "rev-list", "--parents", "-n", "1", new_commit).split()
+    if parents != [new_commit, old_commit]:
+        raise AssertionError(f"documentation advance is not one direct commit: {parents}")
+    _git(repository, "merge-base", "--is-ancestor", old_commit, new_commit)
+    if _git(repository, "rev-list", "--count", f"{old_commit}..{new_commit}") != "1":
+        raise AssertionError("documentation advance contains more than one commit")
+    changes: dict[str, str] = {}
+    diff = _git(
+        repository,
+        "diff",
+        "--name-status",
+        "--no-renames",
+        old_commit,
+        new_commit,
+        "--",
+    )
+    for line in diff.splitlines():
+        status, separator, path = line.partition("\t")
+        if not separator or path in changes:
+            raise AssertionError(f"invalid documentation advance diff: {line}")
+        changes[path] = status
+    expected = {path: "A" for path in expected_added_paths}
+    if changes != expected:
+        raise AssertionError(f"documentation advance path/status mismatch: {changes}")
+
+
+def _audit_ref_snapshot(repository: Path, snapshot: Path) -> str:
+    expected_by_ref = _parse_ref_snapshot(snapshot.read_text(encoding="utf-8"))
+    actual_by_ref = {
+        ref_name: _git(repository, "show-ref", "--verify", "--hash", ref_name)
+        for ref_name in expected_by_ref
+    }
+    state = _classify_ref_state(expected_by_ref, actual_by_ref)
+    if state == "PINNED_DOCS_ONLY_FAST_FORWARD":
+        _validate_single_addition_commit(
+            repository,
+            PRE_EXPERIMENT_MAIN_COMMIT,
+            DOCUMENTATION_MAIN_COMMIT,
+            DOCUMENTATION_ADDED_PATHS,
+        )
+    return state
+
+
+def _audit_repository(args: argparse.Namespace) -> str:
     repository = _directory(args.repository_root, label="repository root")
     if _git(repository, "branch", "--show-current") != args.expected_branch:
         raise AssertionError("unexpected CHIP experiment branch")
@@ -408,11 +531,7 @@ def _audit_repository(args: argparse.Namespace) -> None:
         raise AssertionError("released source/config/deployment paths differ from baseline")
 
     snapshot = _regular_file(args.refs_snapshot, label="pre-experiment refs snapshot")
-    for line in snapshot.read_text(encoding="utf-8").splitlines():
-        ref_name, expected = line.split()
-        actual = _git(repository, "show-ref", "--verify", "--hash", ref_name)
-        if actual != expected:
-            raise AssertionError(f"existing ref moved: {ref_name} {actual} != {expected}")
+    protected_ref_state = _audit_ref_snapshot(repository, snapshot)
 
     # The baseline audit proves that CHIP is additive.  This stricter boundary
     # prevents Phase 6 from changing any Phase-1..5 implementation accepted at
@@ -489,6 +608,7 @@ def _audit_repository(args: argparse.Namespace) -> None:
 
     _run(["git", "diff", "--check"], cwd=repository)
     _run(["git", "diff", "--cached", "--check"], cwd=repository)
+    return protected_ref_state
 
 
 def _audit_workflow_processes() -> None:
@@ -555,7 +675,7 @@ def main() -> int:
     repository = _directory(args.repository_root, label="repository root")
     if str(repository) not in sys.path:
         sys.path.insert(0, str(repository))
-    _audit_repository(args)
+    protected_ref_state = _audit_repository(args)
     _audit_assets(args)
     phase4 = _audit_phase4(args)
     phase5 = _audit_phase5(args)
@@ -567,6 +687,7 @@ def main() -> int:
             f"phase4_bytes={phase4['bytes']}",
             f"phase5_digest={phase5['digest']}",
             f"phase5_bytes={phase5['bytes']}",
+            f"protected_ref_gate={protected_ref_state}",
             "workflow_process_gate=PASSED",
             "gpu_process_gate=SKIPPED_NOT_ACCEPTED",
             flush=True,
@@ -580,6 +701,7 @@ def main() -> int:
         f"phase5_digest={phase5['digest']}",
         f"phase5_bytes={phase5['bytes']}",
         f"official_sha256={OFFICIAL_CHECKPOINT_SHA256}",
+        f"protected_ref_gate={protected_ref_state}",
         flush=True,
     )
     return 0

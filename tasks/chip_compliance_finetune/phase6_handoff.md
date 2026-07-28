@@ -2,9 +2,9 @@
 
 ## Resume here
 
-- Task state: **Phase 6 / IN_PROGRESS**. Phases 1 through 5 are accepted; do
-  not mark the task complete from the short rollout or the earlier structural
-  pass.
+- Task state: **COMPLETE; Phase 6 PASSED on 2026-07-28**. All six phases pass
+  their documented engineering gates. The short rollout remains chain evidence,
+  not a converged compliance-performance claim.
 - Implemented: tracker-neutral Cartesian contracts and metrics, the SONIC/
   IsaacLab force adapter, a zero-initialized hard-gated post-FSQ actor residual,
   an independent privileged critic residual, strict official-checkpoint
@@ -15,11 +15,10 @@
   compliance, a 14-site trained checkpoint, or hardware-certified force
   safety. The accepted checkpoint is dual-wrist even though the portable
   tensors and evaluator accept caller-defined sites.
-- Remaining Phase-6 gates: remove only
-  `tasks/chip_compliance_finetune/artifacts/__pycache__/phase6_final_audit.cpython-310.pyc`,
-  rerun the complete post-boundary structural/hygiene audit, then run the exact
-  compatibility-NVML command from `test_matrix.md` item 4 until it emits
-  `CHIP_PHASE6_FINAL_AUDIT_PASS`. Finish with the matrix's diff/cache gates.
+- Remaining Phase-6 gates: none. The exact cache was removed, the complete
+  current structural/hygiene audit passed, and the compatibility-NVML command
+  emitted `CHIP_PHASE6_FINAL_AUDIT_PASS`. Rerun the full matrix after any code,
+  artifact, ref, driver, or environment change.
 - Preserve both accepted evidence roots exactly. Use a new nonexistent child
   for every rerun; never overwrite `phase4_acceptance_resume_fix` or
   `phase5_acceptance`.
@@ -27,7 +26,7 @@
 The remote branch contains the code and this task record. Official assets,
 accepted training/evaluation runs, and binaries are intentionally outside Git;
 their paths and hashes below are the provenance boundary. Read `status.md`,
-then execute only Phase 6 from `test_matrix.md` when resuming.
+then execute the complete Phase 6 from `test_matrix.md` when revalidating.
 
 The final repository audit uses two independent boundaries: the official
 baseline proves the feature stayed additive, while accepted Phase-5 commit
@@ -155,27 +154,24 @@ files in source/task scope and bounds every accepted log/tree.
 
 ## Phase-6 validation state
 
-The final expanded regression passed 129 tests in both interpreters (39 expected
+The final expanded regression passed 136 tests in both interpreters (39 expected
 portable dependency skips; four expected resolved CUDA skips), all eight help
 gates, both no-write dry runs, real ONNX Runtime parity, and independent Phase-5
 metric recomputation.  The three AppLauncher thin entrypoints received only a
 parser/exit-code repair; focused tests pin their accepted runtime `main()` ASTs
 unchanged and preserve missing-required-argument exit code 2.
 
-An independent review then added the stricter accepted-Phase-5-head boundary.
-Its exact ten-path `A`/`M` allowlist currently passes, but the complete
-post-boundary structural/hygiene audit does **not**: it stops on
-`tasks/chip_compliance_finetune/artifacts/__pycache__/phase6_final_audit.cpython-310.pyc`.
-The cache was produced by an audit command; its exact cleanup request was
-rejected by the external approval layer after the account usage limit was
-reached.  Therefore the earlier structural/source-hygiene pass must not be used
-as evidence for the current Phase-6 diff.
+The accepted-Phase-5-head boundary still permits exactly the ten declared
+Phase-6 paths and rejects any Phase-6 core/adapter/training/export/evaluation
+edit. The unintended audit bytecode cache was removed and the current complete
+source/task hygiene pass found no cache or temporary file.
 
-One fresh Phase-6 gate is still pending: the exact compatibility-NVML command in
-`test_matrix.md` item 4 must emit `CHIP_PHASE6_FINAL_AUDIT_PASS`.  The read-only
-escalation was rejected externally because the account execution allowance was
-exhausted, while sandboxed NVML cannot access the driver.  A diagnostic run
-after the new boundary accepted the exact Phase-6 diff and then failed at the
-cache hygiene gate before asset/process auditing.  Do not call this task
-complete until that exact cache is removed, the full structural audit is
-repeated, and the compatibility-NVML command passes.
+During the paused handoff, the protected main refs advanced from `345c3f4` to
+`6d6d8ae` through one externally published central-documentation commit. The
+immutable original snapshot was not rewritten. The final audit accepts only
+that exact three-ref, one-direct-commit fast-forward and exactly twelve `A`
+paths under the central `compliance_control` documentation/test manifest;
+partial, future, multi-commit, modified, extra-path, or any other ref movement
+fails. The compatibility-NVML final audit then resolved the RTX 4090 through
+NVIDIA 580.159.03, found no compute application or CHIP/Isaac process, reloaded
+both immutable evidence roots, and emitted `CHIP_PHASE6_FINAL_AUDIT_PASS`.

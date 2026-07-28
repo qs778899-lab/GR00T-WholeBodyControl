@@ -229,7 +229,8 @@ recompute Phase-5 metrics and ONNX parity, and pin the complete artifact trees
 with location-independent layout/content digests.
 
 The final audit also requires the official checkpoint/config and sample motion
-hashes, the original git-ref snapshot, an additive-only diff from
+hashes, the immutable original git-ref snapshot (plus one exact, fail-closed
+docs-only external main fast-forward), an additive-only diff from
 `4141c34280ab`, byte-exact release paths, bounded output inventories, no
 Phase-5 symlink, and no cache/temporary file.  Phase 4 retains exactly one
 documented internal resume symlink; it is accepted only when it resolves to the
