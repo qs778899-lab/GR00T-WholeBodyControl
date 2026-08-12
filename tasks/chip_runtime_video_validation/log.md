@@ -160,3 +160,5 @@
   Python compute processes continue using about 12.4 GiB. They were not touched.
   The current blocker is only the mandatory idle-GPU native/profiler/shape and
   32-frame rendered smokes; Phase 4 remains `IN_PROGRESS`.
+- Pushed the GPU-wait safety checkpoints through `edab3f3`; the experimental
+  worktree is recoverable without changing any protected branch.
