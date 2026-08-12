@@ -32,6 +32,7 @@ from gear_sonic.compliance_control.review import (
     evaluate_matched_review_suite,
     evaluate_trace,
     evaluate_trial_suite,
+    load_report_json_with_sha256,
     load_trace_npz,
     load_trace_npz_with_sha256,
     validate_review_video_manifest,
@@ -122,6 +123,8 @@ def _make_trace(
         reference_points_local_m=reference_local,
         measured_points_local_m=measured_local,
         force_on_robot_n=force,
+        force_on_robot_world_n=force,
+        force_on_robot_common_n=force,
         compliance_m_per_n=compliance,
         compliance_enabled=compliance_enabled,
         residual_enabled=residual_enabled,
@@ -232,7 +235,9 @@ def _make_matched_trace(
         active_mask[1:5, site_index] = True
         force[1:5, site_index, 0] = 5.0
         compliance[1:5, site_index, 0] = 0.02
-        selected_site[1:5, site_index, 0] += 0.10
+        selected_site[1:5, site_index] -= (
+            compliance[1:5, site_index] * force[1:5, site_index]
+        )
         if residual:
             measured_site[1:5, site_index, 0] += 0.002
             measured_global[1:5, point_index, 0] += 0.002
@@ -263,6 +268,8 @@ def _make_matched_trace(
         reference_points_local_m=reference_local,
         measured_points_local_m=measured_local,
         force_on_robot_n=force,
+        force_on_robot_world_n=force,
+        force_on_robot_common_n=force,
         compliance_m_per_n=compliance,
         compliance_enabled=np.full(row_count, enabled, dtype=np.bool_),
         residual_enabled=np.full(row_count, residual, dtype=np.bool_),
@@ -601,6 +608,31 @@ def test_interaction_requires_measured_yield_along_actual_force():
     assert "active_measured_yield_along_force_peak_m:single_a:endpoint_a" in failed
 
 
+def test_matched_suite_requires_signed_chip_hindsight_target_separately_from_yield():
+    traces, spec, criteria = _matched_suite_inputs()
+    report = evaluate_matched_review_suite(traces, spec, criteria=criteria)
+    assert report["acceptance"]["passed"] is True
+
+    reference = traces["single_left_stiff"]
+    candidate = traces["single_left_compliant"]
+    selected = candidate.selected_site_positions_m.copy()
+    active = candidate.active_site_mask[:, SITE_IDS.index("endpoint_a")]
+    selected[active, SITE_IDS.index("endpoint_a"), 0] *= -1.0
+    traces["single_left_stiff"] = replace(
+        reference,
+        selected_site_positions_m=selected,
+    )
+    traces["single_left_compliant"] = replace(
+        candidate,
+        selected_site_positions_m=selected,
+    )
+    report = evaluate_matched_review_suite(traces, spec, criteria=criteria)
+    assert (
+        "signed_hindsight_target_peak_m:single_left:candidate:endpoint_a"
+        in _failed_checks(report)
+    )
+
+
 def test_inactive_hand_measured_cross_coupling_fails_rmse_and_p95():
     traces, specs, criteria = _suite_inputs()
     single = traces["single_a"]
@@ -908,6 +940,15 @@ def test_atomic_bounded_json_and_npz_round_trip(tmp_path: Path):
     report = evaluate_trace(trace)
     write_report_json_atomic(report, report_path)
     assert json.loads(report_path.read_text(encoding="utf-8")) == report
+    loaded_report, report_sha256 = load_report_json_with_sha256(report_path)
+    assert loaded_report == report
+    assert report_sha256 == hashlib.sha256(report_path.read_bytes()).hexdigest()
+    report_symlink = tmp_path / "report_link.json"
+    report_symlink.symlink_to(report_path)
+    with pytest.raises(ValueError, match="non-symlink"):
+        load_report_json_with_sha256(report_symlink)
+    with pytest.raises(ValueError, match="max_bytes"):
+        load_report_json_with_sha256(report_path, max_bytes=8)
     with pytest.raises(FileExistsError):
         write_report_json_atomic(report, report_path)
     with pytest.raises(ValueError, match="max_bytes"):
@@ -1023,6 +1064,7 @@ def test_matched_review_suite_requires_exact_roles_and_matched_stimulus():
     for field_name in (
         "selected_site_positions_m",
         "force_on_robot_n",
+        "force_on_robot_world_n",
         "compliance_m_per_n",
         "active_site_mask",
     ):
@@ -1081,7 +1123,7 @@ def test_matched_review_suite_fails_closed_for_tracking_and_contact_regressions(
     candidate = traces["single_left_compliant"]
     active = candidate.active_site_mask[:, SITE_IDS.index("endpoint_a")]
     measured = candidate.measured_site_positions_m.copy()
-    measured[active, SITE_IDS.index("endpoint_a"), 0] -= 0.013
+    measured[active, SITE_IDS.index("endpoint_a"), 0] += 0.013
     orientation = candidate.measured_site_orientations_xyzw.copy()
     orientation[active, SITE_IDS.index("endpoint_a"), :] = (
         0.0,
@@ -1327,6 +1369,12 @@ def test_matched_review_suite_accepts_caller_owned_extra_sites_and_actions():
             ),
             force_on_robot_n=np.concatenate(
                 (trace.force_on_robot_n, extra_vectors), axis=1
+            ),
+            force_on_robot_world_n=np.concatenate(
+                (trace.force_on_robot_world_n, extra_vectors), axis=1
+            ),
+            force_on_robot_common_n=np.concatenate(
+                (trace.force_on_robot_common_n, extra_vectors), axis=1
             ),
             compliance_m_per_n=np.concatenate(
                 (trace.compliance_m_per_n, extra_vectors), axis=1

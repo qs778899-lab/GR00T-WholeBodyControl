@@ -1,0 +1,6 @@
+name: simultaneous_stiff
+checkpoint_kind: trained
+compliance_enabled: true
+residual_enabled: false
+external_force_enabled: true
+active_site_names: [left_wrist_yaw_link, right_wrist_yaw_link]

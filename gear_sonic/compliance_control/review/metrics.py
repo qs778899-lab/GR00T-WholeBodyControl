@@ -94,6 +94,8 @@ def _finiteness_report(trace: EvaluationTrace) -> dict[str, Any]:
         "reference_points_local_m",
         "measured_points_local_m",
         "force_on_robot_n",
+        "force_on_robot_world_n",
+        "force_on_robot_common_n",
         "compliance_m_per_n",
         "policy_actions",
     )

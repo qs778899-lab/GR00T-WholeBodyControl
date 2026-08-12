@@ -10,13 +10,13 @@ branch: `experiment/chip-runtime-video-validation`
 
 overall_status: `IN_PROGRESS`
 
-current_phase: `3`
+current_phase: `4`
 
 completion: `NOT_COMPLETE`
 
-execution_state: `PAUSED_BY_USER`
+execution_state: `READY_PHASE4_CURRENT_ENVIRONMENT_REGRESSION`
 
-last_completed_phase: `2`
+last_completed_phase: `3`
 
 last_implementation_commit: `625b3299bb302a78a3b8cb7fe50a60c8c561730f`
 
@@ -24,8 +24,8 @@ last_implementation_commit: `625b3299bb302a78a3b8cb7fe50a60c8c561730f`
 |---|---|---|
 | 1 | Source and acceptance contract | PASSED |
 | 2 | Portable review core | PASSED |
-| 3 | Thin SONIC collection and rendering | IN_PROGRESS |
-| 4 | Current-environment regression | PENDING |
+| 3 | Thin SONIC collection and rendering | PASSED |
+| 4 | Current-environment regression | IN_PROGRESS |
 | 5 | Formal full clips and review videos | PENDING |
 | 6 | Final audit and handoff | PENDING |
 
@@ -43,9 +43,9 @@ last_implementation_commit: `625b3299bb302a78a3b8cb7fe50a60c8c561730f`
   was absent before task creation.
 - Unrelated GRAIL GPU compute was last observed before the pause. It must never
   be terminated; Phase 5 requires a fresh host-visible idle-window check.
-- The user paused the task before any Phase-3 implementation. Phase 3 remains
-  `IN_PROGRESS`, has not passed its test matrix, and must be resumed rather than
-  skipped. No Phase-4 simulator run or Phase-5 formal output has started.
+- The task resumed from the pushed pause checkpoint `f1f8db4`. Phase 3 passed
+  its complete CPU/fake-manager/Hydra/rendering matrix. No Phase-4 simulator
+  run or Phase-5 formal output has started.
 
 ## Phase 1 result
 
@@ -78,10 +78,32 @@ last_implementation_commit: `625b3299bb302a78a3b8cb7fe50a60c8c561730f`
 - Ruff, source compilation, CLI help, diff, formal-root absence, and cache/
   temporary hygiene gates passed. No IsaacLab application or GPU task ran.
 
-next_action: Read `resume_handoff.md`, then execute only Phase 3. First pin and
-test the signed CHIP target relation (`selected = nominal - C * force_on_robot`)
-while retaining the accepted measured physical-yield projection along force.
-Then implement the thin SONIC review adapter, deterministic nine-role collector,
-frame-exact renderer, portable evaluator/final-validator CLIs, and run every
-Phase-3 fake-manager/Hydra/help/regression gate. Do not start Phase 4 or create
-the formal Phase-5 output root.
+## Phase 3 result
+
+- Added an additive SONIC review boundary with exact nine-role definitions,
+  deterministic 5 N world-frame wrist schedules, signed undamped CHIP targets,
+  strict official-migration versus trained-resume semantics, name-resolved
+  14-point snapshots, frame-exact traces, and reset-owned wrench clearing.
+- Added deterministic Hydra compositions for all nine roles, one environment,
+  seed/frame zero, original or mirrored motion, plane terrain, 50 Hz, disabled
+  stochastic augmentation, fixed wrist offsets, and a parked random sampler.
+- Added a fixed 960x720 front-oblique RGB/RGBA camera path, visible provenance
+  overlay, bounded atomic H.264/yuv420p panel writer, descriptor-pinned ffmpeg
+  compositor, and collector/evaluator/final-validator thin CLIs. Help and
+  no-write dry-run paths do not import or launch IsaacLab.
+- The new Phase-3 suite passed `31` tests, including 18 Hydra compositions,
+  exact fake-manager action/force/mask/reset checks, real tiny panel/composite
+  encoding and ffprobe checks, collisions/cleanup, and all three CLI dry-runs.
+  The portable core passed `33` tests in both Python 3.11 and isolated Python
+  3.10. The complete pre-existing CHIP CPU suite passed `136` tests with `4`
+  skips.
+- Ruff E/F/I, read-only compilation of 24 sources, no-Isaac import, protected
+  release-tree/ref checks, staged/unstaged diff checks, formal-root absence,
+  and cache/temporary hygiene passed. No simulator or GPU process ran.
+
+next_action: Execute only Phase 4. Re-run the accepted Phase-6 matrix at the
+documented descendant boundary, native disabled/enabled/profiler and real-shape
+smokes, checkpoint/ONNX Runtime audits, and both dry-run workflows. Only after a
+fresh host-visible idle-GPU check, collect one separate 32-frame rendered smoke;
+never terminate unrelated compute. Keep accepted evidence byte-identical and do
+not create the Phase-5 formal output root.

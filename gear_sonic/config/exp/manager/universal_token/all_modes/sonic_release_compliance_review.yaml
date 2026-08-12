@@ -1,0 +1,58 @@
+# @package _global_
+# Deterministic, single-environment CHIP full-clip review composition.
+
+defaults:
+  - /exp/manager/universal_token/all_modes/sonic_release_compliance_eval
+  - /compliance_review_role: release_baseline
+  - override /manager_env/events: tracking/chip_compliance_review
+  - _self_
+
+num_envs: 1
+seed: 0
+headless: true
+use_wandb: false
+
+manager_env:
+  config:
+    num_envs: 1
+    terrain_type: plane
+    render_results: true
+    render_width: 960
+    render_height: 720
+    eval_camera_offset: [3.2, -2.8, 1.8]
+    eval_camera_lookat_height: 0.9
+    episode_length_s: 120.0
+  observations:
+    policy:
+      enable_corruption: false
+    tokenizer:
+      enable_corruption: false
+  commands:
+    motion:
+      start_from_first_frame: true
+      sample_from_n_initial_frames: null
+      randomize_heading: false
+      freeze_frame_aug: false
+      cat_upper_body_poses: false
+      randomize_wrist_poses: false
+      encoder_sample_probs:
+        g1: 1.0
+        teleop: 0.0
+        smpl: 0.0
+      motion_lib_cfg:
+        adaptive_sampling:
+          enable: false
+    force:
+      enabled: true
+      sampling_seed: 0
+      site_names: [left_wrist_yaw_link, right_wrist_yaw_link]
+      site_offsets_local_xyz:
+        - [0.18, -0.025, 0.0]
+        - [0.18, 0.025, 0.0]
+      target_damper_enabled: false
+      force_magnitude_range_n: [5.0, 5.0]
+      compliance_values_m_per_n: [0.02]
+      force_duration_range_s: [1.0, 1.0]
+      # The review driver owns every sample; keep the stochastic command idle.
+      pulse_interval_range_s: [120.0, 120.0]
+      max_active_sites: 2

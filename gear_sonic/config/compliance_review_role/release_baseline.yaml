@@ -1,0 +1,6 @@
+name: release_baseline
+checkpoint_kind: official
+compliance_enabled: false
+residual_enabled: false
+external_force_enabled: false
+active_site_names: []

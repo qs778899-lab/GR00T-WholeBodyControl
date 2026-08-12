@@ -1,0 +1,6 @@
+# Deterministic review lifecycle: no startup/reset randomization or interval push.
+
+defaults:
+  - terms/chip_compliance_force_reset@_here_
+
+_target_: gear_sonic.compliance_control.adapters.sonic.isaaclab.configs.ComplianceEventsCfg

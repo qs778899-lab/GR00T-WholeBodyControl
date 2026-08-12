@@ -1,7 +1,9 @@
 """Portable aligned-trace evaluation for compliance-control experiments."""
 
 from .alignment import TraceAlignmentError, alignment_digest, assert_strict_alignment
+from .composite import compose_review_panels
 from .io import (
+    load_report_json_with_sha256,
     load_trace_npz,
     load_trace_npz_with_sha256,
     write_report_json_atomic,
@@ -39,11 +41,13 @@ __all__ = [
     "assert_matched_stimulus",
     "build_review_video_manifest",
     "compare_aligned_traces",
+    "compose_review_panels",
     "evaluate_trace",
     "evaluate_trial_suite",
     "evaluate_matched_review_suite",
     "load_trace_npz",
     "load_trace_npz_with_sha256",
+    "load_report_json_with_sha256",
     "probe_video_with_sha256",
     "validate_review_video_manifest",
     "write_report_json_atomic",

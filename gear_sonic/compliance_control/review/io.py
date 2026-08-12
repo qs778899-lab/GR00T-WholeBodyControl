@@ -14,7 +14,7 @@ import numpy as np
 from ._hashing import sha256_stream
 from .schema import EvaluationTrace
 
-TRACE_SCHEMA_VERSION = "compliance_review_trace_v1"
+TRACE_SCHEMA_VERSION = "compliance_review_trace_v2"
 
 
 _TRACE_ARRAY_FIELDS = (
@@ -31,6 +31,8 @@ _TRACE_ARRAY_FIELDS = (
     "reference_points_local_m",
     "measured_points_local_m",
     "force_on_robot_n",
+    "force_on_robot_world_n",
+    "force_on_robot_common_n",
     "compliance_m_per_n",
     "compliance_enabled",
     "residual_enabled",
@@ -105,6 +107,37 @@ def write_report_json_atomic(
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
+
+
+def load_report_json_with_sha256(
+    path: str | Path,
+    *,
+    max_bytes: int = 4 * 1024 * 1024,
+) -> tuple[object, str]:
+    """Read and hash bounded JSON through one verified non-symlink descriptor."""
+
+    _validate_byte_limit(max_bytes)
+    source = Path(path)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(source, flags)
+    except OSError as exc:
+        raise ValueError("JSON path must be a regular non-symlink file") from exc
+    with os.fdopen(descriptor, "rb") as stream:
+        status = os.fstat(stream.fileno())
+        if not stat.S_ISREG(status.st_mode):
+            raise ValueError("JSON path must be a regular non-symlink file")
+        if status.st_size > max_bytes:
+            raise ValueError("JSON report exceeds max_bytes")
+        digest = sha256_stream(stream)
+        stream.seek(0)
+        try:
+            payload = json.load(stream)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("invalid JSON report") from exc
+        if stream.read(1):
+            raise ValueError("JSON decoder did not consume the complete report")
+    return payload, digest
 
 
 def _trace_arrays(trace: EvaluationTrace) -> dict[str, np.ndarray]:

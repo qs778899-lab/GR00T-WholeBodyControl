@@ -120,6 +120,7 @@ def assert_matched_stimulus(
     for field_name in (
         "selected_site_positions_m",
         "force_on_robot_n",
+        "force_on_robot_world_n",
         "compliance_m_per_n",
         "compliance_enabled",
         "active_site_mask",
@@ -273,6 +274,8 @@ def _all_finite(trace: EvaluationTrace) -> bool:
         "reference_points_local_m",
         "measured_points_local_m",
         "force_on_robot_n",
+        "force_on_robot_world_n",
+        "force_on_robot_common_n",
         "compliance_m_per_n",
         "policy_actions",
     ):
@@ -521,6 +524,26 @@ def _interaction_report(
         active_force_peak = _summary(force_norm[active, site_index])["peak"]
         active_yield_peak = _summary(selected_yield[active, site_index])["peak"]
         measured_yield_peak = _summary(measured_shift[active, site_index])["peak"]
+        for trial_label, trace in (("reference", reference), ("candidate", candidate)):
+            expected_selected = (
+                trace.original_site_positions_m[active, site_index]
+                - trace.compliance_m_per_n[active, site_index]
+                * trace.force_on_robot_n[active, site_index]
+            )
+            target_delta = _norm(
+                trace.selected_site_positions_m[active, site_index]
+                - expected_selected
+            )
+            target_delta_peak = _summary(target_delta)["peak"]
+            _check(
+                checks,
+                f"signed_hindsight_target_peak_m:{spec.name}:{trial_label}:{site_id}",
+                _finite_number(target_delta_peak)
+                and float(target_delta_peak)
+                <= criteria.signed_hindsight_target_tolerance_m,
+                value=target_delta_peak,
+                limit=criteria.signed_hindsight_target_tolerance_m,
+            )
         for metric_name, value, minimum in (
             ("force_peak_n", active_force_peak, criteria.minimum_active_force_peak_n),
             ("reference_yield_peak_m", active_yield_peak, criteria.minimum_active_yield_peak_m),
@@ -802,6 +825,14 @@ def evaluate_matched_review_suite(
             trace.force_on_robot_n,
             np.zeros_like(trace.force_on_robot_n),
         )
+        zero_world_force = _exact_array(
+            trace.force_on_robot_world_n,
+            np.zeros_like(trace.force_on_robot_world_n),
+        )
+        zero_common_force = _exact_array(
+            trace.force_on_robot_common_n,
+            np.zeros_like(trace.force_on_robot_common_n),
+        )
         zero_yield = _exact_array(
             trace.selected_site_positions_m,
             trace.original_site_positions_m,
@@ -811,6 +842,20 @@ def evaluate_matched_review_suite(
             f"exact_zero_force:{name}",
             zero_force,
             value=zero_force,
+            limit=True,
+        )
+        _check(
+            checks,
+            f"exact_zero_world_force:{name}",
+            zero_world_force,
+            value=zero_world_force,
+            limit=True,
+        )
+        _check(
+            checks,
+            f"exact_zero_common_force:{name}",
+            zero_common_force,
+            value=zero_common_force,
             limit=True,
         )
         _check(

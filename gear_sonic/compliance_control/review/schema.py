@@ -72,7 +72,14 @@ class EvaluationTrace:
     report them instead of silently dropping a failed trial.  Alignment keys
     themselves must always be finite and strictly ordered within each sequence.
 
-    Quaternion arrays use caller-declared ``xyzw`` order.  ``reset_mask`` marks
+    Quaternion arrays use caller-declared ``xyzw`` order. Site positions,
+    ``force_on_robot_n``, and Cartesian compliance use one caller-owned
+    evaluation frame. ``force_on_robot_world_n`` records the final force actually
+    written to the simulator and ``force_on_robot_common_n`` records that force
+    in the command's declared common frame. A world-frame review may deliberately
+    make the first two arrays byte-identical. For the CHIP protocol, an active
+    undamped selected target is
+    ``original - compliance * force_on_robot``. ``reset_mask`` marks
     post-reset snapshots, which lets the evaluator detect a wrench that was not
     cleared at reset.
     """
@@ -95,6 +102,8 @@ class EvaluationTrace:
     reference_points_local_m: np.ndarray
     measured_points_local_m: np.ndarray
     force_on_robot_n: np.ndarray
+    force_on_robot_world_n: np.ndarray
+    force_on_robot_common_n: np.ndarray
     compliance_m_per_n: np.ndarray
     compliance_enabled: np.ndarray
     residual_enabled: np.ndarray
@@ -145,6 +154,8 @@ class EvaluationTrace:
             "reference_points_local_m": (point_shape, "float"),
             "measured_points_local_m": (point_shape, "float"),
             "force_on_robot_n": (vector_shape, "float"),
+            "force_on_robot_world_n": (vector_shape, "float"),
+            "force_on_robot_common_n": (vector_shape, "float"),
             "compliance_m_per_n": (vector_shape, "float"),
             "compliance_enabled": ((row_count,), "boolean"),
             "residual_enabled": ((row_count,), "boolean"),
@@ -267,6 +278,7 @@ class RegressionCriteria:
     minimum_active_yield_peak_m: float = 1.0e-9
     minimum_active_measured_yield_peak_m: float = 1.0e-6
     minimum_active_measured_yield_along_force_peak_m: float = 1.0e-6
+    signed_hindsight_target_tolerance_m: float = 1.0e-6
     inactive_cross_coupling_rmse_m: float = 0.005
     inactive_cross_coupling_p95_m: float = 0.005
     active_selected_endpoint_rmse_regression_m: float = 0.005
@@ -318,6 +330,7 @@ class RegressionCriteria:
             "minimum_active_yield_peak_m",
             "minimum_active_measured_yield_peak_m",
             "minimum_active_measured_yield_along_force_peak_m",
+            "signed_hindsight_target_tolerance_m",
             "inactive_cross_coupling_rmse_m",
             "inactive_cross_coupling_p95_m",
             "active_selected_endpoint_rmse_regression_m",

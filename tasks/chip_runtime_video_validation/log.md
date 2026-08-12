@@ -88,3 +88,40 @@
   along force. `resume_handoff.md` records how to test both without conflation.
 - Set execution state to `PAUSED_BY_USER`; Phase 3 remains `IN_PROGRESS` and the
   overall task remains `NOT_COMPLETE`.
+
+## 2026-08-13 — Phase 3 resumed
+
+- Committed and pushed the complete pause/resume handoff as `f1f8db4` on only
+  `experiment/chip-runtime-video-validation`.
+- Re-read the mandatory task state and resumed only Phase 3. The first gate is
+  an explicit separation between signed CHIP selected-target math
+  (`nominal - C * force_on_robot`) and measured compliant-versus-stiff physical
+  displacement projected along force.
+- The formal Phase-5 output root remains absent; no real simulator or GPU run is
+  authorized in this phase.
+
+## 2026-08-13 — Phase 3 passed
+
+- Corrected the portable synthetic fixture to the accepted signed CHIP relation
+  `selected = nominal - C * force_on_robot` while keeping the separate measured
+  compliant-minus-stiff physical-yield projection positive along applied force.
+  Added explicit world/common force fields and fail-closed sign checks.
+- Added the tracker-specific layer only under
+  `adapters/sonic/review`: exact role/checkpoint semantics, deterministic force
+  protocol, command/wrench driver, 14-body name-resolved snapshot adapter,
+  natural-timeout trace accumulator, fixed camera/overlay/video writer, Hydra
+  config validator, and the delayed-import real collector runtime.
+- Added nine role configs plus deterministic review experiment/event configs,
+  and three thin entrypoints for collection, portable evaluation/composition,
+  and independent manifest validation. The portable compositor keeps verified
+  panel descriptors open through ffmpeg and publishes only an atomic bounded
+  H.264/yuv420p result.
+- `sonic_backup` passed the complete new suite (`31 passed`), portable core
+  (`33 passed`), and all existing compliance tests (`Ran 136`, `OK`, `4`
+  skipped). The isolated Python-3.10 environment independently passed all `33`
+  portable tests. Test-only panel and composite MP4s were created solely in
+  pytest temporary directories and verified at 50 fps with exact frame counts.
+- Ruff E/F/I, read-only compilation of 24 files, no-Isaac import, all CLI help
+  and no-write dry-runs, protected source/ref checks, diff checks, absent formal
+  root, and cache/partial hygiene passed. Phase 3 advanced only after all gates
+  passed; no IsaacLab application or GPU workload was started.
