@@ -9,14 +9,22 @@ from typing import Any
 
 import numpy as np
 
-from ....review import write_report_json_atomic, write_trace_npz_atomic
+from ....review import (
+    probe_video_with_sha256,
+    write_report_json_atomic,
+    write_trace_npz_atomic,
+)
 from ..contracts import require_sonic_release_tracking_body_names
 from .camera import (
+    REVIEW_PANEL_HEIGHT,
+    REVIEW_PANEL_WIDTH,
+    REVIEW_VIDEO_FPS,
     AtomicReviewVideoWriter,
     ReviewFrameMetadata,
     capture_review_frame,
 )
 from .config import ReviewArtifactPaths
+from .diagnostic import ReviewDiagnosticAccumulator, write_diagnostic_trace_atomic
 from .driver import (
     SonicReviewProtocolDriver,
     gate_actor_observations,
@@ -51,6 +59,22 @@ def validate_checkpoint_load_semantics(actor: object, role: ReviewRole) -> str:
     if report is not None:
         raise AssertionError("trained checkpoint unexpectedly used legacy migration")
     return "native_strict_resume"
+
+
+def validate_finite_observations(observations: object) -> None:
+    """Fail before inference if any flattened actor observation is invalid."""
+
+    from collections.abc import Mapping
+
+    import torch
+
+    if not isinstance(observations, Mapping) or not observations:
+        raise TypeError("observations must be a non-empty mapping")
+    for name, value in observations.items():
+        if not isinstance(name, str) or not isinstance(value, torch.Tensor):
+            raise TypeError("observation groups must map string names to tensors")
+        if not torch.isfinite(value).all():
+            raise ValueError(f"observation group contains non-finite values: {name}")
 
 
 def _prepare_observation_contract(env, raw_env, config, device: str):
@@ -116,8 +140,9 @@ def collect_sonic_review_role(
     branch_commit: str,
     paths: ReviewArtifactPaths,
     device: str,
+    diagnostic_frame_limit: int | None = None,
 ) -> dict[str, Any]:
-    """Run one complete natural-timeout role and publish trace/video/summary."""
+    """Run one formal full role or an explicitly non-formal rendered smoke."""
 
     from isaaclab.envs import ManagerBasedRLEnv
     from omegaconf import open_dict
@@ -130,6 +155,10 @@ def collect_sonic_review_role(
 
     if paths.role_name != role.name or paths.motion_id != motion_id:
         raise ValueError("artifact layout does not match role/motion")
+    if diagnostic_frame_limit is not None and (
+        type(diagnostic_frame_limit) is not int or diagnostic_frame_limit < 8
+    ):
+        raise ValueError("diagnostic_frame_limit must be an integer of at least eight")
     if not checkpoint.is_file() or checkpoint.is_symlink():
         raise FileNotFoundError(checkpoint)
     if _sha256(checkpoint) != checkpoint_sha256:
@@ -179,23 +208,43 @@ def collect_sonic_review_role(
         )
         if expected_frame_count < 200:
             raise AssertionError("formal review motion is unexpectedly short")
+        if (
+            diagnostic_frame_limit is not None
+            and diagnostic_frame_limit >= expected_frame_count
+        ):
+            raise ValueError("diagnostic cutoff must precede the natural timeout")
+        run_frame_count = diagnostic_frame_limit or expected_frame_count
         driver = SonicReviewProtocolDriver(command, role)
         driver.reset()
-        accumulator = ReviewTraceAccumulator(
-            role=role,
-            motion_id=motion_id,
-            seed=seed,
-            point_ids=body_names,
+        accumulator = (
+            ReviewTraceAccumulator(
+                role=role,
+                motion_id=motion_id,
+                seed=seed,
+                point_ids=body_names,
+            )
+            if diagnostic_frame_limit is None
+            else None
+        )
+        diagnostic_accumulator = (
+            ReviewDiagnosticAccumulator(
+                role=role.name,
+                motion_id=motion_id,
+                seed=seed,
+            )
+            if diagnostic_frame_limit is not None
+            else None
         )
         dones = torch.zeros(1, dtype=torch.long, device=env.device)
         peak_residual = 0.0
         peak_world_force = 0.0
         natural_timeout_seen = False
         with AtomicReviewVideoWriter(paths.panel_video) as video:
-            for sample_index in range(expected_frame_count):
-                applied = driver.apply(sample_index, expected_frame_count)
+            for sample_index in range(run_frame_count):
+                applied = driver.apply(sample_index, run_frame_count)
                 observations = refresh_compliance_observations(raw_env, observations)
                 policy_observations = gate_actor_observations(observations, role)
+                validate_finite_observations(policy_observations)
                 snapshot = capture_sonic_review_snapshot(motion, command)
                 with torch.no_grad():
                     actions = actor.act_inference(
@@ -234,7 +283,7 @@ def collect_sonic_review_role(
                         motion_id=motion_id,
                         seed=seed,
                         frame_index=sample_index,
-                        timestamp_s=sample_index / 50.0,
+                        timestamp_s=sample_index / REVIEW_VIDEO_FPS,
                         active_site_names=active_names,
                         force_norms_n=tuple(
                             float(value) for value in force_norms.detach().cpu().tolist()
@@ -248,24 +297,38 @@ def collect_sonic_review_role(
                 timed_out = bool(extras["time_outs"][0].item())
                 terminal = bool(dones[0].item())
                 fall = terminal and not timed_out
-                accumulator.append(
-                    snapshot,
-                    policy_action=np.asarray(actions[0].detach().cpu().numpy()),
-                    reset=sample_index == 0,
-                    terminal=terminal,
-                    success=timed_out,
-                    fall=fall,
-                )
+                action_numpy = np.asarray(actions[0].detach().cpu().numpy())
+                if accumulator is not None:
+                    accumulator.append(
+                        snapshot,
+                        policy_action=action_numpy,
+                        reset=sample_index == 0,
+                        terminal=terminal,
+                        success=timed_out,
+                        fall=fall,
+                    )
+                else:
+                    assert diagnostic_accumulator is not None
+                    diagnostic_accumulator.append(
+                        snapshot,
+                        policy_action=action_numpy,
+                        terminal=terminal,
+                        timed_out=timed_out,
+                        fall=fall,
+                    )
                 if terminal:
+                    if diagnostic_frame_limit is not None:
+                        raise RuntimeError(
+                            f"diagnostic role terminated at sample {sample_index}"
+                        )
                     if fall:
                         raise RuntimeError(f"review role fell at sample {sample_index}")
                     if sample_index + 1 != expected_frame_count:
                         raise RuntimeError("review role timed out before the natural final frame")
                     natural_timeout_seen = True
                     break
-        if not natural_timeout_seen:
+        if diagnostic_frame_limit is None and not natural_timeout_seen:
             raise RuntimeError("review role did not reach its natural timeout")
-        trace = accumulator.finish(expected_frame_count=expected_frame_count)
         if role.external_force_enabled and peak_world_force < 4.999:
             raise AssertionError("active review role never reached the pinned 5 N force")
         if not role.external_force_enabled and peak_world_force != 0.0:
@@ -273,10 +336,43 @@ def collect_sonic_review_role(
         if role.residual_enabled and role.external_force_enabled and peak_residual <= 0.0:
             raise AssertionError("compliant review role never activated its trained residual")
         driver.reset()
-        write_trace_npz_atomic(trace, paths.trace)
+        if accumulator is not None:
+            trace = accumulator.finish(expected_frame_count=expected_frame_count)
+            write_trace_npz_atomic(trace, paths.trace)
+            trace_kind = "formal_natural_timeout"
+        else:
+            assert diagnostic_accumulator is not None
+            diagnostic_arrays = diagnostic_accumulator.finish(
+                expected_frame_count=run_frame_count
+            )
+            write_diagnostic_trace_atomic(diagnostic_arrays, paths.trace)
+            trace_kind = "diagnostic_fixed_cutoff_nonformal"
+        video_probe, panel_video_sha256 = probe_video_with_sha256(paths.panel_video)
+        expected_probe = {
+            "codec_name": "h264",
+            "pixel_format": "yuv420p",
+            "width": REVIEW_PANEL_WIDTH,
+            "height": REVIEW_PANEL_HEIGHT,
+            "frame_rate": str(REVIEW_VIDEO_FPS),
+            "frame_count": run_frame_count,
+        }
+        for key, expected_value in expected_probe.items():
+            if video_probe[key] != expected_value:
+                raise AssertionError(
+                    f"review panel video {key} changed: {video_probe[key]!r}"
+                )
+        expected_duration_s = run_frame_count / REVIEW_VIDEO_FPS
+        if abs(video_probe["duration_s"] - expected_duration_s) > (
+            0.5 / REVIEW_VIDEO_FPS
+        ):
+            raise AssertionError("review panel duration differs from the trace")
         elapsed_s = time.monotonic() - started_at
         summary = {
-            "schema_version": "sonic_chip_review_role_v1",
+            "schema_version": (
+                "sonic_chip_review_role_v1"
+                if diagnostic_frame_limit is None
+                else "sonic_chip_review_diagnostic_v1"
+            ),
             "role": role.name,
             "checkpoint_kind": role.checkpoint_kind,
             "checkpoint": str(checkpoint.resolve()),
@@ -285,14 +381,19 @@ def collect_sonic_review_role(
             "branch_commit": branch_commit,
             "motion_id": motion_id,
             "seed": seed,
-            "frame_count": expected_frame_count,
-            "natural_timeout_count": 1,
+            "frame_count": run_frame_count,
+            "source_motion_frame_count": expected_frame_count,
+            "trace_kind": trace_kind,
+            "natural_timeout_count": int(natural_timeout_seen),
             "fall_count": 0,
+            "finite_observations": True,
+            "finite_actions": True,
             "reset_count": 1,
             "trace": str(paths.trace.resolve()),
             "trace_sha256": _sha256(paths.trace),
             "panel_video": str(paths.panel_video.resolve()),
-            "panel_video_sha256": _sha256(paths.panel_video),
+            "panel_video_sha256": panel_video_sha256,
+            "panel_video_probe": video_probe,
             "body_names": list(body_names),
             "site_names": list(REVIEW_SITE_NAMES),
             "force_evaluation_frame": "world",
@@ -301,7 +402,7 @@ def collect_sonic_review_role(
             "peak_latent_residual": peak_residual,
             "observation_dims": observation_dims,
             "elapsed_s": elapsed_s,
-            "simulation_fps": expected_frame_count / elapsed_s,
+            "simulation_fps": run_frame_count / elapsed_s,
             "frame_contract": "video frame k equals pre-transition trace sample k",
         }
         write_report_json_atomic(summary, paths.summary)

@@ -14,7 +14,7 @@ current_phase: `4`
 
 completion: `NOT_COMPLETE`
 
-execution_state: `READY_PHASE4_CURRENT_ENVIRONMENT_REGRESSION`
+execution_state: `WAITING_FOR_IDLE_GPU_PHASE4_SMOKES`
 
 last_completed_phase: `3`
 
@@ -46,6 +46,10 @@ last_implementation_commit: `88163c11da98953c034b47cc3331bffa262652ba`
 - The task resumed from the pushed pause checkpoint `f1f8db4`. Phase 3 passed
   its complete CPU/fake-manager/Hydra/rendering matrix. No Phase-4 simulator
   run or Phase-5 formal output has started.
+- Phase 4 CPU/entrypoint/dry-run/real-ORT/accepted-artifact structural gates
+  have passed. Native GPU smokes and the separate 32-frame rendered diagnostic
+  remain pending because unrelated compute currently occupies the RTX 4090.
+  Those processes have not been touched.
 
 ## Phase 1 result
 

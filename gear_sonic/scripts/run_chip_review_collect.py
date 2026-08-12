@@ -32,6 +32,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument(
+        "--diagnostic-frames",
+        type=int,
+        help="non-formal fixed cutoff; omit to require the complete natural timeout",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -57,6 +62,8 @@ def _branch_commit() -> str:
 def _validate_inputs(args: argparse.Namespace) -> None:
     if args.seed < 0:
         raise ValueError("--seed must be non-negative")
+    if args.diagnostic_frames is not None and args.diagnostic_frames < 8:
+        raise ValueError("--diagnostic-frames must be at least eight")
     if not args.motion_id or "/" in args.motion_id or "\\" in args.motion_id:
         raise ValueError("--motion-id must be a safe non-empty name")
     for path in (args.motion_file, args.official_checkpoint, args.trained_checkpoint):
@@ -99,6 +106,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         plan["checkpoint_sha256"] = checkpoint_sha256
         plan["branch_commit"] = _branch_commit()
+        plan["diagnostic_frames"] = args.diagnostic_frames
+        plan["publication_kind"] = (
+            "formal_natural_timeout"
+            if args.diagnostic_frames is None
+            else "diagnostic_fixed_cutoff_nonformal"
+        )
         print(json.dumps(plan, allow_nan=False, sort_keys=True))
         return 0
 
@@ -134,6 +147,7 @@ def main(argv: list[str] | None = None) -> int:
             branch_commit=_branch_commit(),
             paths=ReviewArtifactPaths(args.output_root, args.motion_id, role.name),
             device=args.device,
+            diagnostic_frame_limit=args.diagnostic_frames,
         )
         print(
             "CHIP_REVIEW_COLLECT_PASS",

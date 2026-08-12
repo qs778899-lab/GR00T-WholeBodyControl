@@ -127,3 +127,35 @@
   passed; no IsaacLab application or GPU workload was started.
 - Committed the complete Phase-3 implementation and passing checkpoint as
   `88163c11da98953c034b47cc3331bffa262652ba`.
+
+## 2026-08-13 — Phase 4 in progress
+
+- Adapted only the accepted final-audit exact-head boundary for this documented
+  descendant task. The new read-only wrapper still invokes the accepted asset,
+  Phase-4/5 full-tree digest, checkpoint-semantic, release-path, protected-ref,
+  workflow-process, and optional NVML checks; it permits only the additive
+  runtime-review task paths after accepted CHIP source `3dbfb6f`.
+- The old portable unittest entrypoint initially reported two import errors
+  because its Python-3.10 environment lacks pytest and now discovers the two
+  new pytest modules. Added explicit dependency skips for unittest discovery;
+  the rerun passed `138` tests with `41` skips, preserving the accepted `136`
+  tests. Both resolved/portable focused entrypoint suites passed all `9` tests
+  (one expected portable Isaac skip).
+- All eight accepted CLI help paths passed. Both Phase-4 and Phase-5 orchestral
+  dry runs passed without creating their destinations. Real ONNX Runtime 1.25.0
+  dynamic/hard-off parity passed, and the independent Phase-5 audit recomputed
+  300 frames, mean displacement `0.00131441758 m`, and maximum ONNX error
+  `5.82076609e-10`.
+- The adapted structural audit passed the immutable accepted tree digests
+  `34cba440...` and `9efef421...`, pinned documentation-only ref advance, and
+  source/process/formal-root gates. Its GPU process check was deliberately
+  skipped and therefore not accepted for final Phase-4 passage.
+- Added an explicitly non-formal diagnostic trace schema, fixed-cutoff mode in
+  the same thin collector, and an independent 32-frame smoke auditor. Formal
+  collection remains natural-timeout-only. Four CPU tests prove no-write dry
+  run, exact cutoff/index/lifecycle semantics, finite observation rejection,
+  bounded atomic NPZ, and early-terminal rejection.
+- Host NVML sees the required RTX 4090 / driver `580.173.02`, but three unrelated
+  Python compute processes continue using about 12.4 GiB. They were not touched.
+  The current blocker is only the mandatory idle-GPU native/profiler/shape and
+  32-frame rendered smokes; Phase 4 remains `IN_PROGRESS`.

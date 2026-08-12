@@ -10,10 +10,15 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import unittest
 import zipfile
 
 import numpy as np
-import pytest
+
+try:
+    import pytest
+except ModuleNotFoundError as error:  # pragma: no cover - unittest portability gate
+    raise unittest.SkipTest("pytest is required for the portable review suite") from error
 
 from gear_sonic.compliance_control.review import (
     EvaluationTrace,

@@ -8,10 +8,15 @@ from pathlib import Path
 import subprocess
 import sys
 from types import SimpleNamespace
+import unittest
 
 import numpy as np
-import pytest
-import torch
+
+try:
+    import pytest
+    import torch
+except ModuleNotFoundError as error:  # pragma: no cover - unittest portability gate
+    raise unittest.SkipTest("pytest and torch are required for SONIC review tests") from error
 
 from gear_sonic.compliance_control.adapters.sonic.contracts import (
     SONIC_RELEASE_TRACKING_BODY_NAMES,
