@@ -298,25 +298,31 @@ does not leave repository caches.
 Environment contract for the current Phase-6 continuation: the historical
 Phase-2/3/4 commands above preserve the NVIDIA 580.159 compatibility paths that
 were actually used for those accepted phase results.  They are provenance, not
-the current launch contract.  At the 2026-08-12 pause that temporary directory
-is absent. The native host kernel module/CUDA/NVML userspace was observed
-matched at 580.173.02 earlier on 2026-08-12, but the final pause query could no
-longer communicate with the NVIDIA driver. Phase-6 reruns may use the native
-loader without temporary `LD_LIBRARY_PATH`, `LD_PRELOAD`, or
-`VK_ICD_FILENAMES` overrides only after revalidating the exact current
-versions, CUDA availability in `sonic_backup`, and an idle GPU. If the host
-state differs, update this Phase-6 contract before execution.
+the current launch contract.  At the latest 2026-08-12 pause that temporary
+directory is absent. Host-device queries validated a matched native NVIDIA
+kernel/CUDA/NVML stack at 580.173.02 and PyTorch 2.7/CUDA 12.8 on the RTX 4090;
+the default sandbox hides `/dev/nvidia*` and is not a valid GPU probe. Phase-6
+reruns use the native loader without temporary `LD_LIBRARY_PATH`, `LD_PRELOAD`,
+or `VK_ICD_FILENAMES` overrides only after revalidating exact versions, CUDA in
+`sonic_backup`, and the absence of unrelated compute processes. If host state
+differs, update this Phase-6 contract before execution.
 
 1. Run the complete test suite from Phases 1–5.
 2. Low-resource IsaacLab smoke/performance run in `sonic_backup`: one audited
    robot PKL, `sample_data/smpl_filtered`, `num_envs=16`, 5 iterations, and
-   `use_wandb=false`; record FPS/GPU memory.  Use the native matched-driver
-   environment above and the fresh output root
-   `compliance_control/runs/motion/phase6_residual_gpu_smoke_post_restart`:
-   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/train_agent_trl.py +exp=manager/universal_token/all_modes/sonic_release_motion_compliance_finetune experiment_dir=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase6_residual_gpu_smoke_post_restart headless=true`.
+   `use_wandb=false`; record FPS/GPU memory. The first run retained at
+   `phase6_residual_gpu_smoke_post_restart` reached step 5 and passed checkpoint
+   audit, but is functional evidence only because unrelated GRAIL compute was
+   active and its verbose launcher exit was not retained; never overwrite or
+   promote its contention-affected FPS. After a host
+   query proves the GPU has no unrelated compute process, use the native
+   matched-driver environment above and the verified-missing retry root
+   `compliance_control/runs/motion/phase6_residual_gpu_smoke_idle_retry1`:
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/train_agent_trl.py +exp=manager/universal_token/all_modes/sonic_release_motion_compliance_finetune experiment_dir=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase6_residual_gpu_smoke_idle_retry1 headless=true`.
    Before launch, Hydra composition must still resolve `num_envs=16`, five
    learning iterations, the audited robot/SMPL inputs, and `use_wandb=false`;
-   refuse the run rather than silently overriding a changed config.
+   refuse the run rather than silently overriding a changed config. Afterward,
+   independently audit the new checkpoint at step 5 and preserve both attempts.
 3. Characterize fixed-shape compliance-candidate overhead at 4096 environments:
    report policy-step time and GPU memory for host-off/baseline and enabled
    scheduling without changing the synchronization-safe algorithm first.  From

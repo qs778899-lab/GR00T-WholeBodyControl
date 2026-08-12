@@ -3,19 +3,22 @@
 ## Resume here
 
 Task state is **Phase 6 / IN_PROGRESS, paused by user**. Phases 1 through 5
-remain accepted. Phase 6 has the portable CPU evaluation contract plus a
-P1-hardened thin SONIC collector/final validator, but no fresh Phase-6
-GPU/simulator performance evidence. Read `status.md`, this checkpoint, and
-only the Phase-6 section of `test_matrix.md`; do not infer completion from the
-Phase-4 training smoke, deployment tests, or synthetic CPU traces.
+remain accepted. Matrix item 1 and the pre-data active tracking gates are
+complete. A fresh item-2 training attempt reached step 5 and passed independent
+checkpoint audit, but its FPS result is not accepted because unrelated GRAIL
+compute was using the GPU; its launcher exit code was also lost to verbose
+output truncation. No 4096-environment benchmark or six-protocol trace
+collection has started. Read `status.md`, this checkpoint, and only the Phase-6
+section of `test_matrix.md`; do not infer Phase-6 completion from the retained
+functional training attempt.
 
-## Latest pause checkpoint (2026-08-12 17:20 +08:00)
+## Latest pause checkpoint (2026-08-12 17:46 +08:00)
 
 Implementation state before this documentation-only checkpoint:
 
 - branch: `experiment/motion-compliance`;
-- local and tracked remote implementation head:
-  `30f2190d1b70321705e92dde2b5c004fc8bee6d4`;
+- local and tracked remote implementation head before this documentation:
+  `2dddfdaee9ce8d4c5debed1c51fbc224ec942606`;
 - official merge base:
   `4141c34280abb67c82e115342a8720f4a83d750d`;
 - `main@6d6d8ae9a04b67a977b027acecfe20c65aca0647` and
@@ -41,29 +44,50 @@ requires exact manager provenance and nonzero-before/zero-after reset evidence
 for all three interaction trials, while requiring no such event in baseline,
 off, or no-contact trials. Focused evaluation/collector tests passed `40 tests
 in 1.40s`; the four help gates and a real composed-Hydra provenance probe also
-passed. The subsequent combined pure suite passed `127 passed, 1 skipped in
-25.63s`; deployment passed `33 passed, 96 warnings in 3.14s`; the official
-residual contract, trainer help/config, and official residual-init smoke also
-passed. These are useful CPU checkpoint results, but matrix item 1 is not
-complete because the real Phase-2/3 IsaacLab smokes and remaining exact audit/
-Phase-5 commands were not completed.
+passed. Matrix item 1 was subsequently completed on the current tree: combined
+pure suite `130 passed, 1 skipped in 27.52s`, deployment `33 passed`, exact
+step-5/step-6 audits, Phase-5 acceptance/C++/production/release-boundary gates,
+official residual/config gates, and native-driver real Phase-2/3 IsaacLab
+smokes all returned zero.
 
-Two Phase-4 checkpoint audit outputs were atomically regenerated at
-`2026-08-12T17:17:40+08:00`. Their payloads show the expected steps 5/6,
-55/17 frozen base tensors, all twelve residual tensors changed, and twelve
-optimizer slots. The parent orchestration output was truncated before its exit
-statuses could be retained, so rerun both exact commands from `test_matrix.md`
-on resume; do not count read-back alone as final matrix evidence.
+Before formal traces, the portable and SONIC acceptance contract was fixed and
+committed. Each active wrist is checked against its yielded position target
+(5/10 mm RMSE/P95 regression), original orientation target (0.05/0.10 rad),
+and remaining-body local/global MPJPE after excluding only the explicitly
+mapped active point (max(3 mm, 10%)/max(5 mm, 10%)). Focused tests passed 43
+tests in 1.58s. These values may not be relaxed after viewing formal data.
 
-No Phase-6 training, 4096-environment benchmark, or six-protocol collection
-was launched. These reserved outputs are absent and remain safe fresh targets:
+One Phase-6 item-2 attempt was launched with the exact 16-environment,
+five-iteration, audited-motion, W&B-off native CUDA command. It reached global
+step 5 and left no task-owned process. The original launcher exit status was
+not retained after verbose output exceeded the orchestration context; this is
+an additional reason not to promote the attempt. The subsequent independent
+audit returned zero and proved all twelve residual tensors changed, 55/17 base
+tensors stayed frozen, and twelve optimizer slots exist. Retained evidence:
 
-- `compliance_control/runs/motion/phase6_residual_gpu_smoke_post_restart`;
-- `compliance_control/runs/motion/phase6_scheduler_4096.json`;
-- `compliance_control/runs/motion/phase6_real_paired`.
+- directory: `compliance_control/runs/motion/phase6_residual_gpu_smoke_post_restart`
+  (298 MiB; never overwrite);
+- trained checkpoint SHA-256:
+  `8f44cd1bc0bcc5f7264a1bc41851ac2f57832570098ee27518e302a0503ec354`;
+- initialization SHA-256:
+  `5e2ba812af6c438b0f36cfa174969df39e2e712ef342ab96fce2858f4eb9561c`;
+- exposure/audit SHA-256:
+  `0dcbf24d3c44699440870a44868be1a2688e3dea1fce41c178be5fad134b8f09` /
+  `952fc288fa4c086916330b93f6dfb2fb8a0d87c5a5bb462505a5d2e93310babd`;
+- observed FPS 179--262, process peak allocated CUDA memory 353,315,840
+  bytes, peak site force 14.9962 N, five nonzero-force batches, and finite loss
+  metrics.
+
+This attempt is accepted only as a functional-smoke diagnostic. Unrelated
+GRAIL compute processes occupied the RTX 4090 before and during launch, so the
+idle-GPU precondition was violated and its FPS cannot pass matrix item 2. Keep
+the result for provenance. The accepted retry path
+`compliance_control/runs/motion/phase6_residual_gpu_smoke_idle_retry1` is
+verified absent. `phase6_scheduler_4096.json` and `phase6_real_paired` are also
+absent; neither item 3 nor real collection has started.
 
 The temporary `/tmp/nvidia_580_159_compat` tree remains absent. The apparent
-driver failure at the pause boundary was isolated to the default filesystem
+driver failure at an earlier pause boundary was isolated to the default filesystem
 sandbox hiding `/dev/nvidia*`: host-device probes show the native NVIDIA
 kernel/CUDA/NVML stack matched at `580.173.02`, PyTorch 2.7/CUDA 12.8 sees the
 RTX 4090, and both real Phase-2/3 smokes passed. GPU commands must use approved
@@ -71,8 +95,9 @@ host device access, no temporary loader override, and must not terminate
 unrelated jobs.
 
 Stop boundary: Phase 6 remains `IN_PROGRESS`; it is not `PASSED`, and the task
-is `NOT_COMPLETE`. No process was intentionally left running for this task.
-Resume with the exact order below; do not jump directly to formal collection.
+is `NOT_COMPLETE`. No process is left running for this task. Resume by repeating
+item 2 on an actually idle GPU in the new path below; do not jump to the
+scheduler benchmark or formal collection.
 
 ## Prior paused checkpoint (2026-07-28, historical)
 
@@ -224,18 +249,22 @@ Accepted residual artifacts:
 
 Accepted test evidence:
 
-- Phase 1–4 plus evaluation: `101 passed, 1 skipped in 25.00s` in
-  `sonic_backup`.
-- Deployment/export: `33 passed, 96 warnings in 2.75s` in the ORT-equipped
-  `sonic` environment.
+- Current-tree Phase-6 item-1 combined suite: `130 passed, 1 skipped in
+  27.52s` in `sonic_backup`.
+- Current-tree deployment/export: `33 passed, 96 warnings in 2.61s` in the
+  ORT-equipped `sonic` environment.
 - PyTorch/ORT dynamic-shape maximum absolute error:
   `7.450580596923828e-09`; hard-off is exact.
 - System-ORT C++ generic and SONIC smoke passed, the complete production target
   configured/linked, and eight invalid CLI values were rejected before DDS.
-- Paused-code focused evaluation/collector/final-validator suite: `38 passed`
-  with strict lifecycle/alignment/IO/provenance and adversarial evidence
-  negatives. The older complete split regression above predates the final
-  collector additions and must be rerun as Phase-6 matrix item 1.
+- Native matched-driver Phase-2 and Phase-3 real IsaacLab smokes passed on the
+  current tree, as did exact step-5/step-6 checkpoint audits and the remaining
+  Phase-5 acceptance/immutability gates.
+- Active-tracking focused evaluator/final-validator suite: `43 passed in
+  1.58s`, with fixed endpoint-to-point mapping and numeric limits.
+- The retained Phase-6 item-2 attempt passed its functional step-5 checkpoint
+  audit, but its FPS is diagnostic rather than accepted performance evidence
+  because the GPU was not idle.
 
 Git phase history before this handoff:
 
@@ -251,8 +280,9 @@ location alone—are the provenance contract.
 
 ## What is not implemented or not proven
 
-- No fresh post-restart Phase-6 16-environment/5-iteration smoke or recorded
-  FPS/GPU-memory result has been accepted.
+- No idle-GPU Phase-6 16-environment/5-iteration FPS result has been accepted.
+  The completed busy-GPU attempt proves the functional training/checkpoint
+  path only and must not be overwritten or promoted as uncontended timing.
 - No accepted 4096-environment host-off versus enabled scheduler measurement
   exists yet. The benchmark CLI is implemented and only its CPU help gate ran.
 - No real paired Phase-6 baseline, overlay-off, enabled/no-contact, single-left,
@@ -261,12 +291,10 @@ location alone—are the provenance contract.
 - Therefore the branch cannot yet claim the required off-mode hand endpoint
   regression, no-contact parity, compliant yield, cross-coupling, fall/reset,
   or final upper-limb tracking quality.
-- Active trials will report endpoint/orientation/local-global MPJPE, but the
-  final acceptance still needs an explicit human review (and, if agreed before
-  collection, fixed upper limits) for active left/right wrist endpoint,
-  orientation, and whole-body tracking accuracy. This is essential to the
-  user requirement that compliance must not displace tracking accuracy as the
-  first priority.
+- Active trials will report endpoint/orientation/local-global MPJPE under the
+  fixed pre-data limits recorded above. The real values and pass/fail outcome
+  remain unknown until all six traces are collected; tracking accuracy remains
+  the first priority.
 - Exact termination/event provenance and configured reset-event evidence are
   implemented and CPU-tested, but remain to be exercised by the formal real
   six-trial collection.
@@ -295,9 +323,14 @@ location alone—are the provenance contract.
    the endpoint mapping or the 5/10 mm endpoint, 0.05/0.10 rad orientation,
    max(3 mm, 10%) invariant-local, or max(5 mm, 10%) invariant-global limits
    after seeing formal results.
-5. Run the prescribed 16-environment, one-audited-robot-PKL, five-iteration,
-   `use_wandb=false` smoke and record FPS and GPU memory.
-6. From a new output path, run the exact matrix item-3 command for
+5. Wait for a host query showing no unrelated compute process, then repeat the
+   prescribed 16-environment, one-audited-robot-PKL, five-iteration,
+   `use_wandb=false` smoke at the verified-missing
+   `phase6_residual_gpu_smoke_idle_retry1` path. Audit its step-5 checkpoint and
+   record FPS/GPU memory. Never reuse or overwrite
+   `phase6_residual_gpu_smoke_post_restart`; it is the retained busy-GPU
+   functional attempt.
+6. Only after item 2 passes, from a new output path run the exact matrix item-3 command for
    `phase6_scheduler_benchmark.py --num-envs 4096 --num-sites 2`. Preserve its
    scheduler-only label; it is not end-to-end policy latency.
 7. Use the existing `phase6_collect_sonic_trace.py` in six fresh directories:
@@ -342,6 +375,10 @@ Verified local inputs at the pause boundary:
 - native NVIDIA environment: kernel module, CUDA driver, and NVML `580.173.02`;
   host-device PyTorch sees RTX 4090. The historical
   `/tmp/nvidia_580_159_compat` directory is absent and is not a current input
+- retained busy-GPU functional smoke:
+  `compliance_control/runs/motion/phase6_residual_gpu_smoke_post_restart`
+- fresh path reserved for the accepted idle-GPU item-2 retry:
+  `compliance_control/runs/motion/phase6_residual_gpu_smoke_idle_retry1`
 
 Use a new `PHASE6_RUN_ROOT` under
 `compliance_control/runs/motion/`; never point it at an existing directory.

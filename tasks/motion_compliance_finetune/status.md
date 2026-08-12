@@ -19,11 +19,11 @@ current_phase: `6`
 
 completion: `NOT_COMPLETE`
 
-execution_state: `RUNNING_PHASE6_2026-08-12_RESUMED_AFTER_CPU_CHECKPOINT`
+execution_state: `PAUSED_BY_USER_AFTER_PHASE6_GPU_FUNCTIONAL_SMOKE_BUSY_GPU`
 
-paused_implementation_head: `30f2190d1b70321705e92dde2b5c004fc8bee6d4`
+paused_implementation_head: `2dddfdaee9ce8d4c5debed1c51fbc224ec942606`
 
-remote_head_before_documentation_checkpoint: `origin/experiment/motion-compliance@30f2190d1b70321705e92dde2b5c004fc8bee6d4`
+remote_head_before_documentation_checkpoint: `origin/experiment/motion-compliance@2dddfdaee9ce8d4c5debed1c51fbc224ec942606`
 
 ## Phase 6 current result
 
@@ -68,15 +68,36 @@ Completed in the current phase:
   original orientation target (0.05/0.10 rad), and excludes only its explicitly
   mapped point from remaining-body local/global MPJPE (max(3 mm, 10%)/max(5
   mm, 10%)). Focused evaluator/final-validator tests pass `43 tests in 1.58s`.
+- The first Phase-6 item-2 attempt reached the prescribed 16-environment,
+  five-iteration native CUDA training boundary in the previously fresh
+  `phase6_residual_gpu_smoke_post_restart` directory. The run used the audited
+  robot PKL and SMPL directory with W&B disabled, reached global step 5, and
+  left no task-owned process. The original launcher exit code was lost when its
+  verbose output exceeded the orchestration context, so it is not claimed as a
+  retained zero exit. Its exposure record reports five
+  observed/nonzero-force batches, 160 active-site samples, finite loss metrics,
+  FPS 179--262, peak site force 14.9962 N, and process peak allocated CUDA
+  memory 353,315,840 bytes.
+- An independent step-5 audit returned zero for that run: all six policy and six
+  value residual tensors changed, 55 policy and 17 value base tensors remained
+  frozen, and all 12 optimizer slots were present. The retained output is a
+  valid functional-smoke diagnostic, with checkpoint SHA-256
+  `8f44cd1bc0bcc5f7264a1bc41851ac2f57832570098ee27518e302a0503ec354`.
+- The same attempt is **not accepted as item-2 performance evidence** because
+  unrelated GRAIL compute processes were resident on the RTX 4090 before and
+  during launch, violating the matrix idle-GPU precondition. The measured FPS
+  is therefore contention-affected. Preserve this 298 MiB directory and never
+  overwrite it.
 
 Still required before completion:
 
-- Fresh post-restart 16-environment/5-iteration native matched-driver CUDA
-  smoke with FPS and GPU-memory recording. Host-side validation shows the
-  native `580.173.02` stack and RTX 4090 are available; default sandbox device
+- An accepted idle-GPU repeat of the 16-environment/5-iteration native CUDA
+  smoke, using the still-missing fresh directory
+  `phase6_residual_gpu_smoke_idle_retry1`. Host-side validation shows the native
+  `580.173.02` stack and RTX 4090 are available; default sandbox device
   isolation, not a driver failure, caused the earlier `nvidia-smi` error.
-  GPU/IsaacLab evidence must run with host device access and no removed
-  temporary `580.159` compatibility override.
+  Re-run only after no unrelated compute process is present, with host device
+  access and no removed temporary `580.159` compatibility override.
 - Real 4096-environment host-off/enabled scheduler-only measurement.
 - Strictly paired real simulator traces for baseline, overlay-off,
   enabled/no-contact, single-left, single-right, and simultaneous trials.
@@ -84,14 +105,16 @@ Still required before completion:
   thresholds and final output/cache/diff hygiene.  In particular, active-mode
   left/right endpoint, wrist orientation, and whole-body tracking upper bounds
   must be reviewed explicitly because tracking accuracy remains the priority.
-- No formal Phase-6 GPU/simulator output was created during this continuation:
-  `phase6_residual_gpu_smoke_post_restart`, `phase6_scheduler_4096.json`, and
-  `phase6_real_paired` remain absent and are fresh targets.  No training,
-  4096-environment benchmark, or six-protocol simulator collection was
-  started.
+- `phase6_residual_gpu_smoke_post_restart` now exists and is reserved as the
+  contention-affected functional attempt described above. The accepted retry
+  path `phase6_residual_gpu_smoke_idle_retry1`, `phase6_scheduler_4096.json`,
+  and `phase6_real_paired` remain absent and fresh. No 4096-environment
+  benchmark or six-protocol simulator collection was started.
 
-next_action: Run Phase-6 matrix item 2 from its still-missing formal output
-path: the fixed 16-environment/five-iteration native-driver smoke with FPS and
-GPU-memory evidence. Then execute items 3–9 in order without changing the
-pre-data acceptance limits. Do not mark Phase 6 `PASSED` or the task
-`COMPLETE` before all formal evidence passes.
+next_action: After confirming the host GPU has no unrelated compute process,
+repeat Phase-6 matrix item 2 in the fresh
+`phase6_residual_gpu_smoke_idle_retry1` path and independently audit step 5.
+Do not overwrite the first attempt and do not start item 3 until the idle-GPU
+repeat passes. Then execute items 3–9 in order without changing the pre-data
+acceptance limits. Do not mark Phase 6 `PASSED` or the task `COMPLETE` before
+all formal evidence passes.

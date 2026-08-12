@@ -1021,3 +1021,35 @@
   now `compliance_evaluation_v2`, and the SONIC validator recomputes and pins
   every mapping, value, and check. Focused validation passed `43 tests in
   1.58s`.
+
+## 2026-08-12 — Paused after contention-affected Phase-6 item-2 attempt
+
+- The user requested a pause before any Phase-6 scheduler benchmark or
+  six-protocol real trace collection. No item-3 command or collector command
+  was started, and no task-owned training/simulator process remains running.
+- Before the pause, the exact Phase-6 item-2 training command was launched from
+  the previously absent
+  `compliance_control/runs/motion/phase6_residual_gpu_smoke_post_restart`
+  directory with 16 environments, five iterations, the audited robot/SMPL
+  inputs, W&B disabled, and native matched-driver host access. It reached
+  global step 5 and no task-owned process remained. Its original exit status
+  was not retained because verbose output exceeded the orchestration context;
+  the later independent audit is the retained zero exit.
+- Exposure evidence records five observed/nonzero-force batches, 80 enabled
+  environment samples, 160 active-site samples split 80/80, finite loss
+  metrics, FPS 179--262, peak site force 14.996153831481934 N, and process peak
+  allocated CUDA memory 353,315,840 bytes.
+- A fresh independent step-5 audit returned zero: all six policy and six value
+  residual tensors changed, 55 policy and 17 value base tensors stayed frozen,
+  and all 12 optimizer slots were present. The trained checkpoint SHA-256 is
+  `8f44cd1bc0bcc5f7264a1bc41851ac2f57832570098ee27518e302a0503ec354`;
+  initialization/exposure/audit hashes are recorded in `phase6_handoff.md`.
+- This run is retained as functional-smoke evidence only. Unrelated GRAIL
+  compute was resident on the RTX 4090 before and during launch, so the
+  idle-GPU performance precondition was not met and its FPS cannot pass matrix
+  item 2. The 298 MiB output must not be overwritten or deleted.
+- The next accepted item-2 attempt is pinned to the verified-absent
+  `phase6_residual_gpu_smoke_idle_retry1` directory and may begin only after a
+  host query shows no unrelated compute process. The formal scheduler JSON and
+  real paired root remain absent. Phase 6 stays `IN_PROGRESS`; the task remains
+  `NOT_COMPLETE`.

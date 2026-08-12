@@ -225,10 +225,14 @@ Baseline: NVLabs upstream `main` at
 
 ### Phase 6 — Integration, regression, and low-resource validation
 
-- Current execution state (2026-08-12): paused by user at
-  `30f2190d1b70321705e92dde2b5c004fc8bee6d4` after P1 provenance/reset-event
-  hardening and CPU checks. No formal Phase-6 GPU/six-protocol evidence has
-  run, so this phase remains `IN_PROGRESS`.
+- Current execution state (2026-08-12): paused by user after matrix item 1,
+  fixed pre-data tracking gates, and one completed item-2 functional attempt.
+  That 16-environment/five-iteration run reached step 5 and passed independent
+  checkpoint audit, but unrelated GRAIL GPU work invalidates its FPS and the
+  verbose launcher exit was not retained. Item 2 must be repeated in the
+  documented fresh path before item 3; no 4096-env or six-protocol run has
+  started, so
+  this phase remains `IN_PROGRESS`.
 - Run config/help/compile/unit tests plus IsaacLab smoke tests.
 - Run paired stiff-mode baseline regression on fixed motion IDs/timestamps.
 - Run single- and simultaneous-site compliant-force evaluation.
@@ -265,7 +269,8 @@ Baseline: NVLabs upstream `main` at
   pass or any difference has a documented explanation.
 - The prescribed low-resource smoke uses the `sonic_backup` environment, one
   audited robot PKL plus `sample_data/smpl_filtered`, 16 environments, 5
-  iterations, and `use_wandb=false`.  CUDA is currently usable through the
-  temporary NVIDIA 580.159 user-space compatibility libraries used by the real
-  Phase-2/3 smokes, so the old driver mismatch is not a current blocker.  Pin
-  that environment for every real test and revalidate it after a machine restart.
+  iterations, and `use_wandb=false`. Current Phase-6 execution uses the native
+  matched NVIDIA 580.173.02 stack with host device access; the historical
+  temporary 580.159 compatibility tree is absent and is not a current input.
+  Revalidate driver/CUDA/NVML, asset hashes, and an actually idle GPU before
+  every accepted performance run and after a machine restart.
