@@ -333,6 +333,22 @@ state differs, update this Phase-6 contract before execution.
 6. Single-left, single-right, and simultaneous two-site force trials:
    record force peaks, yielded displacement, endpoint RMSE, falls, and reset
    behavior; no NaN/Inf or persistent wrench is permitted.
+   The following active-mode tracking limits were fixed in source before any
+   formal trace was collected and may not be relaxed after observing results:
+   - map each caller-owned endpoint site one-to-one to its tracking point;
+   - on non-reset active rows, selected-target endpoint RMSE/P95 regression
+     versus the exactly aligned overlay-off original-target error is at most
+     5 mm / 10 mm for each active wrist;
+   - wrist orientation remains referenced to the original target and its
+     RMSE/P95 regression versus overlay-off is at most 0.05 / 0.10 rad;
+   - whole-body preservation excludes only a tracking point whose mapped site
+     is active on that row. Remaining-point local MPJPE regression is at most
+     3 mm or 10% of overlay-off, whichever is larger; global MPJPE regression
+     is at most 5 mm or 10%, whichever is larger;
+   - apply every bound independently to single-left, single-right, and
+     simultaneous trials. The portable report and SONIC recomputation gate
+     must contain the exact fixed values and fail closed on a changed mapping,
+     missing check, or relaxed limit.
 7. Confirm output directories contain no unintended caches, duplicate JSON, or
    multi-GB debug logs.
 8. Run the tracker-neutral aligned-evaluation CPU contract:
@@ -346,7 +362,8 @@ state differs, update this Phase-6 contract before execution.
    `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase6_validate_sonic_collection_reports.py --help`.
    It must reject any motion/sequence/seed/frame/timestamp or ordered-layout
    mismatch, including a one-bit timestamp change.  With caller-owned site and
-   point layouts it reports per-site original/selected endpoint RMSE/P95,
+   point layouts and explicit endpoint-to-tracking-point mapping it reports
+   per-site original/selected endpoint RMSE/P95,
    quaternion orientation error, local/global MPJPE, force/yield, paired
    inactive-site cross-coupling, success/fall/reset state, stale post-reset
    force, and input/derived finiteness for baseline, hard-off, enabled/no-contact,

@@ -48,6 +48,10 @@ SONIC_AUDITED_MOTION_SHA256 = (
 )
 SONIC_PHASE6_PORTABLE_CRITERIA = {
     "endpoint_site_ids": ["left_wrist_yaw_link", "right_wrist_yaw_link"],
+    "endpoint_tracking_point_ids": [
+        "left_wrist_yaw_link",
+        "right_wrist_yaw_link",
+    ],
     "max_success_rate_drop": 0.01,
     "local_mpjpe_absolute_regression_m": 0.003,
     "local_mpjpe_relative_regression": 0.10,
@@ -62,6 +66,14 @@ SONIC_PHASE6_PORTABLE_CRITERIA = {
     "minimum_active_measured_yield_along_force_peak_m": 0.0001,
     "inactive_cross_coupling_rmse_m": 0.005,
     "inactive_cross_coupling_p95_m": 0.010,
+    "active_selected_endpoint_rmse_regression_m": 0.005,
+    "active_selected_endpoint_p95_regression_m": 0.010,
+    "active_orientation_rmse_regression_rad": 0.05,
+    "active_orientation_p95_regression_rad": 0.10,
+    "active_invariant_local_mpjpe_absolute_regression_m": 0.003,
+    "active_invariant_local_mpjpe_relative_regression": 0.10,
+    "active_invariant_global_mpjpe_absolute_regression_m": 0.005,
+    "active_invariant_global_mpjpe_relative_regression": 0.10,
 }
 SONIC_PHASE6_ENVIRONMENT_INVARIANTS = {
     "hydra_termination_override": "/manager_env/terminations=tracking/eval",
@@ -314,6 +326,9 @@ def validate_sonic_collection_suite(
             endpoint_site_ids=tuple(
                 SONIC_PHASE6_PORTABLE_CRITERIA["endpoint_site_ids"]
             ),
+            endpoint_tracking_point_ids=tuple(
+                SONIC_PHASE6_PORTABLE_CRITERIA["endpoint_tracking_point_ids"]
+            ),
             max_success_rate_drop=SONIC_PHASE6_PORTABLE_CRITERIA[
                 "max_success_rate_drop"
             ],
@@ -358,6 +373,46 @@ def validate_sonic_collection_suite(
             inactive_cross_coupling_p95_m=SONIC_PHASE6_PORTABLE_CRITERIA[
                 "inactive_cross_coupling_p95_m"
             ],
+            active_selected_endpoint_rmse_regression_m=(
+                SONIC_PHASE6_PORTABLE_CRITERIA[
+                    "active_selected_endpoint_rmse_regression_m"
+                ]
+            ),
+            active_selected_endpoint_p95_regression_m=(
+                SONIC_PHASE6_PORTABLE_CRITERIA[
+                    "active_selected_endpoint_p95_regression_m"
+                ]
+            ),
+            active_orientation_rmse_regression_rad=(
+                SONIC_PHASE6_PORTABLE_CRITERIA[
+                    "active_orientation_rmse_regression_rad"
+                ]
+            ),
+            active_orientation_p95_regression_rad=(
+                SONIC_PHASE6_PORTABLE_CRITERIA[
+                    "active_orientation_p95_regression_rad"
+                ]
+            ),
+            active_invariant_local_mpjpe_absolute_regression_m=(
+                SONIC_PHASE6_PORTABLE_CRITERIA[
+                    "active_invariant_local_mpjpe_absolute_regression_m"
+                ]
+            ),
+            active_invariant_local_mpjpe_relative_regression=(
+                SONIC_PHASE6_PORTABLE_CRITERIA[
+                    "active_invariant_local_mpjpe_relative_regression"
+                ]
+            ),
+            active_invariant_global_mpjpe_absolute_regression_m=(
+                SONIC_PHASE6_PORTABLE_CRITERIA[
+                    "active_invariant_global_mpjpe_absolute_regression_m"
+                ]
+            ),
+            active_invariant_global_mpjpe_relative_regression=(
+                SONIC_PHASE6_PORTABLE_CRITERIA[
+                    "active_invariant_global_mpjpe_relative_regression"
+                ]
+            ),
         ),
     )
     paired_metrics_payload = dict(paired_report)
@@ -396,7 +451,7 @@ def validate_sonic_collection_suite(
         _eq_check(
             "portable_report_schema",
             paired_report.get("schema_version"),
-            "compliance_evaluation_v1",
+            "compliance_evaluation_v2",
         )
     )
     paired_acceptance = _mapping(paired_report.get("acceptance"), "paired acceptance")

@@ -56,7 +56,16 @@ def _parser() -> argparse.ArgumentParser:
         "--endpoint-site",
         action="append",
         required=True,
-        help="Caller-selected endpoint site ID for stiff/off regression checks",
+        help="Caller-selected endpoint site ID; repeat in mapping order",
+    )
+    parser.add_argument(
+        "--endpoint-point",
+        action="append",
+        required=True,
+        help=(
+            "Caller-selected tracking point corresponding one-to-one with each "
+            "--endpoint-site"
+        ),
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--overwrite", action="store_true")
@@ -80,6 +89,46 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--inactive-cross-coupling-rmse-m", type=float, default=0.005)
     parser.add_argument("--inactive-cross-coupling-p95-m", type=float, default=0.010)
+    parser.add_argument(
+        "--active-selected-endpoint-rmse-regression-m",
+        type=float,
+        default=0.005,
+    )
+    parser.add_argument(
+        "--active-selected-endpoint-p95-regression-m",
+        type=float,
+        default=0.010,
+    )
+    parser.add_argument(
+        "--active-orientation-rmse-regression-rad",
+        type=float,
+        default=0.05,
+    )
+    parser.add_argument(
+        "--active-orientation-p95-regression-rad",
+        type=float,
+        default=0.10,
+    )
+    parser.add_argument(
+        "--active-invariant-local-mpjpe-absolute-regression-m",
+        type=float,
+        default=0.003,
+    )
+    parser.add_argument(
+        "--active-invariant-local-mpjpe-relative-regression",
+        type=float,
+        default=0.10,
+    )
+    parser.add_argument(
+        "--active-invariant-global-mpjpe-absolute-regression-m",
+        type=float,
+        default=0.005,
+    )
+    parser.add_argument(
+        "--active-invariant-global-mpjpe-relative-regression",
+        type=float,
+        default=0.10,
+    )
     return parser
 
 
@@ -109,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
 
     criteria = RegressionCriteria(
         endpoint_site_ids=tuple(args.endpoint_site),
+        endpoint_tracking_point_ids=tuple(args.endpoint_point),
         max_success_rate_drop=args.max_success_rate_drop,
         local_mpjpe_absolute_regression_m=args.local_mpjpe_absolute_regression_m,
         local_mpjpe_relative_regression=args.local_mpjpe_relative_regression,
@@ -127,6 +177,30 @@ def main(argv: list[str] | None = None) -> int:
         ),
         inactive_cross_coupling_rmse_m=args.inactive_cross_coupling_rmse_m,
         inactive_cross_coupling_p95_m=args.inactive_cross_coupling_p95_m,
+        active_selected_endpoint_rmse_regression_m=(
+            args.active_selected_endpoint_rmse_regression_m
+        ),
+        active_selected_endpoint_p95_regression_m=(
+            args.active_selected_endpoint_p95_regression_m
+        ),
+        active_orientation_rmse_regression_rad=(
+            args.active_orientation_rmse_regression_rad
+        ),
+        active_orientation_p95_regression_rad=(
+            args.active_orientation_p95_regression_rad
+        ),
+        active_invariant_local_mpjpe_absolute_regression_m=(
+            args.active_invariant_local_mpjpe_absolute_regression_m
+        ),
+        active_invariant_local_mpjpe_relative_regression=(
+            args.active_invariant_local_mpjpe_relative_regression
+        ),
+        active_invariant_global_mpjpe_absolute_regression_m=(
+            args.active_invariant_global_mpjpe_absolute_regression_m
+        ),
+        active_invariant_global_mpjpe_relative_regression=(
+            args.active_invariant_global_mpjpe_relative_regression
+        ),
     )
     report = evaluate_trial_suite(
         traces,

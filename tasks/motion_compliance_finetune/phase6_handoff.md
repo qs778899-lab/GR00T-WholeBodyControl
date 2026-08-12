@@ -62,14 +62,13 @@ was launched. These reserved outputs are absent and remain safe fresh targets:
 - `compliance_control/runs/motion/phase6_scheduler_4096.json`;
 - `compliance_control/runs/motion/phase6_real_paired`.
 
-The temporary `/tmp/nvidia_580_159_compat` tree remains absent. Earlier in this
-continuation the host NVIDIA kernel/CUDA/NVML stack was observable at matched
-version `580.173.02`, with unrelated GPU workloads left untouched. At the
-final pause inspection, however, both `nvidia-smi` queries failed with
-"couldn't communicate with the NVIDIA driver". Therefore the current GPU
-contract is **unverified**. On resume, first restore/revalidate the native
-driver, CUDA availability in `sonic_backup`, and an idle GPU. Do not resurrect
-the stale temporary-loader overrides, and do not terminate unrelated jobs.
+The temporary `/tmp/nvidia_580_159_compat` tree remains absent. The apparent
+driver failure at the pause boundary was isolated to the default filesystem
+sandbox hiding `/dev/nvidia*`: host-device probes show the native NVIDIA
+kernel/CUDA/NVML stack matched at `580.173.02`, PyTorch 2.7/CUDA 12.8 sees the
+RTX 4090, and both real Phase-2/3 smokes passed. GPU commands must use approved
+host device access, no temporary loader override, and must not terminate
+unrelated jobs.
 
 Stop boundary: Phase 6 remains `IN_PROGRESS`; it is not `PASSED`, and the task
 is `NOT_COMPLETE`. No process was intentionally left running for this task.
@@ -288,18 +287,14 @@ location alone—are the provenance contract.
 2. P1 closure is complete: the former 38-test focused baseline plus new P1
    tests passed as 40 tests. Re-run it only as part of matrix item 1 or after a
    relevant code change; do not tune the policy or force algorithm here.
-3. After any machine restart, revalidate the native matched NVIDIA driver,
-   CUDA/NVML userspace, `sonic_backup`, official asset hashes, and idle
-   trainer/simulator state. The final pause query could not communicate with
-   the driver, so do not assume the earlier observed `580.173.02` state still
-   holds. Use the native loader only after verification; never reuse the
-   removed temporary compatibility tree. Then finish matrix item 1, including
-   the exact checkpoint/Phase-5 gates and the Phase-2/3 real smokes.
-4. Before creating any formal trace, define and commit fixed active-mode
-   left/right endpoint, wrist-orientation, local-MPJPE, and global-MPJPE
-   acceptance bounds. Add their tests and validator wiring first so results
-   cannot influence the thresholds. Tracking accuracy remains the primary
-   criterion; this is the only planned code change before evidence collection.
+3. Matrix item 1 is complete on the resumed tree. After a machine restart,
+   still revalidate native driver/CUDA/NVML, `sonic_backup`, asset hashes, and
+   idle trainer/simulator state; host device access is required because the
+   default sandbox hides `/dev/nvidia*`.
+4. The pre-data active tracking contract is now fixed and tested. Do not change
+   the endpoint mapping or the 5/10 mm endpoint, 0.05/0.10 rad orientation,
+   max(3 mm, 10%) invariant-local, or max(5 mm, 10%) invariant-global limits
+   after seeing formal results.
 5. Run the prescribed 16-environment, one-audited-robot-PKL, five-iteration,
    `use_wandb=false` smoke and record FPS and GPU memory.
 6. From a new output path, run the exact matrix item-3 command for
@@ -344,10 +339,9 @@ Verified local inputs at the pause boundary:
   `/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sonic_release/last.pt`
 - overlay checkpoint:
   `/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_resume_tensordict_fix/last.pt`
-- native NVIDIA environment observed earlier in the continuation: kernel
-  module, CUDA driver, and NVML `580.173.02`; the final pause query failed, so
-  this must be revalidated. The historical `/tmp/nvidia_580_159_compat`
-  directory is absent and is not a current input
+- native NVIDIA environment: kernel module, CUDA driver, and NVML `580.173.02`;
+  host-device PyTorch sees RTX 4090. The historical
+  `/tmp/nvidia_580_159_compat` directory is absent and is not a current input
 
 Use a new `PHASE6_RUN_ROOT` under
 `compliance_control/runs/motion/`; never point it at an existing directory.
@@ -379,7 +373,8 @@ Required rows are:
 
 Then run the portable evaluator with six `--trial NAME MODE TRACE ACTIVE`
 groups in that order, `--baseline released_baseline`, both repeated
-`--endpoint-site` wrist names, and a new paired-report path. Finally run the
+`--endpoint-site` wrist names, the corresponding repeated `--endpoint-point`
+wrist names in the same order, and a new paired-report path. Finally run the
 SONIC validator with that paired report and six repeated
 `--collection-report NAME SUMMARY` groups. Defaults are the fixed formal
 criteria; do not relax them during evidence collection.

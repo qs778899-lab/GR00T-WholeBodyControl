@@ -998,3 +998,26 @@
   `30f2190d1b70321705e92dde2b5c004fc8bee6d4`. Main and CHIP worktrees were
   clean and untouched. Phase 6 remains `IN_PROGRESS`; task remains
   `NOT_COMPLETE`.
+
+## 2026-08-12 — Phase 6 resumed; matrix item 1 and tracking gates
+
+- Revalidated the clean motion branch at `5c0b20e`, official merge base, four
+  pinned asset hashes, SMPL directory, untouched main/CHIP worktrees, and
+  absent formal Phase-6 output paths.
+- Determined that failed sandboxed NVML probes were caused by device namespace
+  isolation: the host retains matched NVIDIA `580.173.02`, RTX 4090, and
+  PyTorch 2.7/CUDA 12.8 availability. No device node, driver module, or
+  unrelated process was changed.
+- Completed matrix item 1 with retained zero exits: combined suite `127 passed,
+  1 skipped`; deployment `33 passed`; step-5/step-6 checkpoint audits;
+  official residual/init and trainer config gates; Phase-5 artifact acceptance,
+  C++ ORT, production configure/build/help/CLI, and release-boundary gate; and
+  native Phase-2/3 real IsaacLab smokes.
+- Fixed active tracking limits before any formal trace. Caller-owned wrist site
+  to tracking-point mapping excludes only an intentionally yielded point per
+  active non-reset row. Selected endpoint RMSE/P95 regression is bounded at
+  5/10 mm, original-target orientation at 0.05/0.10 rad, and remaining-point
+  local/global MPJPE at max(3 mm, 10%)/max(5 mm, 10%). The portable schema is
+  now `compliance_evaluation_v2`, and the SONIC validator recomputes and pins
+  every mapping, value, and check. Focused validation passed `43 tests in
+  1.58s`.

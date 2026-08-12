@@ -251,6 +251,12 @@ Baseline: NVLabs upstream `main` at
 - Treat active-mode left/right endpoint, wrist orientation, and whole-body
   tracking accuracy as first-class outputs. Do not accept force/yield success
   alone when those tracking errors regress without explicit explanation.
+- The pre-data active tracking contract is fixed as follows: selected-target
+  wrist RMSE/P95 may regress from aligned overlay-off by at most 5/10 mm;
+  original-target wrist orientation RMSE/P95 by at most 0.05/0.10 rad;
+  remaining-point local/global MPJPE by at most max(3 mm, 10%)/max(5 mm,
+  10%). The portable caller supplies the endpoint-site to tracking-point map,
+  so only a point intentionally yielded on that row is excluded.
 - Add a 4096-environment performance characterization for the fixed-shape
   compliance candidate scheduler, including policy-step time and GPU memory
   against host-off/baseline.  This is a measured Phase-4/6 performance item,

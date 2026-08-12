@@ -229,9 +229,17 @@ class TrialSpec:
 
 @dataclass(frozen=True)
 class RegressionCriteria:
-    """Caller-selected acceptance limits for paired stiff/off validation."""
+    """Caller-selected acceptance limits for paired compliance validation.
+
+    ``endpoint_tracking_point_ids`` is ordered one-to-one with
+    ``endpoint_site_ids``.  The caller owns this mapping so the portable
+    evaluator can exclude only an intentionally yielded endpoint from
+    active-mode whole-body preservation metrics without knowing a robot or
+    tracker layout.
+    """
 
     endpoint_site_ids: tuple[str, ...]
+    endpoint_tracking_point_ids: tuple[str, ...]
     max_success_rate_drop: float = 0.01
     local_mpjpe_absolute_regression_m: float = 0.003
     local_mpjpe_relative_regression: float = 0.10
@@ -246,6 +254,14 @@ class RegressionCriteria:
     minimum_active_measured_yield_along_force_peak_m: float = 1.0e-6
     inactive_cross_coupling_rmse_m: float = 0.005
     inactive_cross_coupling_p95_m: float = 0.005
+    active_selected_endpoint_rmse_regression_m: float = 0.005
+    active_selected_endpoint_p95_regression_m: float = 0.010
+    active_orientation_rmse_regression_rad: float = 0.05
+    active_orientation_p95_regression_rad: float = 0.10
+    active_invariant_local_mpjpe_absolute_regression_m: float = 0.003
+    active_invariant_local_mpjpe_relative_regression: float = 0.10
+    active_invariant_global_mpjpe_absolute_regression_m: float = 0.005
+    active_invariant_global_mpjpe_relative_regression: float = 0.10
 
     def __post_init__(self) -> None:
         if isinstance(self.endpoint_site_ids, (str, bytes)):
@@ -258,6 +274,22 @@ class RegressionCriteria:
         if len(set(endpoint_sites)) != len(endpoint_sites):
             raise ValueError("endpoint_site_ids must not contain duplicates")
         object.__setattr__(self, "endpoint_site_ids", endpoint_sites)
+        if isinstance(self.endpoint_tracking_point_ids, (str, bytes)):
+            raise TypeError(
+                "endpoint_tracking_point_ids must be a sequence, not a scalar string"
+            )
+        endpoint_points = tuple(self.endpoint_tracking_point_ids)
+        if len(endpoint_points) != len(endpoint_sites):
+            raise ValueError(
+                "endpoint_tracking_point_ids must align one-to-one with endpoint_site_ids"
+            )
+        if any(not isinstance(value, str) or not value for value in endpoint_points):
+            raise ValueError(
+                "endpoint_tracking_point_ids must contain non-empty strings"
+            )
+        if len(set(endpoint_points)) != len(endpoint_points):
+            raise ValueError("endpoint_tracking_point_ids must not contain duplicates")
+        object.__setattr__(self, "endpoint_tracking_point_ids", endpoint_points)
         for field_name in (
             "max_success_rate_drop",
             "local_mpjpe_absolute_regression_m",
@@ -273,6 +305,14 @@ class RegressionCriteria:
             "minimum_active_measured_yield_along_force_peak_m",
             "inactive_cross_coupling_rmse_m",
             "inactive_cross_coupling_p95_m",
+            "active_selected_endpoint_rmse_regression_m",
+            "active_selected_endpoint_p95_regression_m",
+            "active_orientation_rmse_regression_rad",
+            "active_orientation_p95_regression_rad",
+            "active_invariant_local_mpjpe_absolute_regression_m",
+            "active_invariant_local_mpjpe_relative_regression",
+            "active_invariant_global_mpjpe_absolute_regression_m",
+            "active_invariant_global_mpjpe_relative_regression",
         ):
             value = getattr(self, field_name)
             if not isinstance(value, Real) or not np.isfinite(value) or value < 0.0:

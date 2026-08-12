@@ -1016,7 +1016,7 @@ def _valid_sonic_suite_evidence():
             site_index = site_ids.index(site_id)
             active[:, site_index] = True
             selected_sites[:, site_index, 0] = 0.05
-            measured_sites[1:, site_index, 0] = 0.001
+            measured_sites[1:, site_index, 0] = 0.049
             force[1:, site_index, 0] = 6.0
         orientations = np.zeros((row_count, len(site_ids), 4), dtype=np.float32)
         orientations[..., 3] = 1.0
@@ -1059,6 +1059,9 @@ def _valid_sonic_suite_evidence():
         )
     criteria_kwargs = dict(SONIC_PHASE6_PORTABLE_CRITERIA)
     criteria_kwargs["endpoint_site_ids"] = tuple(criteria_kwargs["endpoint_site_ids"])
+    criteria_kwargs["endpoint_tracking_point_ids"] = tuple(
+        criteria_kwargs["endpoint_tracking_point_ids"]
+    )
     paired = evaluate_trial_suite(
         traces,
         portable_specs,
@@ -1247,6 +1250,24 @@ def test_sonic_suite_validator_accepts_protocol_specific_gates_and_pins_evidence
         lax, collections, report_hashes, trace_hashes, traces
     )
     failed = {check["name"] for check in result["acceptance"]["checks"] if not check["passed"]}
+    assert "portable_phase6_criteria" in failed
+
+    lax_active_tracking = deepcopy(paired)
+    lax_active_tracking["acceptance"]["criteria"][
+        "active_selected_endpoint_rmse_regression_m"
+    ] = 1.0
+    result = _validate_fake_sonic_suite(
+        lax_active_tracking,
+        collections,
+        report_hashes,
+        trace_hashes,
+        traces,
+    )
+    failed = {
+        check["name"]
+        for check in result["acceptance"]["checks"]
+        if not check["passed"]
+    }
     assert "portable_phase6_criteria" in failed
 
     rebound = deepcopy(paired)

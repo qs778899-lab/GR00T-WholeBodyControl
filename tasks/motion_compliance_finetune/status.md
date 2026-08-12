@@ -19,7 +19,7 @@ current_phase: `6`
 
 completion: `NOT_COMPLETE`
 
-execution_state: `PAUSED_BY_USER_2026-08-12_AFTER_P1_CPU_CHECKPOINT`
+execution_state: `RUNNING_PHASE6_2026-08-12_RESUMED_AFTER_CPU_CHECKPOINT`
 
 paused_implementation_head: `30f2190d1b70321705e92dde2b5c004fc8bee6d4`
 
@@ -57,29 +57,26 @@ Completed in the current phase:
   25.63s`, and the deployment suite passed `33 passed, 96 warnings in 3.14s`.
   The official residual-contract smoke, trainer help/config gate, and official
   Phase-4 residual-initialization smoke also passed.
-- The step-5 and step-6 checkpoint audit JSON files were atomically regenerated
-  at `2026-08-12T17:17:40+08:00` after their validators reached the write step;
-  read-back shows steps 5/6, all twelve changed residual tensors, 55/17 frozen
-  tensors, and twelve optimizer slots.  The orchestration output containing
-  their process exit statuses was truncated, so these two commands must be
-  rerun rather than promoted as final matrix evidence.
-- Earlier accepted Phase-5 Python/C++ runtime, artifact-hash, production-hook,
-  CLI, and release-boundary evidence remains available, but the exact Phase-5
-  acceptance/build commands were not rerun after P1 in this pause window.
+- On resume, Phase-6 matrix item 1 passed on the current tree: `127 passed, 1
+  skipped`; deployment `33 passed`; exact step-5/step-6 audits; Phase-5
+  acceptance, C++ ORT, production configure/build/help/CLI, immutable release
+  boundary; official residual/init and trainer config gates; and native-driver
+  Phase-2/3 real IsaacLab smokes all returned zero.
+- Before formal collection, active tracking gates were fixed in portable code
+  and the SONIC recomputation contract. Each active wrist is checked against
+  its yielded position target (5/10 mm RMSE/P95 regression limits), retains the
+  original orientation target (0.05/0.10 rad), and excludes only its explicitly
+  mapped point from remaining-body local/global MPJPE (max(3 mm, 10%)/max(5
+  mm, 10%)). Focused evaluator/final-validator tests pass `43 tests in 1.58s`.
 
 Still required before completion:
 
-- Finish Phase-6 matrix item 1 on the final paused tree.  The CPU suites above
-  passed, but the exact Phase-2/3 real IsaacLab smokes, the two checkpoint-audit
-  commands with retained exit status, and the remaining exact Phase-5
-  acceptance/C++ build gates were not completed in this continuation.
 - Fresh post-restart 16-environment/5-iteration native matched-driver CUDA
-  smoke with FPS and GPU-memory recording.  Earlier on 2026-08-12 the host was
-  observed natively matched at NVIDIA `580.173.02`, but at the final pause
-  inspection `nvidia-smi` could no longer communicate with the driver.  Treat
-  GPU/driver availability as unverified and repair/revalidate it before any
-  CUDA evidence command.  The removed temporary `580.159` compatibility
-  directory must not be referenced.
+  smoke with FPS and GPU-memory recording. Host-side validation shows the
+  native `580.173.02` stack and RTX 4090 are available; default sandbox device
+  isolation, not a driver failure, caused the earlier `nvidia-smi` error.
+  GPU/IsaacLab evidence must run with host device access and no removed
+  temporary `580.159` compatibility override.
 - Real 4096-environment host-off/enabled scheduler-only measurement.
 - Strictly paired real simulator traces for baseline, overlay-off,
   enabled/no-contact, single-left, single-right, and simultaneous trials.
@@ -93,8 +90,8 @@ Still required before completion:
   4096-environment benchmark, or six-protocol simulator collection was
   started.
 
-next_action: On explicit resume, start from `phase6_handoff.md`; verify the
-branch/worktree and restore a matched, visible, idle GPU stack.  Then finish
-Phase-6 matrix item 1 from the exact commands, freeze active-mode tracking
-acceptance bounds before collecting data, and execute items 2–9 in order.  Do
-not mark Phase 6 `PASSED` or the task `COMPLETE` from this CPU-only checkpoint.
+next_action: Run Phase-6 matrix item 2 from its still-missing formal output
+path: the fixed 16-environment/five-iteration native-driver smoke with FPS and
+GPU-memory evidence. Then execute items 3–9 in order without changing the
+pre-data acceptance limits. Do not mark Phase 6 `PASSED` or the task
+`COMPLETE` before all formal evidence passes.

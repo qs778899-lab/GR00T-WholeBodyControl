@@ -307,6 +307,128 @@ def compare_aligned_traces(reference: EvaluationTrace, candidate: EvaluationTrac
     }
 
 
+def _evaluate_active_tracking_preservation(
+    reference: EvaluationTrace,
+    candidate: EvaluationTrace,
+    *,
+    expected_active_site_ids: Sequence[str],
+    endpoint_point_by_site: Mapping[str, str],
+) -> dict[str, Any]:
+    """Compare active compliant tracking against the aligned overlay-off trace.
+
+    Endpoint position is measured against the yielded target. Orientation stays
+    referenced to the original target because the controller implements no
+    rotational compliance. Whole-body preservation excludes only the tracking
+    point whose corresponding site is active on that row.
+    """
+
+    assert_strict_alignment(reference, candidate)
+    reference_original_error = _vector_norm(
+        reference.measured_site_positions_m - reference.original_site_positions_m
+    )
+    candidate_selected_error = _vector_norm(
+        candidate.measured_site_positions_m - candidate.selected_site_positions_m
+    )
+    reference_orientation_error, _ = _quaternion_angle_rad(
+        reference.original_site_orientations_xyzw,
+        reference.measured_site_orientations_xyzw,
+    )
+    candidate_orientation_error, _ = _quaternion_angle_rad(
+        candidate.original_site_orientations_xyzw,
+        candidate.measured_site_orientations_xyzw,
+    )
+
+    sites: dict[str, Any] = {}
+    interaction_rows = np.zeros(len(candidate.motion_ids), dtype=np.bool_)
+    invariant_point_mask = np.zeros(
+        (len(candidate.motion_ids), len(candidate.point_ids)),
+        dtype=np.bool_,
+    )
+    for site_id in expected_active_site_ids:
+        site_index = candidate.site_ids.index(site_id)
+        active = candidate.active_site_mask[:, site_index] & ~candidate.reset_mask
+        interaction_rows |= active
+        candidate_endpoint = _masked_summary(
+            candidate_selected_error[:, site_index],
+            active,
+        )
+        reference_endpoint = _masked_summary(
+            reference_original_error[:, site_index],
+            active,
+        )
+        candidate_orientation = _masked_summary(
+            candidate_orientation_error[:, site_index],
+            active,
+        )
+        reference_orientation = _masked_summary(
+            reference_orientation_error[:, site_index],
+            active,
+        )
+        sites[site_id] = {
+            "tracking_point_id": endpoint_point_by_site[site_id],
+            "active_selected_endpoint_error_m": candidate_endpoint,
+            "off_original_endpoint_error_m": reference_endpoint,
+            "selected_endpoint_rmse_regression_m": _optional_difference(
+                candidate_endpoint["rmse"],
+                reference_endpoint["rmse"],
+            ),
+            "selected_endpoint_p95_regression_m": _optional_difference(
+                candidate_endpoint["p95"],
+                reference_endpoint["p95"],
+            ),
+            "active_orientation_error_rad": candidate_orientation,
+            "off_orientation_error_rad": reference_orientation,
+            "orientation_rmse_regression_rad": _optional_difference(
+                candidate_orientation["rmse"],
+                reference_orientation["rmse"],
+            ),
+            "orientation_p95_regression_rad": _optional_difference(
+                candidate_orientation["p95"],
+                reference_orientation["p95"],
+            ),
+        }
+    invariant_point_mask[interaction_rows] = True
+    for site_id in expected_active_site_ids:
+        site_index = candidate.site_ids.index(site_id)
+        point_index = candidate.point_ids.index(endpoint_point_by_site[site_id])
+        active = candidate.active_site_mask[:, site_index] & ~candidate.reset_mask
+        invariant_point_mask[active, point_index] = False
+
+    reference_global_error = _vector_norm(
+        reference.measured_points_global_m - reference.reference_points_global_m
+    )
+    candidate_global_error = _vector_norm(
+        candidate.measured_points_global_m - candidate.reference_points_global_m
+    )
+    reference_local_error = _vector_norm(
+        reference.measured_points_local_m - reference.reference_points_local_m
+    )
+    candidate_local_error = _vector_norm(
+        candidate.measured_points_local_m - candidate.reference_points_local_m
+    )
+    off_global = _masked_summary(reference_global_error, invariant_point_mask)
+    active_global = _masked_summary(candidate_global_error, invariant_point_mask)
+    off_local = _masked_summary(reference_local_error, invariant_point_mask)
+    active_local = _masked_summary(candidate_local_error, invariant_point_mask)
+    return {
+        "interaction_row_count": int(np.count_nonzero(interaction_rows)),
+        "invariant_point_sample_count": int(np.count_nonzero(invariant_point_mask)),
+        "sites": sites,
+        "invariant_global_mpjpe_m": active_global,
+        "off_invariant_global_mpjpe_m": off_global,
+        "invariant_global_mpjpe_regression_m": _optional_difference(
+            active_global["mean"],
+            off_global["mean"],
+        ),
+        "invariant_local_mpjpe_m": active_local,
+        "off_invariant_local_mpjpe_m": off_local,
+        "invariant_local_mpjpe_regression_m": _optional_difference(
+            active_local["mean"],
+            off_local["mean"],
+        ),
+    }
+
+
 def _optional_difference(candidate: float | None, reference: float | None) -> float | None:
     if candidate is None or reference is None:
         return None
@@ -373,6 +495,16 @@ def evaluate_trial_suite(
     unknown_endpoints = set(criteria.endpoint_site_ids) - set(baseline.site_ids)
     if unknown_endpoints:
         raise ValueError("criteria endpoint_site_ids must exist in the trace layout")
+    unknown_endpoint_points = set(criteria.endpoint_tracking_point_ids) - set(
+        baseline.point_ids
+    )
+    if unknown_endpoint_points:
+        raise ValueError(
+            "criteria endpoint_tracking_point_ids must exist in the trace layout"
+        )
+    endpoint_point_by_site = dict(
+        zip(criteria.endpoint_site_ids, criteria.endpoint_tracking_point_ids, strict=True)
+    )
 
     modes = {mode: [spec for spec in specs if spec.mode is mode] for mode in TrialMode}
     if len(modes[TrialMode.BASELINE]) != 1:
@@ -415,6 +547,17 @@ def evaluate_trial_suite(
         if spec.name not in {baseline_name, off_name}:
             off_comparisons[spec.name] = compare_aligned_traces(traces[off_name], trace)
 
+    active_tracking_to_off = {
+        spec.name: _evaluate_active_tracking_preservation(
+            traces[off_name],
+            traces[spec.name],
+            expected_active_site_ids=spec.expected_active_site_ids,
+            endpoint_point_by_site=endpoint_point_by_site,
+        )
+        for spec in specs
+        if spec.mode in {TrialMode.SINGLE_SITE, TrialMode.MULTI_SITE}
+    }
+
     no_contact_names = [spec.name for spec in specs if spec.mode is TrialMode.NO_CONTACT]
     acceptance = _assess_suite(
         baseline_name=baseline_name,
@@ -425,9 +568,10 @@ def evaluate_trial_suite(
         comparisons=comparisons,
         criteria=criteria,
         traces=traces,
+        active_tracking_to_off=active_tracking_to_off,
     )
     return {
-        "schema_version": "compliance_evaluation_v1",
+        "schema_version": "compliance_evaluation_v2",
         "baseline_trial": baseline_name,
         "off_trial": off_name,
         "alignment_sha256": alignment_digest(baseline),
@@ -443,6 +587,7 @@ def evaluate_trial_suite(
         "trials": trial_reports,
         "paired_to_baseline": comparisons,
         "paired_to_off": off_comparisons,
+        "active_tracking_to_off": active_tracking_to_off,
         "acceptance": acceptance,
     }
 
@@ -457,6 +602,7 @@ def _assess_suite(
     comparisons: Mapping[str, Any],
     criteria: RegressionCriteria,
     traces: Mapping[str, EvaluationTrace],
+    active_tracking_to_off: Mapping[str, Any],
 ) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
 
@@ -571,9 +717,11 @@ def _assess_suite(
                 )
         if spec.mode in {TrialMode.SINGLE_SITE, TrialMode.MULTI_SITE}:
             paired_to_off = compare_aligned_traces(traces[off_name], traces[spec.name])
+            active_tracking = active_tracking_to_off[spec.name]
             for site_id in spec.expected_active_site_ids:
                 site_report = report["sites"][site_id]
                 paired_site = paired_to_off["sites"][site_id]
+                tracking_site = active_tracking["sites"][site_id]
                 checks.append(
                     _lower_bound_check(
                         f"active_force_peak_n:{spec.name}:{site_id}",
@@ -602,6 +750,64 @@ def _assess_suite(
                         criteria.minimum_active_measured_yield_along_force_peak_m,
                     )
                 )
+                checks.append(
+                    _upper_bound_check(
+                        f"active_selected_endpoint_rmse_regression_m:{spec.name}:{site_id}",
+                        tracking_site["selected_endpoint_rmse_regression_m"],
+                        criteria.active_selected_endpoint_rmse_regression_m,
+                    )
+                )
+                checks.append(
+                    _upper_bound_check(
+                        f"active_selected_endpoint_p95_regression_m:{spec.name}:{site_id}",
+                        tracking_site["selected_endpoint_p95_regression_m"],
+                        criteria.active_selected_endpoint_p95_regression_m,
+                    )
+                )
+                checks.append(
+                    _upper_bound_check(
+                        f"active_orientation_rmse_regression_rad:{spec.name}:{site_id}",
+                        tracking_site["orientation_rmse_regression_rad"],
+                        criteria.active_orientation_rmse_regression_rad,
+                    )
+                )
+                checks.append(
+                    _upper_bound_check(
+                        f"active_orientation_p95_regression_rad:{spec.name}:{site_id}",
+                        tracking_site["orientation_p95_regression_rad"],
+                        criteria.active_orientation_p95_regression_rad,
+                    )
+                )
+            off_invariant_local = active_tracking["off_invariant_local_mpjpe_m"]["mean"]
+            active_local_limit = None
+            if off_invariant_local is not None:
+                active_local_limit = max(
+                    criteria.active_invariant_local_mpjpe_absolute_regression_m,
+                    off_invariant_local
+                    * criteria.active_invariant_local_mpjpe_relative_regression,
+                )
+            checks.append(
+                _upper_bound_check(
+                    f"active_invariant_local_mpjpe_regression_m:{spec.name}",
+                    active_tracking["invariant_local_mpjpe_regression_m"],
+                    active_local_limit,
+                )
+            )
+            off_invariant_global = active_tracking["off_invariant_global_mpjpe_m"]["mean"]
+            active_global_limit = None
+            if off_invariant_global is not None:
+                active_global_limit = max(
+                    criteria.active_invariant_global_mpjpe_absolute_regression_m,
+                    off_invariant_global
+                    * criteria.active_invariant_global_mpjpe_relative_regression,
+                )
+            checks.append(
+                _upper_bound_check(
+                    f"active_invariant_global_mpjpe_regression_m:{spec.name}",
+                    active_tracking["invariant_global_mpjpe_regression_m"],
+                    active_global_limit,
+                )
+            )
             inactive_site_ids = set(traces[spec.name].site_ids) - set(
                 spec.expected_active_site_ids
             )
@@ -627,6 +833,7 @@ def _assess_suite(
         "passed": all(check["passed"] for check in checks),
         "criteria": {
             "endpoint_site_ids": list(criteria.endpoint_site_ids),
+            "endpoint_tracking_point_ids": list(criteria.endpoint_tracking_point_ids),
             "max_success_rate_drop": criteria.max_success_rate_drop,
             "local_mpjpe_absolute_regression_m": criteria.local_mpjpe_absolute_regression_m,
             "local_mpjpe_relative_regression": criteria.local_mpjpe_relative_regression,
@@ -645,6 +852,30 @@ def _assess_suite(
             ),
             "inactive_cross_coupling_rmse_m": criteria.inactive_cross_coupling_rmse_m,
             "inactive_cross_coupling_p95_m": criteria.inactive_cross_coupling_p95_m,
+            "active_selected_endpoint_rmse_regression_m": (
+                criteria.active_selected_endpoint_rmse_regression_m
+            ),
+            "active_selected_endpoint_p95_regression_m": (
+                criteria.active_selected_endpoint_p95_regression_m
+            ),
+            "active_orientation_rmse_regression_rad": (
+                criteria.active_orientation_rmse_regression_rad
+            ),
+            "active_orientation_p95_regression_rad": (
+                criteria.active_orientation_p95_regression_rad
+            ),
+            "active_invariant_local_mpjpe_absolute_regression_m": (
+                criteria.active_invariant_local_mpjpe_absolute_regression_m
+            ),
+            "active_invariant_local_mpjpe_relative_regression": (
+                criteria.active_invariant_local_mpjpe_relative_regression
+            ),
+            "active_invariant_global_mpjpe_absolute_regression_m": (
+                criteria.active_invariant_global_mpjpe_absolute_regression_m
+            ),
+            "active_invariant_global_mpjpe_relative_regression": (
+                criteria.active_invariant_global_mpjpe_relative_regression
+            ),
         },
         "checks": checks,
     }

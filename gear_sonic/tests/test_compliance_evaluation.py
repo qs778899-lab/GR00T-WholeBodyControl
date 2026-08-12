@@ -31,7 +31,9 @@ from gear_sonic.compliance_control.evaluation import (
 
 EVALUATION_DIR = Path(__file__).parents[1] / "compliance_control" / "evaluation"
 SITE_IDS = ("endpoint_a", "endpoint_b", "balance_probe")
-POINT_IDS = tuple(f"tracking_point_{index}" for index in range(7))
+POINT_IDS = ("endpoint_a", "endpoint_b") + tuple(
+    f"tracking_point_{index}" for index in range(5)
+)
 
 
 def _make_trace(
@@ -137,7 +139,7 @@ def _suite_inputs(*, nonfinite_trial: str | None = None):
         ),
         "simultaneous": _make_trace(
             "simultaneous",
-            endpoint_error_m=0.013,
+            endpoint_error_m=0.012,
             enabled=True,
             active_sites=("endpoint_a", "endpoint_b"),
         ),
@@ -154,7 +156,10 @@ def _suite_inputs(*, nonfinite_trial: str | None = None):
             ("endpoint_a", "endpoint_b"),
         ),
     )
-    criteria = RegressionCriteria(endpoint_site_ids=("endpoint_a", "endpoint_b"))
+    criteria = RegressionCriteria(
+        endpoint_site_ids=("endpoint_a", "endpoint_b"),
+        endpoint_tracking_point_ids=("endpoint_a", "endpoint_b"),
+    )
     return traces, specs, criteria
 
 
@@ -288,7 +293,7 @@ def test_suite_reports_all_protocols_cross_coupling_and_acceptance():
         criteria=criteria,
     )
 
-    assert report["schema_version"] == "compliance_evaluation_v1"
+    assert report["schema_version"] == "compliance_evaluation_v2"
     assert report["acceptance"]["passed"] is True
     assert set(report["paired_to_baseline"]) == set(traces) - {"released_baseline"}
     simultaneous = report["trials"]["simultaneous"]
@@ -303,6 +308,13 @@ def test_suite_reports_all_protocols_cross_coupling_and_acceptance():
     assert off_pair["sites"]["endpoint_b"]["inactive_cross_coupling_shift_m"][
         "rmse"
     ] == pytest.approx(0.001)
+    active_tracking = report["active_tracking_to_off"]["single_a"]
+    assert active_tracking["interaction_row_count"] == 2
+    assert active_tracking["invariant_point_sample_count"] == 12
+    assert active_tracking["sites"]["endpoint_a"]["tracking_point_id"] == "endpoint_a"
+    assert active_tracking["sites"]["endpoint_a"][
+        "selected_endpoint_rmse_regression_m"
+    ] == pytest.approx(np.hypot(0.012, 0.01) - 0.011)
     check_names = {check["name"] for check in report["acceptance"]["checks"]}
     assert "off_success_rate_drop" in check_names
     assert "off_local_mpjpe_regression_m" in check_names
@@ -310,6 +322,13 @@ def test_suite_reports_all_protocols_cross_coupling_and_acceptance():
     assert "no_contact_endpoint_rmse_delta_m:enabled_no_contact:endpoint_b" in check_names
     assert "post_reset_force_peak_n:simultaneous" in check_names
     assert "inactive_force_peak_n:overlay_off:endpoint_a" in check_names
+    assert (
+        "active_selected_endpoint_rmse_regression_m:single_a:endpoint_a"
+        in check_names
+    )
+    assert "active_orientation_rmse_regression_rad:single_a:endpoint_a" in check_names
+    assert "active_invariant_local_mpjpe_regression_m:simultaneous" in check_names
+    assert "active_invariant_global_mpjpe_regression_m:simultaneous" in check_names
 
 
 def test_inactive_force_or_yield_fails_off_mode_acceptance():
@@ -433,6 +452,132 @@ def test_inactive_hand_measured_cross_coupling_fails_rmse_and_p95():
     }
     assert "inactive_cross_coupling_rmse_m:single_a:endpoint_b" in failed
     assert "inactive_cross_coupling_p95_m:single_a:endpoint_b" in failed
+
+
+def test_active_selected_endpoint_and_orientation_regressions_fail_closed():
+    traces, specs, criteria = _suite_inputs()
+    single = traces["single_a"]
+    measured = single.measured_site_positions_m.copy()
+    active = single.active_site_mask[:, SITE_IDS.index("endpoint_a")]
+    measured[active, SITE_IDS.index("endpoint_a"), 2] += 0.03
+    traces["single_a"] = replace(single, measured_site_positions_m=measured)
+    report = evaluate_trial_suite(
+        traces,
+        specs,
+        baseline_name="released_baseline",
+        criteria=criteria,
+    )
+    failed = {
+        check["name"]
+        for check in report["acceptance"]["checks"]
+        if not check["passed"]
+    }
+    assert "active_selected_endpoint_rmse_regression_m:single_a:endpoint_a" in failed
+    assert "active_selected_endpoint_p95_regression_m:single_a:endpoint_a" in failed
+
+    traces, specs, criteria = _suite_inputs()
+    single = traces["single_a"]
+    measured_orientation = single.measured_site_orientations_xyzw.copy()
+    active = single.active_site_mask[:, SITE_IDS.index("endpoint_a")]
+    angle = 0.35
+    measured_orientation[active, SITE_IDS.index("endpoint_a"), :] = (
+        np.sin(angle / 2.0),
+        0.0,
+        0.0,
+        np.cos(angle / 2.0),
+    )
+    traces["single_a"] = replace(
+        single,
+        measured_site_orientations_xyzw=measured_orientation,
+    )
+    report = evaluate_trial_suite(
+        traces,
+        specs,
+        baseline_name="released_baseline",
+        criteria=criteria,
+    )
+    failed = {
+        check["name"]
+        for check in report["acceptance"]["checks"]
+        if not check["passed"]
+    }
+    assert "active_orientation_rmse_regression_rad:single_a:endpoint_a" in failed
+    assert "active_orientation_p95_regression_rad:single_a:endpoint_a" in failed
+
+
+def test_active_invariant_whole_body_tracking_excludes_only_yielded_points():
+    traces, specs, criteria = _suite_inputs()
+    single = traces["single_a"]
+    active_rows = np.any(single.active_site_mask, axis=1)
+    measured_global = single.measured_points_global_m.copy()
+    measured_local = single.measured_points_local_m.copy()
+    measured_global[active_rows, 2:, 0] += 0.05
+    measured_local[active_rows, 2:, 0] += 0.05
+    traces["single_a"] = replace(
+        single,
+        measured_points_global_m=measured_global,
+        measured_points_local_m=measured_local,
+    )
+    report = evaluate_trial_suite(
+        traces,
+        specs,
+        baseline_name="released_baseline",
+        criteria=criteria,
+    )
+    failed = {
+        check["name"]
+        for check in report["acceptance"]["checks"]
+        if not check["passed"]
+    }
+    assert "active_invariant_local_mpjpe_regression_m:single_a" in failed
+    assert "active_invariant_global_mpjpe_regression_m:single_a" in failed
+
+    traces, specs, criteria = _suite_inputs()
+    single = traces["single_a"]
+    active_rows = single.active_site_mask[:, SITE_IDS.index("endpoint_a")]
+    measured_global = single.measured_points_global_m.copy()
+    measured_local = single.measured_points_local_m.copy()
+    point_index = POINT_IDS.index("endpoint_a")
+    measured_global[active_rows, point_index, 0] += 1.0
+    measured_local[active_rows, point_index, 0] += 1.0
+    traces["single_a"] = replace(
+        single,
+        measured_points_global_m=measured_global,
+        measured_points_local_m=measured_local,
+    )
+    report = evaluate_trial_suite(
+        traces,
+        specs,
+        baseline_name="released_baseline",
+        criteria=criteria,
+    )
+    failed = {
+        check["name"]
+        for check in report["acceptance"]["checks"]
+        if not check["passed"]
+    }
+    assert "active_invariant_local_mpjpe_regression_m:single_a" not in failed
+    assert "active_invariant_global_mpjpe_regression_m:single_a" not in failed
+
+
+def test_active_tracking_point_mapping_is_explicit_and_validated():
+    with pytest.raises(ValueError, match="one-to-one"):
+        RegressionCriteria(
+            endpoint_site_ids=("endpoint_a", "endpoint_b"),
+            endpoint_tracking_point_ids=("endpoint_a",),
+        )
+    traces, specs, _ = _suite_inputs()
+    criteria = RegressionCriteria(
+        endpoint_site_ids=("endpoint_a", "endpoint_b"),
+        endpoint_tracking_point_ids=("endpoint_a", "missing_point"),
+    )
+    with pytest.raises(ValueError, match="must exist"):
+        evaluate_trial_suite(
+            traces,
+            specs,
+            baseline_name="released_baseline",
+            criteria=criteria,
+        )
 
 
 def test_each_formal_trial_requires_no_fall_and_full_success():
