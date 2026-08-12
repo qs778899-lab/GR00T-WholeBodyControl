@@ -125,3 +125,5 @@
   and no-write dry-runs, protected source/ref checks, diff checks, absent formal
   root, and cache/partial hygiene passed. Phase 3 advanced only after all gates
   passed; no IsaacLab application or GPU workload was started.
+- Committed the complete Phase-3 implementation and passing checkpoint as
+  `88163c11da98953c034b47cc3331bffa262652ba`.
