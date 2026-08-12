@@ -19,7 +19,11 @@ current_phase: `6`
 
 completion: `NOT_COMPLETE`
 
-execution_state: `PAUSED_BY_USER_2026-07-28`
+execution_state: `PAUSED_BY_USER_2026-08-12`
+
+paused_implementation_head: `7340d2b0b0571bd225512196c06e60aa527b745a`
+
+remote_head_before_documentation_checkpoint: `origin/experiment/motion-compliance@7340d2b0b0571bd225512196c06e60aa527b745a`
 
 ## Phase 6 current result
 
@@ -54,8 +58,10 @@ Still required before completion:
 
 - Rerun all Phase 1–5 tests and the Phase-2/3 real IsaacLab smoke commands on
   the final paused commit; the current focused result is not matrix item 1.
-- Fresh post-restart 16-environment/5-iteration compatibility-CUDA smoke with
-  FPS and GPU-memory recording.
+- Fresh post-restart 16-environment/5-iteration native matched-driver CUDA
+  smoke with FPS and GPU-memory recording.  At the 2026-08-12 pause the host
+  stack is NVIDIA `580.173.02`; the earlier temporary `580.159` compatibility
+  directory no longer exists and must not be referenced.
 - Real 4096-environment host-off/enabled scheduler-only measurement.
 - Strictly paired real simulator traces for baseline, overlay-off,
   enabled/no-contact, single-left, single-right, and simultaneous trials.
@@ -67,8 +73,13 @@ Still required before completion:
   threshold/body/command/mode parameters, and exercise the configured Phase-6
   reset event after a nonzero-wrench interaction rather than relying only on
   the explicit post-timeout cleanup plus the earlier Phase-2 reset smoke.
+- No formal Phase-6 output was created during the 2026-08-12 resume attempt:
+  `phase6_residual_gpu_smoke_post_restart`, `phase6_scheduler_4096.json`, and
+  `phase6_real_paired` are all absent.  No test, simulator, training, or GPU
+  evidence run was started, and both P1 items remain unimplemented in the
+  committed pause head above.
 
-next_action: Resume from `phase6_handoff.md` section "Paused checkpoint
-(2026-07-28)".  First close its two P1 evidence items and rerun matrix item 1;
+next_action: Resume from `phase6_handoff.md` section "Current pause checkpoint
+(2026-08-12)".  First close its two P1 evidence items and rerun matrix item 1;
 then execute Phase-6 items 2–9 in order.  Do not mark Phase 6 `PASSED` or the
 task `COMPLETE` from the current CPU-only evidence.

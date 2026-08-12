@@ -3,14 +3,59 @@
 ## Resume here
 
 Task state is **Phase 6 / IN_PROGRESS**. Phases 1 through 5 are accepted.
-Execution was paused by the user on 2026-07-28. Phase 6 has the portable CPU
+Execution was paused again by the user on 2026-08-12. Phase 6 has the portable CPU
 evaluation contract plus a thin SONIC collector/final validator, but it does
 not yet have the required fresh GPU/simulator performance evidence. Read
 `status.md`, this checkpoint, and then run only Phase 6 of `test_matrix.md`;
 do not infer completion from Phase-4 training smoke, C++ deployment tests, or
 synthetic CPU traces.
 
-## Paused checkpoint (2026-07-28)
+## Current pause checkpoint (2026-08-12)
+
+Implementation checkpoint before this documentation-only commit:
+
+- local branch: `experiment/motion-compliance`;
+- local and remote implementation head:
+  `7340d2b0b0571bd225512196c06e60aa527b745a`;
+- the worktree was clean before this documentation-only checkpoint;
+- the two P1 items below are not implemented or accepted in that committed
+  head. A briefly started helper task was interrupted before it wrote code.
+
+Cross-branch orientation: `experiment/chip-compliance` is complete at
+`3dbfb6f211511bb04fedcd326f3265cdafcfa68c` with all six phases passed, while
+retaining the explicit limitation that it is an engineering handoff rather
+than converged multi-motion performance proof. The central
+`compliance_control/STATUS_HANDOFF.md` on protected `main@6d6d8ae` still
+contains older 2026-07-27 branch states and must not be treated as current.
+It was deliberately not edited during this isolated motion-branch pause.
+
+No test, simulator, training, 4096-environment benchmark, or six-protocol
+collection was launched during the 2026-08-12 resume attempt. In particular,
+these reserved formal outputs do not exist and remain safe fresh targets:
+
+- `compliance_control/runs/motion/phase6_residual_gpu_smoke_post_restart`;
+- `compliance_control/runs/motion/phase6_scheduler_4096.json`;
+- `compliance_control/runs/motion/phase6_real_paired`.
+
+The machine environment changed after the earlier checkpoint. The temporary
+`/tmp/nvidia_580_159_compat` tree is gone; the host NVIDIA kernel module,
+`libcuda.so.1`, and `libnvidia-ml.so.1` were observed at matched version
+`580.173.02`. Resume with the native loader (no stale `LD_PRELOAD`,
+`LD_LIBRARY_PATH`, or Vulkan override), then revalidate the versions, CUDA
+availability in `sonic_backup`, and an idle GPU before accepting any new
+performance evidence. If the host version changes again, update the Phase-6
+environment contract before running rather than silently reusing this value.
+At the pause inspection the RTX 4090 was not idle: unrelated GRAIL replay
+processes were using GPU memory. They were outside this task and were not
+terminated; a later continuation must wait for an idle window instead of
+interfering with them.
+
+Stop boundary: Phase 6 remains `IN_PROGRESS`; it is not `PASSED`, and the task
+is `NOT_COMPLETE`. The next code action is only the two P1 hardening items,
+followed by their focused CPU suite and then matrix item 1. Do not jump directly
+to the GPU commands.
+
+## Prior paused checkpoint (2026-07-28)
 
 Stop boundary: no GPU training, 4096-environment benchmark, or six-protocol
 IsaacLab collection was launched after the user requested the pause. Phase 6
@@ -218,13 +263,15 @@ location alone—are the provenance contract.
 
 1. Confirm `status.md` still says Phase 6 `IN_PROGRESS`; inspect `git status`
    and do not mix a new algorithm change into the evidence run.
-2. Close only the two paused-checkpoint P1 evidence items, rerun the 38-test
-   focused suite, and record the new result. Do not tune the policy or force
-   algorithm in this hardening step.
-3. After any machine restart, revalidate the exact NVIDIA 580.159 compatibility
-   userspace, `sonic_backup`, official asset hashes, and idle trainer/simulator
-   state. Run the full Phase 1–5 regression plus all Phase-6 CPU tests and the
-   Phase-2/3 real smoke commands required by matrix item 1.
+2. Close only the two paused-checkpoint P1 evidence items, rerun the existing
+   38-test focused baseline plus the new P1 negative tests, and record the new
+   result. Do not tune the policy or force algorithm in this hardening step.
+3. After any machine restart, revalidate the native matched NVIDIA driver,
+   CUDA/NVML userspace, `sonic_backup`, official asset hashes, and idle
+   trainer/simulator state.  At the current pause this is `580.173.02` with no
+   temporary loader override. Run the full Phase 1–5 regression plus all
+   Phase-6 CPU tests and the Phase-2/3 real smoke commands required by matrix
+   item 1 under this superseding Phase-6 environment contract.
 4. Run the prescribed 16-environment, one-audited-robot-PKL, five-iteration,
    `use_wandb=false` smoke and record FPS and GPU memory.
 5. From a new output path, run the exact matrix item-3 command for
@@ -269,14 +316,14 @@ Verified local inputs at the pause boundary:
   `/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/official_assets/sonic_release/last.pt`
 - overlay checkpoint:
   `/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase4_residual_gpu_resume_tensordict_fix/last.pt`
-- NVIDIA compatibility directory:
-  `/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu`
+- native NVIDIA environment observed at pause: kernel module, CUDA driver, and
+  NVML `580.173.02`; the historical `/tmp/nvidia_580_159_compat` directory is
+  absent and is not a current input
 
 Use a new `PHASE6_RUN_ROOT` under
 `compliance_control/runs/motion/`; never point it at an existing directory.
-Each collector call uses the NVIDIA compatibility `LD_LIBRARY_PATH`,
-`LD_PRELOAD`, and `VK_ICD_FILENAMES` values written verbatim in Phase-6 matrix
-items 2 and 3, plus:
+Each collector call uses the native matched driver with no temporary
+`LD_LIBRARY_PATH`, `LD_PRELOAD`, or `VK_ICD_FILENAMES` override, plus:
 
 ```text
 /home/lab/miniconda3/envs/sonic_backup/bin/python -B \

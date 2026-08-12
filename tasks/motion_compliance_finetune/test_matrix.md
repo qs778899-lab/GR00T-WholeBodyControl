@@ -295,17 +295,32 @@ does not leave repository caches.
 
 ## Phase 6 — Integration and regression validation
 
+Environment contract for the current Phase-6 continuation: the historical
+Phase-2/3/4 commands above preserve the NVIDIA 580.159 compatibility paths that
+were actually used for those accepted phase results.  They are provenance, not
+the current launch contract.  At the 2026-08-12 pause that temporary directory
+is absent and the host kernel module/CUDA/NVML userspace is natively matched at
+580.173.02.  Phase-6 reruns therefore use the native loader without temporary
+`LD_LIBRARY_PATH`, `LD_PRELOAD`, or `VK_ICD_FILENAMES` overrides.  Before any
+GPU result, revalidate the exact current versions, CUDA availability in
+`sonic_backup`, and that unrelated workloads are no longer consuming the GPU.
+If the host version changes, update this Phase-6 contract before execution.
+
 1. Run the complete test suite from Phases 1–5.
 2. Low-resource IsaacLab smoke/performance run in `sonic_backup`: one audited
    robot PKL, `sample_data/smpl_filtered`, `num_envs=16`, 5 iterations, and
-   `use_wandb=false`; record FPS/GPU memory.  Use the same temporary NVIDIA
-   580.159 compatibility-library environment as the passing Phase-2/3 real
-   tests and revalidate it after a machine restart.
+   `use_wandb=false`; record FPS/GPU memory.  Use the native matched-driver
+   environment above and the fresh output root
+   `compliance_control/runs/motion/phase6_residual_gpu_smoke_post_restart`:
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B gear_sonic/train_agent_trl.py +exp=manager/universal_token/all_modes/sonic_release_motion_compliance_finetune experiment_dir=/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase6_residual_gpu_smoke_post_restart headless=true`.
+   Before launch, Hydra composition must still resolve `num_envs=16`, five
+   learning iterations, the audited robot/SMPL inputs, and `use_wandb=false`;
+   refuse the run rather than silently overriding a changed config.
 3. Characterize fixed-shape compliance-candidate overhead at 4096 environments:
    report policy-step time and GPU memory for host-off/baseline and enabled
    scheduling without changing the synchronization-safe algorithm first.  From
    a missing output path, run:
-   `env LD_LIBRARY_PATH=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu LD_PRELOAD=/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.580.159.03:/tmp/nvidia_580_159_compat/extracted/usr/lib/x86_64-linux-gnu/libcuda.so.580.159.03 VK_ICD_FILENAMES=/tmp/nvidia_580_159_compat/extracted/usr/share/vulkan/icd.d/nvidia_icd.json PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase6_scheduler_benchmark.py --num-envs 4096 --num-sites 2 --output /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase6_scheduler_4096.json`.
+   `env PYTHONDONTWRITEBYTECODE=1 /home/lab/miniconda3/envs/sonic_backup/bin/python -B tasks/motion_compliance_finetune/artifacts/phase6_scheduler_benchmark.py --num-envs 4096 --num-sites 2 --output /home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/motion/phase6_scheduler_4096.json`.
    The report must label itself scheduler-only, record CUDA-event time per
    policy update plus allocated/reserved peak increments, and refuse to replace
    an existing evidence file.

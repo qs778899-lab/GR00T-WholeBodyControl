@@ -921,3 +921,28 @@
   acceptance; active-mode wrist endpoint/orientation/whole-body tracking review;
   and final output/cache/diff hygiene. See `phase6_handoff.md` for exact paths
   and continuation order.
+
+## 2026-08-12 — Phase 6 paused again before execution
+
+- Restored the isolated CHIP and motion worktrees after temporary worktree
+  directories had been cleaned, then re-read the current status, handoff, and
+  Phase-6 matrix before acting. The motion branch and its remote were both at
+  `7340d2b0b0571bd225512196c06e60aa527b745a`, with a clean worktree.
+- The user requested another pause before implementation or execution. The
+  in-progress P1 helper was interrupted before it wrote any code. No CPU test,
+  IsaacLab launch, training, scheduler benchmark, or six-protocol collection
+  was run, and no formal Phase-6 result was promoted.
+- Confirmed that both P1 gaps in the committed collector remain open. The
+  reserved outputs `phase6_residual_gpu_smoke_post_restart`,
+  `phase6_scheduler_4096.json`, and `phase6_real_paired` are absent.
+- The earlier `/tmp/nvidia_580_159_compat` environment no longer exists. The
+  host has a natively matched NVIDIA kernel/CUDA/NVML stack at `580.173.02`.
+  Phase-6 documentation now supersedes the historical temporary-loader command
+  while preserving old Phase-2/3/4 commands as provenance.
+- The RTX 4090 was occupied by unrelated GRAIL replay processes during the
+  inspection. They were not task-owned and were not terminated; future formal
+  timing or memory evidence must wait for a separately verified idle window.
+- Phase 6 remains `IN_PROGRESS` and the task remains `NOT_COMPLETE`. Resume at
+  the two P1 evidence-hardening items; then run the focused suite, matrix item
+  1, and items 2–9 in order. Do not infer tracking/compliance performance from
+  the present CPU-only collector contract.
