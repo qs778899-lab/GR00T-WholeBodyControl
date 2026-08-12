@@ -8,7 +8,7 @@
 - Immutable accepted source:
   `experiment/chip-compliance@3dbfb6f211511bb04fedcd326f3265cdafcfa68c`.
 - Last implementation commit:
-  `cf859530565fa01865fb4abd2a1c61101ccf289e`.
+  `10f64e50e2d3a764eef8cc21e13f4afc36bfad6d`.
 - Phase 1, Phase 2, and Phase 3: `PASSED`.
 - Phase 4: `IN_PROGRESS` at `WAITING_FOR_IDLE_GPU_PHASE4_SMOKES`.
 - Phase 5 and Phase 6: `PENDING`; overall task: `NOT_COMPLETE`.
@@ -83,7 +83,7 @@ The following current-environment regression work has passed:
 - resolved existing suite: `136` tests, `4` expected CUDA skips;
 - Torch-bearing portable suite: `139` tests, `42` expected dependency/CUDA
   skips;
-- all new review tests: `70 passed`; tracker-neutral Python-3.10 tests:
+- all new review tests: `71 passed`; tracker-neutral Python-3.10 tests:
   `33 passed`; and
 - Ruff E/F/I, built-in compilation, diff, cache, temp, and absent-output gates.
 
@@ -101,12 +101,19 @@ atomic video writer and the independent audit subprocess. It passed all six
 focused diagnostic tests. This proves the evidence machinery, not the robot
 behavior.
 
+A seventh CPU integration test drives the production collector orchestration
+through fake Isaac-bound seams while retaining the real protocol, accumulator,
+atomic trace/video/summary publication, ffprobe, hash binding, checkpoint-load
+semantics, reset count, and environment-close path. It proves the collector's
+assembly and lifecycle before spending an idle GPU window; it still does not
+substitute for the pending real IsaacLab diagnostic.
+
 ## Current blocker and safety boundary
 
 The latest host-visible read-only query reported:
 
 - NVIDIA GeForce RTX 4090, driver `580.173.02`;
-- 14036 MiB of 24564 MiB used and 26% GPU utilization;
+- 14026–14039 MiB of 24564 MiB used and 26–27% GPU utilization;
 - unrelated compute PIDs `2472251`, `2660761`, and `2661453`, each using about
   4.1 GiB, plus the terminal GPU process `195750`.
 

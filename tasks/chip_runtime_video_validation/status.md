@@ -18,7 +18,7 @@ execution_state: `WAITING_FOR_IDLE_GPU_PHASE4_SMOKES`
 
 last_completed_phase: `3`
 
-last_implementation_commit: `cf859530565fa01865fb4abd2a1c61101ccf289e`
+last_implementation_commit: `10f64e50e2d3a764eef8cc21e13f4afc36bfad6d`
 
 | Phase | Name | Status |
 |---|---|---|
@@ -59,6 +59,16 @@ last_implementation_commit: `cf859530565fa01865fb4abd2a1c61101ccf289e`
 - The latest host-visible idle check still showed the native RTX 4090 at 26%
   utilization with 14036 MiB used and the same three unrelated Python compute
   jobs. Phase 4 therefore remains safely at the GPU wait boundary.
+- The production `collect_sonic_review_role` orchestration now has a CPU
+  integration gate in addition to its component tests. It exercises input hash
+  rebinding, environment/actor assembly seams, strict trained-checkpoint load,
+  deterministic protocol/action/trace ordering, two reset checks, real atomic
+  H.264 output, ffprobe, summary publication, environment close, and exact
+  `nominal - C * force` trace bytes. The focused diagnostic suite is now seven
+  tests and the combined review suite is 71 tests.
+- A subsequent one-minute host monitor remained at 26–27% utilization with
+  14026–14039 MiB used. The three unrelated Python jobs were confirmed active,
+  not stale contexts: each accumulated roughly one CPU second per wall second.
 
 ## Phase 1 result
 

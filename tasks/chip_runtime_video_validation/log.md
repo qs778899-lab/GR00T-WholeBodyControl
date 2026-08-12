@@ -192,3 +192,30 @@
 - The tested diagnostic-publication enhancement is committed as `cf85953`.
   Phase 4 remains `IN_PROGRESS`; only its native GPU suite and real rendered
   diagnostic are pending before the required final Phase-1–3 rerun.
+
+## 2026-08-13 — Collector orchestration CPU preflight passed
+
+- While the GPU remained occupied, added a fail-closed integration test around
+  the production `collect_sonic_review_role` orchestration rather than only its
+  individual protocol/trace/video components. A fake one-environment boundary
+  drives the real collector through motion/checkpoint SHA rebinding, strict
+  trained resume semantics, observation/action finiteness, deterministic force
+  scheduling, trace/sample/video alignment, two command/composer resets, real
+  atomic H.264 encoding and ffprobe, bounded NPZ/JSON publication, and the
+  environment close path.
+- The emitted diagnostic trace retained exact sample indices and the signed
+  `selected = original - compliance * force_on_robot` bytes. No formal or real
+  diagnostic root was created; all generated files lived in pytest temporary
+  storage.
+- Focused Phase-4 diagnostic tests passed `7/7`; all new review tests passed
+  `71`; the resolved accepted unittest suite remained `136` with `4` expected
+  CUDA skips; and the Torch-bearing portable suite remained `139` with `42`
+  expected dependency/CUDA skips. Ruff E/F/I, built-in compile, diff checks,
+  cache/temp hygiene, and the accepted-tree descendant structural audit passed.
+- The implementation was committed and pushed as `10f64e5` on only the
+  runtime-video experiment branch.
+- The RTX 4090 stayed at 26–27% and 14026–14039 MiB during a one-minute
+  three-sample host monitor. PIDs `2472251`, `2660761`, and `2661453` remained
+  present and their CPU time continued increasing at approximately one second
+  per wall second, proving they are active external jobs rather than stale CUDA
+  contexts. No GPU test was launched and no process was modified.
