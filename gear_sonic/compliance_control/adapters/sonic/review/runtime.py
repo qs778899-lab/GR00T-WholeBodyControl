@@ -77,6 +77,28 @@ def validate_finite_observations(observations: object) -> None:
             raise ValueError(f"observation group contains non-finite values: {name}")
 
 
+def validate_owned_composer_rows_cleared(command: object) -> None:
+    """Prove the real permanent-wrench composer cleared only owned body rows."""
+
+    import torch
+
+    composer = getattr(getattr(command, "robot", None), "permanent_wrench_composer", None)
+    force = getattr(composer, "composed_force_as_torch", None)
+    torque = getattr(composer, "composed_torque_as_torch", None)
+    indices = tuple(getattr(getattr(command, "sites", None), "articulation_indices", ()))
+    if not isinstance(force, torch.Tensor) or not isinstance(torque, torch.Tensor):
+        raise TypeError("command does not expose real composer force/torque tensors")
+    if not indices:
+        raise ValueError("command does not expose owned articulation indices")
+    body_ids = torch.tensor(indices, dtype=torch.long, device=force.device)
+    owned_force = force.index_select(1, body_ids)
+    owned_torque = torque.index_select(1, body_ids)
+    if torch.count_nonzero(owned_force).item() != 0:
+        raise AssertionError("reset left nonzero owned composer force rows")
+    if torch.count_nonzero(owned_torque).item() != 0:
+        raise AssertionError("reset left nonzero owned composer torque rows")
+
+
 def _prepare_observation_contract(env, raw_env, config, device: str):
     """Instantiate the accepted actor after deriving manager observation shapes."""
 
@@ -216,6 +238,7 @@ def collect_sonic_review_role(
         run_frame_count = diagnostic_frame_limit or expected_frame_count
         driver = SonicReviewProtocolDriver(command, role)
         driver.reset()
+        validate_owned_composer_rows_cleared(command)
         accumulator = (
             ReviewTraceAccumulator(
                 role=role,
@@ -336,6 +359,7 @@ def collect_sonic_review_role(
         if role.residual_enabled and role.external_force_enabled and peak_residual <= 0.0:
             raise AssertionError("compliant review role never activated its trained residual")
         driver.reset()
+        validate_owned_composer_rows_cleared(command)
         if accumulator is not None:
             trace = accumulator.finish(expected_frame_count=expected_frame_count)
             write_trace_npz_atomic(trace, paths.trace)
@@ -388,7 +412,10 @@ def collect_sonic_review_role(
             "fall_count": 0,
             "finite_observations": True,
             "finite_actions": True,
-            "reset_count": 1,
+            "trace_reset_count": 1,
+            "command_reset_count": 2,
+            "composer_owned_reset_force_peak_n": 0.0,
+            "composer_owned_reset_torque_peak_nm": 0.0,
             "trace": str(paths.trace.resolve()),
             "trace_sha256": _sha256(paths.trace),
             "panel_video": str(paths.panel_video.resolve()),

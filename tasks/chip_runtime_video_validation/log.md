@@ -152,9 +152,10 @@
   skipped and therefore not accepted for final Phase-4 passage.
 - Added an explicitly non-formal diagnostic trace schema, fixed-cutoff mode in
   the same thin collector, and an independent 32-frame smoke auditor. Formal
-  collection remains natural-timeout-only. Four CPU tests prove no-write dry
+  collection remains natural-timeout-only. Five CPU tests prove no-write dry
   run, exact cutoff/index/lifecycle semantics, finite observation rejection,
-  bounded atomic NPZ, and early-terminal rejection.
+  bounded atomic NPZ, early-terminal rejection, and exact clearing of only the
+  two command-owned real composer force/torque rows after reset.
 - Host NVML sees the required RTX 4090 / driver `580.173.02`, but three unrelated
   Python compute processes continue using about 12.4 GiB. They were not touched.
   The current blocker is only the mandatory idle-GPU native/profiler/shape and

@@ -28,6 +28,7 @@ from gear_sonic.compliance_control.adapters.sonic.review.diagnostic import (
 from gear_sonic.compliance_control.adapters.sonic.review.roles import REVIEW_SITE_NAMES
 from gear_sonic.compliance_control.adapters.sonic.review.runtime import (
     validate_finite_observations,
+    validate_owned_composer_rows_cleared,
 )
 from gear_sonic.compliance_control.adapters.sonic.review.trace import (
     SonicReviewSnapshot,
@@ -147,6 +148,38 @@ def test_diagnostic_observation_finiteness_is_fail_closed():
         )
     with pytest.raises(TypeError, match="string names"):
         validate_finite_observations({"actor_obs": np.zeros((1, 4))})
+
+
+def test_real_composer_reset_evidence_checks_only_owned_rows():
+    force = torch.zeros(1, 5, 3)
+    torque = torch.zeros_like(force)
+    force[0, 4, 0] = 7.0
+    torque[0, 4, 1] = 3.0
+    command = type(
+        "Command",
+        (),
+        {
+            "robot": type(
+                "Robot",
+                (),
+                {
+                    "permanent_wrench_composer": type(
+                        "Composer",
+                        (),
+                        {
+                            "composed_force_as_torch": force,
+                            "composed_torque_as_torch": torque,
+                        },
+                    )()
+                },
+            )(),
+            "sites": type("Sites", (), {"articulation_indices": (1, 3)})(),
+        },
+    )()
+    validate_owned_composer_rows_cleared(command)
+    force[0, 1, 0] = 1.0
+    with pytest.raises(AssertionError, match="force rows"):
+        validate_owned_composer_rows_cleared(command)
 
 
 def test_collector_diagnostic_dry_run_is_labelled_and_no_write(tmp_path: Path):
