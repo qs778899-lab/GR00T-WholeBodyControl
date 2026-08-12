@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from types import ModuleType, SimpleNamespace
 import unittest
 
 import numpy as np
@@ -24,14 +25,24 @@ from gear_sonic.compliance_control.adapters.sonic.review.camera import (
     AtomicReviewVideoWriter,
     ReviewFrameMetadata,
 )
+from gear_sonic.compliance_control.adapters.sonic.review.config import (
+    ReviewArtifactPaths,
+)
 from gear_sonic.compliance_control.adapters.sonic.review.diagnostic import (
     DIAGNOSTIC_TRACE_FIELDS,
     DIAGNOSTIC_TRACE_SCHEMA,
     ReviewDiagnosticAccumulator,
     write_diagnostic_trace_atomic,
 )
-from gear_sonic.compliance_control.adapters.sonic.review.roles import REVIEW_SITE_NAMES
+from gear_sonic.compliance_control.adapters.sonic.review.protocol import (
+    DeterministicForceProtocol,
+)
+from gear_sonic.compliance_control.adapters.sonic.review.roles import (
+    REVIEW_SITE_NAMES,
+    get_review_role,
+)
 from gear_sonic.compliance_control.adapters.sonic.review.runtime import (
+    collect_sonic_review_role,
     validate_finite_observations,
     validate_owned_composer_rows_cleared,
 )
@@ -381,3 +392,299 @@ def test_independent_diagnostic_auditor_accepts_trace_bound_video(tmp_path: Path
         text=True,
     )
     assert "CHIP_PHASE4_RENDERED_SMOKE_AUDIT_PASS" in completed.stdout
+
+
+def test_collector_runtime_orchestration_publishes_complete_diagnostic(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from omegaconf import OmegaConf
+
+    import gear_sonic.compliance_control.adapters.sonic.review.runtime as runtime
+
+    expected_dims = {
+        "actor_obs": 930,
+        "critic_obs": 1645,
+        "tokenizer": 1761,
+        "compliance_target": 60,
+        "compliance_command": 9,
+        "compliance_force": 6,
+    }
+    observations = {
+        name: torch.zeros(1, width, dtype=torch.float32)
+        for name, width in expected_dims.items()
+    }
+    protocol = DeterministicForceProtocol()
+    runtime_state = SimpleNamespace(frame=0, raw_env=None, driver=None)
+
+    class FakeSonicComplianceCommand:
+        def __init__(self):
+            self.operational_enabled = True
+            self.sites = SimpleNamespace(
+                articulation_indices=(1, 2),
+                spec=SimpleNamespace(
+                    site_names=REVIEW_SITE_NAMES,
+                    common_frame=SimpleNamespace(
+                        kind=SimpleNamespace(value="heading_local")
+                    ),
+                ),
+            )
+            composer = SimpleNamespace(
+                composed_force_as_torch=torch.zeros(1, 3, 3),
+                composed_torque_as_torch=torch.zeros(1, 3, 3),
+            )
+            self.robot = SimpleNamespace(permanent_wrench_composer=composer)
+            self.current = None
+
+    class FakeMotionLibrary:
+        @staticmethod
+        def get_time_step_total(motion_ids):
+            assert motion_ids.tolist() == [0]
+            return torch.tensor([300], dtype=torch.int64)
+
+    class FakeRawEnvironment:
+        def __init__(self, *, cfg, render_mode):
+            assert cfg.sim.device == "cpu"
+            assert render_mode is None
+            self.motion = SimpleNamespace(
+                cfg=SimpleNamespace(body_names=SONIC_RELEASE_TRACKING_BODY_NAMES),
+                motion_start_time_steps=torch.zeros(1, dtype=torch.int64),
+                motion_ids=torch.zeros(1, dtype=torch.int64),
+                motion_lib=FakeMotionLibrary(),
+            )
+            self.command = FakeSonicComplianceCommand()
+            self.closed = False
+            runtime_state.raw_env = self
+
+        def close(self):
+            self.closed = True
+
+    class FakeWrappedEnvironment:
+        def __init__(self, raw_env, config):
+            assert config["headless"] is True
+            self.raw_env = raw_env
+            self.motion_command = raw_env.motion
+            self.force_command = raw_env.command
+            self.device = torch.device("cpu")
+            self.evaluating = False
+
+        def set_is_evaluating(self, value):
+            self.evaluating = value
+
+        def reset(self, *, flatten_dict_obs):
+            assert flatten_dict_obs is True
+            return {name: value.clone() for name, value in observations.items()}
+
+        def step(self, action):
+            assert tuple(action["actions"].shape) == (1, 29)
+            return (
+                {name: value.clone() for name, value in observations.items()},
+                torch.zeros(1),
+                torch.zeros(1, dtype=torch.long),
+                {"time_outs": torch.zeros(1, dtype=torch.bool)},
+            )
+
+    class FakeActor:
+        def __init__(self):
+            self.last_migration_report = None
+            self.actor_module = SimpleNamespace(
+                _last_compliance_residual=torch.full((1, 1, 64), 0.125)
+            )
+            self.loaded = False
+
+        def load_state_dict(self, state, *, strict):
+            assert state == {"fixture": "trained"}
+            assert strict is True
+            self.loaded = True
+
+        def eval(self):
+            return self
+
+        def init_rollout(self):
+            assert self.loaded
+
+        def act_inference(self, policy_observations, **kwargs):
+            assert kwargs["skip_episode_attnmask"] is True
+            assert kwargs["cur_dones"].tolist() == [0]
+            assert set(policy_observations) == set(expected_dims)
+            return torch.zeros(1, 29, dtype=torch.float32)
+
+    actor = FakeActor()
+
+    class FakeDriver:
+        def __init__(self, command, role):
+            self.command = command
+            self.role = role
+            self.reset_count = 0
+            runtime_state.driver = self
+
+        def reset(self):
+            self.reset_count += 1
+            composer = self.command.robot.permanent_wrench_composer
+            composer.composed_force_as_torch[:, (1, 2)].zero_()
+            composer.composed_torque_as_torch[:, (1, 2)].zero_()
+            self.command.current = None
+
+        def apply(self, frame_index, frame_count):
+            sample = protocol.sample(self.role, frame_index, frame_count)
+            force = torch.tensor(
+                sample.force_on_robot_world_n,
+                dtype=torch.float32,
+            ).unsqueeze(0)
+            compliance = torch.tensor(
+                sample.compliance_m_per_n,
+                dtype=torch.float32,
+            ).unsqueeze(0)
+            active = torch.tensor(sample.active_site_mask).unsqueeze(0)
+            enabled = torch.tensor([sample.compliance_enabled])
+            self.command.current = SimpleNamespace(
+                frame=frame_index,
+                force=force,
+                compliance=compliance,
+                active=active,
+            )
+            composer = self.command.robot.permanent_wrench_composer
+            composer.composed_force_as_torch[:, (1, 2)] = force
+            runtime_state.frame = frame_index
+            return SimpleNamespace(
+                force_on_robot_world_n=force,
+                compliance_m_per_n=compliance,
+                active_site_mask=active,
+                command_enabled=enabled,
+            )
+
+    def fake_snapshot(motion, command):
+        assert motion is runtime_state.raw_env.motion
+        current = command.current
+        assert current is not None
+        original = np.zeros((2, 3), dtype=np.float32)
+        force = current.force[0].numpy().copy()
+        compliance = current.compliance[0].numpy().copy()
+        selected = original - compliance * force
+        points = np.zeros((14, 3), dtype=np.float32)
+        orientations = np.zeros((2, 4), dtype=np.float32)
+        orientations[:, 3] = 1.0
+        return SonicReviewSnapshot(
+            reference_frame=current.frame,
+            original_site_positions_m=original,
+            selected_site_positions_m=selected,
+            measured_site_positions_m=selected.copy(),
+            original_site_orientations_xyzw=orientations,
+            measured_site_orientations_xyzw=orientations.copy(),
+            reference_points_global_m=points,
+            measured_points_global_m=points.copy(),
+            reference_points_local_m=points.copy(),
+            measured_points_local_m=points.copy(),
+            force_on_robot_n=force,
+            force_on_robot_world_n=force.copy(),
+            force_on_robot_common_n=force.copy(),
+            compliance_m_per_n=compliance,
+            active_site_mask=current.active[0].numpy().copy(),
+        )
+
+    env_cfg = SimpleNamespace(
+        seed=None,
+        sim=SimpleNamespace(device=None),
+        config={},
+    )
+    actor_payload = {"policy_state_dict": {"fixture": "trained"}}
+    fake_isaac_envs = ModuleType("isaaclab.envs")
+    fake_isaac_envs.ManagerBasedRLEnv = FakeRawEnvironment
+    fake_command_module = ModuleType(
+        "gear_sonic.compliance_control.adapters.sonic.isaaclab.command"
+    )
+    fake_command_module.SonicComplianceCommand = FakeSonicComplianceCommand
+    fake_wrapper_module = ModuleType("gear_sonic.envs.wrapper.manager_env_wrapper")
+    fake_wrapper_module.ManagerEnvWrapper = FakeWrappedEnvironment
+    fake_common_module = ModuleType("gear_sonic.trl.utils.common")
+    fake_common_module.custom_instantiate = lambda config: env_cfg
+    monkeypatch.setitem(sys.modules, "isaaclab.envs", fake_isaac_envs)
+    monkeypatch.setitem(
+        sys.modules,
+        "gear_sonic.compliance_control.adapters.sonic.isaaclab.command",
+        fake_command_module,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "gear_sonic.envs.wrapper.manager_env_wrapper",
+        fake_wrapper_module,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "gear_sonic.trl.utils.common",
+        fake_common_module,
+    )
+    monkeypatch.setattr(runtime, "SonicReviewProtocolDriver", FakeDriver)
+    monkeypatch.setattr(runtime, "capture_sonic_review_snapshot", fake_snapshot)
+    monkeypatch.setattr(
+        runtime,
+        "capture_review_frame",
+        lambda raw_env, motion: np.full(
+            (720, 960, 3),
+            runtime_state.frame,
+            dtype=np.uint8,
+        ),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "refresh_compliance_observations",
+        lambda raw_env, values: dict(values),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_prepare_observation_contract",
+        lambda env, raw_env, config, device: (actor, expected_dims, torch),
+    )
+    monkeypatch.setattr(torch, "load", lambda *args, **kwargs: actor_payload)
+
+    motion_file = tmp_path / "motion.pkl"
+    checkpoint = tmp_path / "trained.pt"
+    motion_file.write_bytes(b"fixed-motion-fixture")
+    checkpoint.write_bytes(b"fixed-trained-checkpoint-fixture")
+    paths = ReviewArtifactPaths(
+        tmp_path / "result",
+        "original",
+        "simultaneous_compliant",
+    )
+    config = OmegaConf.create(
+        {"manager_env": {"config": {"experiment_dir": "unassigned"}}}
+    )
+    summary = collect_sonic_review_role(
+        config=config,
+        role=get_review_role("simultaneous_compliant"),
+        motion_id="original",
+        motion_file=motion_file,
+        motion_sha256=_sha256(motion_file),
+        seed=0,
+        checkpoint=checkpoint,
+        checkpoint_sha256=_sha256(checkpoint),
+        branch_commit="b" * 40,
+        paths=paths,
+        device="cpu",
+        diagnostic_frame_limit=8,
+    )
+
+    assert actor.loaded is True
+    assert runtime_state.raw_env.closed is True
+    assert runtime_state.driver.reset_count == 2
+    assert summary["frame_count"] == 8
+    assert summary["trace_kind"] == "diagnostic_fixed_cutoff_nonformal"
+    assert summary["checkpoint_load_semantics"] == "native_strict_resume"
+    assert summary["peak_world_force_n"] == 5.0
+    assert summary["peak_latent_residual"] == 0.125
+    assert summary["panel_video_probe"]["frame_count"] == 8
+    assert paths.trace.is_file()
+    assert paths.summary.is_file()
+    assert paths.panel_video.is_file()
+    with np.load(paths.trace, allow_pickle=False) as archive:
+        assert archive["frame_indices"].tolist() == list(range(8))
+        np.testing.assert_allclose(
+            archive["selected_site_positions_m"],
+            archive["original_site_positions_m"]
+            - archive["compliance_m_per_n"]
+            * archive["force_on_robot_world_n"],
+            rtol=0.0,
+            atol=0.0,
+        )
+    assert not list(paths.directory.rglob("*.tmp"))
+    assert not list(paths.directory.rglob("*.part"))
