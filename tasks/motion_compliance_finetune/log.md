@@ -946,3 +946,27 @@
   the two P1 evidence-hardening items; then run the focused suite, matrix item
   1, and items 2–9 in order. Do not infer tracking/compliance performance from
   the present CPU-only collector contract.
+
+## 2026-08-12 — Phase 6 P1 evidence hardening completed
+
+- Resumed only current Phase 6 and left CHIP/main untouched. Revalidated the
+  motion branch against official baseline `4141c34280ab`, all four pinned
+  model/data hashes, the absent formal Phase-6 output paths, and the native
+  NVIDIA `580.173.02` stack. The RTX 4090 remained occupied by unrelated
+  processes, so no GPU evidence command was launched.
+- Added a type-strict manager provenance contract that binds both composed
+  Hydra strings and actual IsaacLab term configs: four resolved termination
+  functions, their timeout flags and effective defaults, the sole reset event,
+  reset mode/minimum interval, command names, thresholds, asset/body names,
+  and all declared parameters. A real Hydra composition matched the pinned
+  contract.
+- Interaction collection schema v3 now waits for observed nonzero owned force,
+  invokes the actual configured reset event via `event_manager.apply`, and
+  verifies command and permanent-composer force/torque rows are exactly zero.
+  Baseline/off/no-contact must not fabricate this evidence. The final SONIC
+  validator binds the manager contract and rejects zero-before, stale-after,
+  wrong-mode/function, or inactive-protocol reset evidence.
+- Focused Phase-6 evaluator/collector validation passed `40 tests in 1.40s`;
+  all four CLI help gates, AST parsing, and `git diff --check` passed. This
+  closes the two P1 code/test gaps but does not satisfy matrix item 1 or any
+  pending performance/tracking gate.

@@ -200,8 +200,11 @@ def main() -> int:
             SONIC_TRAINED_CHECKPOINT_STEP,
             assert_g1_only_encoder_selection,
             clear_and_assert_owned_composer_wrench,
+            exercise_sonic_evaluation_reset_event,
             validate_sonic_evaluation_checkpoint_role,
+            validate_sonic_evaluation_config_provenance,
             validate_sonic_evaluation_event_names,
+            validate_sonic_evaluation_manager_provenance,
         )
         from gear_sonic.compliance_control.evaluation import (
             alignment_digest,
@@ -278,6 +281,10 @@ def main() -> int:
         )
         validate_sonic_evaluation_event_names(configured_event_names)
         OmegaConf.resolve(config.manager_env)
+        configured_manager_provenance = validate_sonic_evaluation_config_provenance(
+            OmegaConf.to_container(config.manager_env.terminations, resolve=True),
+            OmegaConf.to_container(config.manager_env.events, resolve=True),
+        )
         if config.manager_env.config.terrain_type != "plane" or not config.force_flat_terrain:
             raise AssertionError("Phase-6 paired evaluation requires flat plane terrain")
 
@@ -299,6 +306,11 @@ def main() -> int:
             for term_name in mode_names
         )
         validate_sonic_evaluation_event_names(active_event_names)
+        manager_provenance = validate_sonic_evaluation_manager_provenance(
+            raw_env.termination_manager,
+            raw_env.event_manager,
+            configured_provenance=configured_manager_provenance,
+        )
         if env_cfg.config["terrain_type"] != "plane":
             raise AssertionError("resolved simulator terrain must be a plane")
         policy_step_dt_s = float(raw_env.step_dt)
@@ -431,6 +443,7 @@ def main() -> int:
             raise RuntimeError("Phase-6 SONIC trace recorder is not active")
         dones = torch.zeros(raw_env.num_envs, dtype=torch.long, device=raw_env.device)
         action_evidence = PolicyActionByteEvidence()
+        reset_event_evidence = None
         executed_steps = 0
         for _ in range(args.max_steps):
             assert_g1_only_encoder_selection(tracking)
@@ -443,6 +456,18 @@ def main() -> int:
             action_evidence.update(actions)
             observations, _, dones, _ = env.step({"actions": actions})
             executed_steps += 1
+            if protocol.active_site_ids and reset_event_evidence is None:
+                has_nonzero_command_force = bool(
+                    torch.count_nonzero(
+                        compliance_command._application_force_body  # noqa: SLF001
+                    ).item()
+                )
+                if has_nonzero_command_force:
+                    reset_event_evidence = exercise_sonic_evaluation_reset_event(
+                        raw_env.event_manager,
+                        compliance_command,
+                        global_env_step_count=int(raw_env.common_step_counter),
+                    )
             if bool(dones.any().item()):
                 raise RuntimeError("termination observer failed to suppress automatic reset")
             if bool(termination_observer.sticky_time_out.all().item()):
@@ -457,6 +482,12 @@ def main() -> int:
             raise RuntimeError(
                 "natural timeout did not cover exactly the audited full motion clip"
             )
+        if protocol.active_site_ids and reset_event_evidence is None:
+            raise RuntimeError(
+                "interaction trial never produced nonzero force for reset-event evidence"
+            )
+        if not protocol.active_site_ids and reset_event_evidence is not None:
+            raise RuntimeError("inactive protocol unexpectedly exercised the reset event")
         post_timeout_clear = clear_and_assert_owned_composer_wrench(compliance_command)
         natural_timeout_env_ids = tuple(
             int(value)
@@ -491,7 +522,7 @@ def main() -> int:
         trace_sha256 = _sha256_file(args.trace)
         metrics = evaluate_trace(trace)
         summary = {
-            "schema_version": "sonic_phase6_collection_v2",
+            "schema_version": "sonic_phase6_collection_v3",
             "evidence_kind": "real_sonic_simulator_trace",
             "trial_name": args.trial_name,
             "protocol": args.protocol,
@@ -539,6 +570,8 @@ def main() -> int:
             "alignment_sha256": alignment_digest(trace),
             "policy_action_evidence": action_evidence.report(),
             "termination_evidence": termination_observer.report(),
+            "manager_provenance": manager_provenance,
+            "reset_event_evidence": reset_event_evidence,
             "actual_composer_evidence": composer_evidence,
             "post_timeout_clear_evidence": post_timeout_clear,
             "deterministic_environment": {

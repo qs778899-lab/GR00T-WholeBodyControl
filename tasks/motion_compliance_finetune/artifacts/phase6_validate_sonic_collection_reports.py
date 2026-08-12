@@ -22,6 +22,8 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 from gear_sonic.compliance_control.adapters.sonic.evaluation import (  # noqa: E402
     SONIC_ACTION_RESIDUAL_PREFIX,
+    SONIC_EVALUATION_MANAGER_PROVENANCE,
+    SONIC_EVALUATION_RESET_EVENT,
     SONIC_EVALUATION_TERMINATION_NAMES,
     SONIC_RELEASE_CHECKPOINT_SHA256,
     SONIC_RELEASE_CHECKPOINT_STEP,
@@ -145,6 +147,54 @@ def _upper_check(name: str, value: object, limit: float) -> dict[str, object]:
         "value": value,
         "limit": limit,
         "passed": bool(valid and float(value) <= limit),
+    }
+
+
+def _strict_positive_check(name: str, value: object) -> dict[str, object]:
+    valid = (
+        isinstance(value, Real)
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+        and float(value) > 0.0
+    )
+    return {
+        "name": name,
+        "value": value,
+        "limit": "finite and > 0",
+        "passed": bool(valid),
+    }
+
+
+def _finite_nonnegative_check(name: str, value: object) -> dict[str, object]:
+    valid = (
+        isinstance(value, Real)
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+        and float(value) >= 0.0
+    )
+    return {
+        "name": name,
+        "value": value,
+        "limit": "finite and >= 0",
+        "passed": bool(valid),
+    }
+
+
+def _bounded_positive_int_check(
+    name: str,
+    value: object,
+    upper: object,
+) -> dict[str, object]:
+    valid = (
+        type(value) is int
+        and type(upper) is int
+        and 0 < value <= upper
+    )
+    return {
+        "name": name,
+        "value": value,
+        "limit": f"integer in [1, {upper}]" if type(upper) is int else None,
+        "passed": valid,
     }
 
 
@@ -405,7 +455,7 @@ def validate_sonic_collection_suite(
         expected_active = spec.get("expected_active_site_ids")
         checks.extend(
             (
-                _eq_check(f"collection_schema:{name}", report.get("schema_version"), "sonic_phase6_collection_v2"),
+                _eq_check(f"collection_schema:{name}", report.get("schema_version"), "sonic_phase6_collection_v3"),
                 _eq_check(f"evidence_kind:{name}", report.get("evidence_kind"), "real_sonic_simulator_trace"),
                 _eq_check(f"trial_name:{name}", report.get("trial_name"), name),
                 _eq_check(f"protocol:{name}", report.get("protocol"), mode),
@@ -516,6 +566,13 @@ def validate_sonic_collection_suite(
                 _eq_check(f"logical_condition_gate:{name}", environment.get("logical_condition_enabled"), expected_logical),
             )
         )
+        checks.append(
+            _eq_check(
+                f"manager_provenance:{name}",
+                report.get("manager_provenance"),
+                SONIC_EVALUATION_MANAGER_PROVENANCE,
+            )
+        )
 
         termination = _mapping(report.get("termination_evidence"), f"termination {name}")
         term_counts = termination.get("term_observation_counts")
@@ -587,6 +644,134 @@ def validate_sonic_collection_suite(
                 _eq_check(f"post_timeout_owned_torque_zero:{name}", cleanup.get("owned_torque_peak_nm"), 0.0),
             )
         )
+        reset_event = report.get("reset_event_evidence")
+        if mode in {"single_site", "multi_site"}:
+            reset_event = _mapping(reset_event, f"reset event {name}")
+            pre_reset = _mapping(reset_event.get("pre_reset"), f"pre-reset wrench {name}")
+            post_reset = _mapping(reset_event.get("post_reset"), f"post-reset wrench {name}")
+            checks.extend(
+                (
+                    _eq_check(
+                        f"reset_event_fields:{name}",
+                        sorted(reset_event),
+                        sorted(
+                            (
+                                "schema_version",
+                                "event_name",
+                                "resolved_func_target",
+                                "mode",
+                                "global_env_step_count",
+                                "pre_reset",
+                                "post_reset",
+                            )
+                        ),
+                    ),
+                    _eq_check(
+                        f"pre_reset_fields:{name}",
+                        sorted(pre_reset),
+                        sorted(
+                            (
+                                "command_force_peak_n",
+                                "command_torque_peak_nm",
+                                "composer_force_peak_n",
+                                "composer_torque_peak_nm",
+                                "force_max_abs_difference_n",
+                                "torque_max_abs_difference_nm",
+                            )
+                        ),
+                    ),
+                    _eq_check(
+                        f"post_reset_fields:{name}",
+                        sorted(post_reset),
+                        sorted(
+                            (
+                                "command_force_peak_n",
+                                "command_torque_peak_nm",
+                                "composer_force_peak_n",
+                                "composer_torque_peak_nm",
+                                "force_max_abs_difference_n",
+                                "torque_max_abs_difference_nm",
+                            )
+                        ),
+                    ),
+                    _eq_check(
+                        f"reset_event_schema:{name}",
+                        reset_event.get("schema_version"),
+                        "sonic_phase6_reset_event_evidence_v1",
+                    ),
+                    _eq_check(
+                        f"reset_event_name:{name}",
+                        reset_event.get("event_name"),
+                        SONIC_EVALUATION_RESET_EVENT,
+                    ),
+                    _eq_check(
+                        f"reset_event_func:{name}",
+                        reset_event.get("resolved_func_target"),
+                        SONIC_EVALUATION_MANAGER_PROVENANCE["runtime"]["events"][0][
+                            "resolved_func_target"
+                        ],
+                    ),
+                    _eq_check(
+                        f"reset_event_mode:{name}",
+                        reset_event.get("mode"),
+                        "reset",
+                    ),
+                    _bounded_positive_int_check(
+                        f"reset_event_step:{name}",
+                        reset_event.get("global_env_step_count"),
+                        executed_steps,
+                    ),
+                    _strict_positive_check(
+                        f"pre_reset_command_force_nonzero:{name}",
+                        pre_reset.get("command_force_peak_n"),
+                    ),
+                    _strict_positive_check(
+                        f"pre_reset_composer_force_nonzero:{name}",
+                        pre_reset.get("composer_force_peak_n"),
+                    ),
+                    _finite_nonnegative_check(
+                        f"pre_reset_command_torque_finite:{name}",
+                        pre_reset.get("command_torque_peak_nm"),
+                    ),
+                    _finite_nonnegative_check(
+                        f"pre_reset_composer_torque_finite:{name}",
+                        pre_reset.get("composer_torque_peak_nm"),
+                    ),
+                    _upper_check(
+                        f"pre_reset_force_buffer_match:{name}",
+                        pre_reset.get("force_max_abs_difference_n"),
+                        owned_wrench_buffer_difference_tolerance,
+                    ),
+                    _upper_check(
+                        f"pre_reset_torque_buffer_match:{name}",
+                        pre_reset.get("torque_max_abs_difference_nm"),
+                        owned_wrench_buffer_difference_tolerance,
+                    ),
+                )
+            )
+            for field_name in (
+                "command_force_peak_n",
+                "command_torque_peak_nm",
+                "composer_force_peak_n",
+                "composer_torque_peak_nm",
+                "force_max_abs_difference_n",
+                "torque_max_abs_difference_nm",
+            ):
+                checks.append(
+                    _eq_check(
+                        f"post_reset_exact_zero_{field_name}:{name}",
+                        post_reset.get(field_name),
+                        0.0,
+                    )
+                )
+        else:
+            checks.append(
+                _eq_check(
+                    f"inactive_protocol_no_reset_event:{name}",
+                    reset_event,
+                    None,
+                )
+            )
         metrics = _mapping(report.get("metrics"), f"metrics {name}")
         lifecycle = _mapping(metrics.get("lifecycle"), f"lifecycle {name}")
         checks.extend(
@@ -605,6 +790,11 @@ def validate_sonic_collection_suite(
             "motion_file_sha256": motion_hash,
             "action_aggregate_sha256": (
                 action.get("aggregate_sha256") if isinstance(action, Mapping) else None
+            ),
+            "reset_event_global_env_step_count": (
+                reset_event.get("global_env_step_count")
+                if isinstance(reset_event, Mapping)
+                else None
             ),
             "executed_steps": executed_steps,
         }
@@ -645,6 +835,10 @@ def validate_sonic_collection_suite(
                 "owned_wrench_buffer_difference_tolerance": owned_wrench_buffer_difference_tolerance,
                 "baseline_off_action_bytes": "exact",
                 "post_timeout_owned_wrench": "exact_zero",
+                "interaction_reset_event": (
+                    "each single-site and multi-site trial: configured event after "
+                    "nonzero force, command/composer exact zero afterward"
+                ),
             },
             "checks": checks,
         },

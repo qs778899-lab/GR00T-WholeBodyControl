@@ -10,10 +10,12 @@ can be unit-tested without launching Isaac Sim.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
+import inspect
 import math
-from numbers import Integral
+from numbers import Integral, Real
 
 import numpy as np
 import torch
@@ -43,6 +45,150 @@ SONIC_EVALUATION_TERMINATION_NAMES = (
     "ee_body_pos",
     "time_out",
 )
+SONIC_EVALUATION_MANAGER_PROVENANCE = {
+    "schema_version": "sonic_phase6_manager_provenance_v1",
+    "configured": {
+        "terminations": {
+            "_target_": "gear_sonic.envs.manager_env.mdp.terminations.TerminationsCfg",
+            "anchor_pos": {
+                "_target_": "isaaclab.managers.TerminationTermCfg",
+                "func": "gear_sonic.envs.manager_env.mdp:exceeded_anchor_height",
+                "params": {
+                    "command_name": "motion",
+                    "threshold": 0.25,
+                    "threshold_adaptive": False,
+                    "down_threshold": 0.25,
+                },
+            },
+            "anchor_ori_full": {
+                "_target_": "isaaclab.managers.TerminationTermCfg",
+                "func": "gear_sonic.envs.manager_env.mdp:exceeded_anchor_ori",
+                "params": {
+                    "asset_cfg": {
+                        "_target_": "isaaclab.managers.SceneEntityCfg",
+                        "name": "robot",
+                    },
+                    "command_name": "motion",
+                    "threshold": 1.0,
+                },
+            },
+            "ee_body_pos": {
+                "_target_": "isaaclab.managers.TerminationTermCfg",
+                "func": "gear_sonic.envs.manager_env.mdp:exceeded_body_height",
+                "params": {
+                    "command_name": "motion",
+                    "threshold": 0.25,
+                    "body_names": [
+                        "left_ankle_roll_link",
+                        "right_ankle_roll_link",
+                        "left_wrist_yaw_link",
+                        "right_wrist_yaw_link",
+                    ],
+                    "threshold_adaptive": False,
+                    "down_threshold": 0.25,
+                },
+            },
+            "time_out": {
+                "_target_": "isaaclab.managers.TerminationTermCfg",
+                "func": "gear_sonic.envs.manager_env.mdp:tracking_time_out",
+                "time_out": True,
+                "params": {"command_name": "motion"},
+            },
+        },
+        "events": {
+            "_target_": (
+                "gear_sonic.compliance_control.adapters.sonic.manager_cfg."
+                "ComplianceEventsCfg"
+            ),
+            "motion_compliance_reset": {
+                "_target_": "isaaclab.managers.EventTermCfg",
+                "func": (
+                    "gear_sonic.compliance_control.adapters.sonic.mdp:"
+                    "reset_compliance_wrench"
+                ),
+                "mode": "reset",
+                "min_step_count_between_reset": 0,
+                "params": {"command_name": "motion_compliance"},
+            },
+        },
+    },
+    "runtime": {
+        "terminations": [
+            {
+                "name": "anchor_pos",
+                "resolved_func_target": (
+                    "gear_sonic.envs.manager_env.mdp.terminations:"
+                    "exceeded_anchor_height"
+                ),
+                "time_out": False,
+                "effective_params": {
+                    "command_name": "motion",
+                    "threshold": 0.25,
+                    "threshold_adaptive": False,
+                    "down_threshold": 0.25,
+                    "root_height_threshold": 1.0,
+                },
+            },
+            {
+                "name": "anchor_ori_full",
+                "resolved_func_target": (
+                    "gear_sonic.envs.manager_env.mdp.terminations:"
+                    "exceeded_anchor_ori"
+                ),
+                "time_out": False,
+                "effective_params": {
+                    "asset_cfg": {
+                        "config_type": "isaaclab.managers.SceneEntityCfg",
+                        "name": "robot",
+                    },
+                    "command_name": "motion",
+                    "threshold": 1.0,
+                },
+            },
+            {
+                "name": "ee_body_pos",
+                "resolved_func_target": (
+                    "gear_sonic.envs.manager_env.mdp.terminations:"
+                    "exceeded_body_height"
+                ),
+                "time_out": False,
+                "effective_params": {
+                    "command_name": "motion",
+                    "threshold": 0.25,
+                    "threshold_adaptive": False,
+                    "down_threshold": 0.25,
+                    "body_names": [
+                        "left_ankle_roll_link",
+                        "right_ankle_roll_link",
+                        "left_wrist_yaw_link",
+                        "right_wrist_yaw_link",
+                    ],
+                    "root_height_threshold": 0.5,
+                },
+            },
+            {
+                "name": "time_out",
+                "resolved_func_target": (
+                    "gear_sonic.envs.manager_env.mdp.terminations:tracking_time_out"
+                ),
+                "time_out": True,
+                "effective_params": {"command_name": "motion"},
+            },
+        ],
+        "events": [
+            {
+                "name": "motion_compliance_reset",
+                "resolved_func_target": (
+                    "gear_sonic.compliance_control.adapters.sonic.event:"
+                    "reset_compliance_wrench"
+                ),
+                "mode": "reset",
+                "min_step_count_between_reset": 0,
+                "effective_params": {"command_name": "motion_compliance"},
+            }
+        ],
+    },
+}
 SONIC_RELEASE_TRACKING_BODY_NAMES = (
     "pelvis",
     "left_hip_roll_link",
@@ -247,6 +393,205 @@ class SonicEvaluationProtocol:
         )
 
 
+def _plain_json_value(value: object) -> object:
+    """Normalize config/runtime values into a type-strict JSON representation."""
+
+    if isinstance(value, Mapping):
+        if any(not isinstance(key, str) for key in value):
+            raise TypeError("provenance mapping keys must be strings")
+        return {key: _plain_json_value(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return [_plain_json_value(item) for item in value]
+    if value is None or type(value) in (bool, str):
+        return value
+    if isinstance(value, Integral) and not isinstance(value, bool):
+        return int(value)
+    if isinstance(value, Real) and not isinstance(value, bool):
+        result = float(value)
+        if not math.isfinite(result):
+            raise ValueError("provenance numbers must be finite")
+        return result
+    value_type = type(value)
+    if (
+        value_type.__name__ == "SceneEntityCfg"
+        and value_type.__module__.startswith("isaaclab.managers")
+    ):
+        name = getattr(value, "name", None)
+        if not isinstance(name, str) or not name:
+            raise ValueError("runtime SceneEntityCfg must name one scene entity")
+        return {
+            "config_type": "isaaclab.managers.SceneEntityCfg",
+            "name": name,
+        }
+    raise TypeError(f"unsupported provenance value: {value_type.__module__}.{value_type.__name__}")
+
+
+def _typed_json_equal(value: object, expected: object) -> bool:
+    if isinstance(expected, Mapping):
+        return (
+            isinstance(value, Mapping)
+            and set(value) == set(expected)
+            and all(_typed_json_equal(value[key], expected[key]) for key in expected)
+        )
+    if isinstance(expected, list):
+        return (
+            isinstance(value, list)
+            and len(value) == len(expected)
+            and all(
+                _typed_json_equal(item, expected_item)
+                for item, expected_item in zip(value, expected, strict=True)
+            )
+        )
+    return type(value) is type(expected) and value == expected
+
+
+def _resolved_callable_target(func: object) -> str:
+    if not callable(func):
+        raise TypeError("manager function must be callable")
+    module = getattr(func, "__module__", None)
+    qualname = getattr(func, "__qualname__", None)
+    if not isinstance(module, str) or not module or not isinstance(qualname, str) or not qualname:
+        raise TypeError("manager function must expose module and qualified name")
+    return f"{module}:{qualname}"
+
+
+def _effective_callable_params(
+    func: object,
+    configured_params: object,
+    *,
+    injected_names: tuple[str, ...],
+) -> dict[str, object]:
+    if not isinstance(configured_params, Mapping):
+        raise TypeError("manager term params must be a mapping")
+    if any(not isinstance(key, str) for key in configured_params):
+        raise TypeError("manager term param names must be strings")
+    signature = inspect.signature(func)
+    parameters = signature.parameters
+    unknown = set(configured_params) - set(parameters)
+    if unknown:
+        raise ValueError(f"manager term has unknown configured params: {sorted(unknown)}")
+    effective: dict[str, object] = {}
+    for name, parameter in parameters.items():
+        if name in injected_names:
+            continue
+        if parameter.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
+            raise ValueError("Phase-6 manager functions may not use variadic parameters")
+        if name in configured_params:
+            value = configured_params[name]
+        elif parameter.default is not inspect.Parameter.empty:
+            value = parameter.default
+        else:
+            raise ValueError(f"manager term lacks required parameter: {name}")
+        effective[name] = _plain_json_value(value)
+    return effective
+
+
+def validate_sonic_evaluation_config_provenance(
+    terminations_config: Mapping[str, object],
+    events_config: Mapping[str, object],
+) -> dict[str, object]:
+    """Pin the exact composed Hydra function targets and declared parameters."""
+
+    observed = {
+        "terminations": _plain_json_value(terminations_config),
+        "events": _plain_json_value(events_config),
+    }
+    expected = SONIC_EVALUATION_MANAGER_PROVENANCE["configured"]
+    if not _typed_json_equal(observed, expected):
+        raise ValueError("Phase-6 composed termination/event provenance changed")
+    return deepcopy(expected)
+
+
+def _termination_runtime_provenance(termination_manager) -> list[dict[str, object]]:
+    names = tuple(termination_manager.active_terms)
+    if names != SONIC_EVALUATION_TERMINATION_NAMES:
+        raise ValueError(
+            "Phase-6 requires /manager_env/terminations=tracking/eval with "
+            f"terms {SONIC_EVALUATION_TERMINATION_NAMES}; got {names}"
+        )
+    cfgs = tuple(getattr(termination_manager, "_term_cfgs", ()))
+    if len(cfgs) != len(names):
+        raise ValueError("termination manager does not expose one config per term")
+    result: list[dict[str, object]] = []
+    for name, cfg in zip(names, cfgs, strict=True):
+        result.append(
+            {
+                "name": name,
+                "resolved_func_target": _resolved_callable_target(cfg.func),
+                "time_out": _plain_json_value(cfg.time_out),
+                "effective_params": _effective_callable_params(
+                    cfg.func,
+                    cfg.params,
+                    injected_names=("env",),
+                ),
+            }
+        )
+    expected = SONIC_EVALUATION_MANAGER_PROVENANCE["runtime"]["terminations"]
+    if not _typed_json_equal(result, expected):
+        raise ValueError("Phase-6 runtime termination functions or parameters changed")
+    return result
+
+
+def _event_runtime_provenance(event_manager) -> list[dict[str, object]]:
+    active_terms = _plain_json_value(event_manager.active_terms)
+    if not _typed_json_equal(
+        active_terms,
+        {"reset": [SONIC_EVALUATION_RESET_EVENT]},
+    ):
+        raise ValueError("Phase-6 runtime permits only the reset-mode compliance event")
+    get_term_cfg = getattr(event_manager, "get_term_cfg", None)
+    if not callable(get_term_cfg):
+        raise TypeError("event manager must expose get_term_cfg()")
+    cfg = get_term_cfg(SONIC_EVALUATION_RESET_EVENT)
+    result = [
+        {
+            "name": SONIC_EVALUATION_RESET_EVENT,
+            "resolved_func_target": _resolved_callable_target(cfg.func),
+            "mode": _plain_json_value(cfg.mode),
+            "min_step_count_between_reset": _plain_json_value(
+                cfg.min_step_count_between_reset
+            ),
+            "effective_params": _effective_callable_params(
+                cfg.func,
+                cfg.params,
+                injected_names=("env", "env_ids"),
+            ),
+        }
+    ]
+    expected = SONIC_EVALUATION_MANAGER_PROVENANCE["runtime"]["events"]
+    if not _typed_json_equal(result, expected):
+        raise ValueError("Phase-6 runtime reset event function, mode, or parameters changed")
+    return result
+
+
+def validate_sonic_evaluation_manager_provenance(
+    termination_manager,
+    event_manager,
+    *,
+    configured_provenance: Mapping[str, object],
+) -> dict[str, object]:
+    """Bind exact composed configuration to the functions active in IsaacLab."""
+
+    expected_configured = SONIC_EVALUATION_MANAGER_PROVENANCE["configured"]
+    normalized_configured = _plain_json_value(configured_provenance)
+    if not _typed_json_equal(normalized_configured, expected_configured):
+        raise ValueError("configured manager provenance is not the pinned Phase-6 contract")
+    observed = {
+        "schema_version": "sonic_phase6_manager_provenance_v1",
+        "configured": normalized_configured,
+        "runtime": {
+            "terminations": _termination_runtime_provenance(termination_manager),
+            "events": _event_runtime_provenance(event_manager),
+        },
+    }
+    if not _typed_json_equal(observed, SONIC_EVALUATION_MANAGER_PROVENANCE):
+        raise ValueError("Phase-6 manager provenance changed")
+    return deepcopy(observed)
+
+
 def validate_sonic_evaluation_event_names(event_names: Sequence[str]) -> None:
     """Require a deterministic eval boundary with only wrench cleanup on reset."""
 
@@ -259,19 +604,15 @@ def validate_sonic_evaluation_event_names(event_names: Sequence[str]) -> None:
 
 
 def validate_sonic_evaluation_termination_manager(termination_manager) -> None:
-    """Pin the relaxed tracking/eval terms and their timeout classification."""
+    """Pin exact relaxed eval functions, effective params, and timeout flags."""
 
-    names = tuple(termination_manager.active_terms)
-    if names != SONIC_EVALUATION_TERMINATION_NAMES:
-        raise ValueError(
-            "Phase-6 requires /manager_env/terminations=tracking/eval with "
-            f"terms {SONIC_EVALUATION_TERMINATION_NAMES}; got {names}"
-        )
-    cfgs = tuple(getattr(termination_manager, "_term_cfgs", ()))
-    if len(cfgs) != len(names):
-        raise ValueError("termination manager does not expose one config per term")
-    if tuple(bool(cfg.time_out) for cfg in cfgs) != (False, False, False, True):
-        raise ValueError("only tracking/eval time_out may be classified as a timeout")
+    _termination_runtime_provenance(termination_manager)
+
+
+def validate_sonic_evaluation_event_manager(event_manager) -> None:
+    """Pin the sole runtime event function, reset mode, and effective params."""
+
+    _event_runtime_provenance(event_manager)
 
 
 def validate_sonic_evaluation_checkpoint_role(
@@ -516,6 +857,100 @@ def clear_and_assert_owned_composer_wrench(command) -> dict[str, float | str]:
         "source": "permanent_wrench_composer_body_local_owned_rows",
         "owned_force_peak_n": force_peak,
         "owned_torque_peak_nm": torque_peak,
+    }
+
+
+def _owned_command_composer_wrench_stats(
+    command,
+    env_ids: torch.Tensor,
+) -> dict[str, float]:
+    command_force, command_torque, writer_ids = command.body_wrench_for_envs(env_ids)
+    if not isinstance(writer_ids, torch.Tensor) or not torch.equal(writer_ids, env_ids):
+        raise RuntimeError("reset evidence requires exact tensor environment IDs")
+    composer = getattr(command.robot, "permanent_wrench_composer", None)
+    composer_force = getattr(composer, "composed_force_as_torch", None)
+    composer_torque = getattr(composer, "composed_torque_as_torch", None)
+    if not isinstance(composer_force, torch.Tensor) or not isinstance(
+        composer_torque,
+        torch.Tensor,
+    ):
+        raise RuntimeError("reset evidence requires permanent composer torch buffers")
+    owned_ids = command.application_body_ids
+    observed_force = composer_force.index_select(0, env_ids).index_select(1, owned_ids)
+    observed_torque = composer_torque.index_select(0, env_ids).index_select(1, owned_ids)
+    if observed_force.shape != command_force.shape or observed_torque.shape != command_torque.shape:
+        raise RuntimeError("command/composer owned-wrench layouts differ")
+
+    def vector_peak(value: torch.Tensor) -> float:
+        if value.numel() == 0 or value.shape[-1] != 3:
+            raise RuntimeError("owned wrench evidence must contain non-empty 3-vectors")
+        peak = float(torch.linalg.vector_norm(value, dim=-1).max().item())
+        if not math.isfinite(peak):
+            raise RuntimeError("owned wrench evidence contains a non-finite vector")
+        return peak
+
+    def max_difference(left: torch.Tensor, right: torch.Tensor) -> float:
+        difference = float(torch.abs(left - right).max().item())
+        if not math.isfinite(difference):
+            raise RuntimeError("owned wrench evidence contains a non-finite difference")
+        return difference
+
+    return {
+        "command_force_peak_n": vector_peak(command_force),
+        "command_torque_peak_nm": vector_peak(command_torque),
+        "composer_force_peak_n": vector_peak(observed_force),
+        "composer_torque_peak_nm": vector_peak(observed_torque),
+        "force_max_abs_difference_n": max_difference(observed_force, command_force),
+        "torque_max_abs_difference_nm": max_difference(observed_torque, command_torque),
+    }
+
+
+def exercise_sonic_evaluation_reset_event(
+    event_manager,
+    command,
+    *,
+    global_env_step_count: int,
+) -> dict[str, object]:
+    """Invoke the configured reset event after real force and prove exact cleanup."""
+
+    validate_sonic_evaluation_event_manager(event_manager)
+    if (
+        isinstance(global_env_step_count, bool)
+        or not isinstance(global_env_step_count, Integral)
+        or int(global_env_step_count) <= 0
+    ):
+        raise ValueError("global_env_step_count must be a positive integer")
+    ids = torch.arange(command.num_envs, device=command.device, dtype=torch.long)
+    pre_reset = _owned_command_composer_wrench_stats(command, ids)
+    if (
+        pre_reset["command_force_peak_n"] <= 0.0
+        or pre_reset["composer_force_peak_n"] <= 0.0
+    ):
+        raise RuntimeError("configured reset event must follow a nonzero owned force")
+    if (
+        pre_reset["force_max_abs_difference_n"] > 1.0e-6
+        or pre_reset["torque_max_abs_difference_nm"] > 1.0e-6
+    ):
+        raise RuntimeError("command and composer differ before the reset event")
+
+    event_manager.apply(
+        mode="reset",
+        env_ids=ids,
+        global_env_step_count=int(global_env_step_count),
+    )
+    post_reset = _owned_command_composer_wrench_stats(command, ids)
+    if any(value != 0.0 for value in post_reset.values()):
+        raise RuntimeError("configured reset event did not clear command/composer exactly")
+    return {
+        "schema_version": "sonic_phase6_reset_event_evidence_v1",
+        "event_name": SONIC_EVALUATION_RESET_EVENT,
+        "resolved_func_target": SONIC_EVALUATION_MANAGER_PROVENANCE["runtime"][
+            "events"
+        ][0]["resolved_func_target"],
+        "mode": "reset",
+        "global_env_step_count": int(global_env_step_count),
+        "pre_reset": pre_reset,
+        "post_reset": post_reset,
     }
 
 

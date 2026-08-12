@@ -19,7 +19,7 @@ current_phase: `6`
 
 completion: `NOT_COMPLETE`
 
-execution_state: `PAUSED_BY_USER_2026-08-12`
+execution_state: `RUNNING_PHASE6_2026-08-12`
 
 paused_implementation_head: `7340d2b0b0571bd225512196c06e60aa527b745a`
 
@@ -53,6 +53,16 @@ Completed in the current phase:
   rerun of the complete suite after the latest collector changes.
 - Phase-5 Python/C++ runtime, accepted artifact hashes, production hook, CLI
   validation, and release-boundary gates remain passed.
+- Both paused P1 evidence gaps are now closed in code.  The collector binds the
+  exact composed and runtime termination/event function targets, timeout/mode,
+  declared and effective parameters, thresholds, body names, and command
+  names.  Every single-site/multi-site trial must invoke the configured reset
+  event after observed nonzero command/composer force and prove exact clearing
+  of both buffers.  The final validator rejects missing, stale, or altered
+  evidence.
+- Post-P1 focused CPU validation passed `40 tests in 1.40s`; all four Phase-6
+  help gates and a real Hydra-compose provenance probe also passed.  This is
+  P1 closure only, not matrix item 1 or real simulator evidence.
 
 Still required before completion:
 
@@ -69,17 +79,13 @@ Still required before completion:
   thresholds and final output/cache/diff hygiene.  In particular, active-mode
   left/right endpoint, wrist orientation, and whole-body tracking upper bounds
   must be reviewed explicitly because tracking accuracy remains the priority.
-- P1 evidence hardening: pin termination/event function targets and all
-  threshold/body/command/mode parameters, and exercise the configured Phase-6
-  reset event after a nonzero-wrench interaction rather than relying only on
-  the explicit post-timeout cleanup plus the earlier Phase-2 reset smoke.
 - No formal Phase-6 output was created during the 2026-08-12 resume attempt:
   `phase6_residual_gpu_smoke_post_restart`, `phase6_scheduler_4096.json`, and
   `phase6_real_paired` are all absent.  No test, simulator, training, or GPU
-  evidence run was started, and both P1 items remain unimplemented in the
-  committed pause head above.
+  evidence run had been started at the pause boundary.  They remain absent
+  after the CPU-only P1 closure.
 
-next_action: Resume from `phase6_handoff.md` section "Current pause checkpoint
-(2026-08-12)".  First close its two P1 evidence items and rerun matrix item 1;
-then execute Phase-6 items 2–9 in order.  Do not mark Phase 6 `PASSED` or the
+next_action: Run Phase-6 matrix item 1 on the P1-hardened tree, including the
+complete Phase 1–5/Phase-6 CPU regression and Phase-2/3 real IsaacLab smokes.
+Then execute Phase-6 items 2–9 in order.  Do not mark Phase 6 `PASSED` or the
 task `COMPLETE` from the current CPU-only evidence.

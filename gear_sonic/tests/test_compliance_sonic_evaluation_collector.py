@@ -16,6 +16,7 @@ from gear_sonic.compliance_control.adapters.sonic.evaluation import (
     NaturalMotionTimeoutObserver,
     PolicyActionByteEvidence,
     SONIC_ACTION_RESIDUAL_PREFIX,
+    SONIC_EVALUATION_MANAGER_PROVENANCE,
     SONIC_EVALUATION_TERMINATION_NAMES,
     SONIC_RELEASE_CHECKPOINT_SHA256,
     SONIC_RELEASE_CHECKPOINT_STEP,
@@ -28,12 +29,16 @@ from gear_sonic.compliance_control.adapters.sonic.evaluation import (
     apply_sonic_evaluation_protocol,
     assert_g1_only_encoder_selection,
     clear_and_assert_owned_composer_wrench,
+    exercise_sonic_evaluation_reset_event,
     policy_action_row_sha256,
     snapshot_from_sonic_commands,
     validate_policy_action_byte_parity,
     validate_sonic_evaluation_checkpoint_role,
+    validate_sonic_evaluation_config_provenance,
+    validate_sonic_evaluation_manager_provenance,
     validate_sonic_evaluation_event_names,
 )
+from gear_sonic.compliance_control.adapters.sonic.event import reset_compliance_wrench
 from gear_sonic.compliance_control.adapters.sonic.state import (
     ComplianceCommandState,
     ComplianceSamplingSpec,
@@ -553,15 +558,125 @@ def test_protocol_rejects_unknown_site_and_disabled_active_combination():
     assert not command.state.active_site_mask.any()
 
 
+class SceneEntityCfg:
+    def __init__(self, name: str):
+        self.name = name
+
+
+SceneEntityCfg.__module__ = "isaaclab.managers.scene_entity_cfg"
+
+
+def _fake_exceeded_anchor_height(
+    env,
+    command_name,
+    threshold,
+    threshold_adaptive=False,
+    down_threshold=0.5,
+    root_height_threshold=1.0,
+):
+    raise AssertionError("provenance-only fake must not execute")
+
+
+def _fake_exceeded_anchor_ori(env, asset_cfg, command_name, threshold):
+    raise AssertionError("provenance-only fake must not execute")
+
+
+def _fake_exceeded_body_height(
+    env,
+    command_name,
+    threshold,
+    threshold_adaptive=False,
+    down_threshold=0.5,
+    body_names=None,
+    root_height_threshold=0.5,
+):
+    raise AssertionError("provenance-only fake must not execute")
+
+
+def _fake_tracking_time_out(env, command_name):
+    raise AssertionError("provenance-only fake must not execute")
+
+
+for _function, _target_name in (
+    (_fake_exceeded_anchor_height, "exceeded_anchor_height"),
+    (_fake_exceeded_anchor_ori, "exceeded_anchor_ori"),
+    (_fake_exceeded_body_height, "exceeded_body_height"),
+    (_fake_tracking_time_out, "tracking_time_out"),
+):
+    _function.__module__ = "gear_sonic.envs.manager_env.mdp.terminations"
+    _function.__qualname__ = _target_name
+
+
+def _phase6_termination_cfgs():
+    return [
+        SimpleNamespace(
+            func=_fake_exceeded_anchor_height,
+            time_out=False,
+            params={
+                "command_name": "motion",
+                "threshold": 0.25,
+                "threshold_adaptive": False,
+                "down_threshold": 0.25,
+            },
+        ),
+        SimpleNamespace(
+            func=_fake_exceeded_anchor_ori,
+            time_out=False,
+            params={
+                "asset_cfg": SceneEntityCfg("robot"),
+                "command_name": "motion",
+                "threshold": 1.0,
+            },
+        ),
+        SimpleNamespace(
+            func=_fake_exceeded_body_height,
+            time_out=False,
+            params={
+                "command_name": "motion",
+                "threshold": 0.25,
+                "body_names": [
+                    "left_ankle_roll_link",
+                    "right_ankle_roll_link",
+                    "left_wrist_yaw_link",
+                    "right_wrist_yaw_link",
+                ],
+                "threshold_adaptive": False,
+                "down_threshold": 0.25,
+            },
+        ),
+        SimpleNamespace(
+            func=_fake_tracking_time_out,
+            time_out=True,
+            params={"command_name": "motion"},
+        ),
+    ]
+
+
+class _FakeEventManager:
+    def __init__(self, env=None):
+        self.active_terms = {"reset": ["motion_compliance_reset"]}
+        self.cfg = SimpleNamespace(
+            func=reset_compliance_wrench,
+            mode="reset",
+            min_step_count_between_reset=0,
+            params={"command_name": "motion_compliance"},
+        )
+        self.env = env
+        self.apply_calls = []
+
+    def get_term_cfg(self, name):
+        assert name == "motion_compliance_reset"
+        return self.cfg
+
+    def apply(self, *, mode, env_ids, global_env_step_count):
+        self.apply_calls.append((mode, env_ids.clone(), global_env_step_count))
+        self.cfg.func(self.env, env_ids, **self.cfg.params)
+
+
 class _FakeTerminationManager:
     def __init__(self):
         self.active_terms = ["anchor_pos", "anchor_ori_full", "ee_body_pos", "time_out"]
-        self._term_cfgs = [
-            SimpleNamespace(time_out=False),
-            SimpleNamespace(time_out=False),
-            SimpleNamespace(time_out=False),
-            SimpleNamespace(time_out=True),
-        ]
+        self._term_cfgs = _phase6_termination_cfgs()
         self._terminated_buf = torch.zeros(1, dtype=torch.bool)
         self._truncated_buf = torch.zeros(1, dtype=torch.bool)
         self._term_dones = torch.zeros(1, 4, dtype=torch.bool)
@@ -612,7 +727,7 @@ def test_natural_timeout_observer_preserves_real_fall_without_auto_reset():
 def test_natural_timeout_observer_rejects_missing_or_wrong_eval_semantics():
     manager = _FakeTerminationManager()
     manager._term_cfgs[-1].time_out = False
-    with pytest.raises(ValueError, match="only tracking/eval time_out"):
+    with pytest.raises(ValueError, match="runtime termination"):
         NaturalMotionTimeoutObserver(manager)
 
     manager = _FakeTerminationManager()
@@ -623,6 +738,48 @@ def test_natural_timeout_observer_rejects_missing_or_wrong_eval_semantics():
     with pytest.raises(RuntimeError, match="not observed"):
         observer.assert_natural_timeout_completion(2)
     observer.restore()
+
+
+def test_manager_provenance_pins_config_runtime_functions_and_effective_params():
+    configured = deepcopy(SONIC_EVALUATION_MANAGER_PROVENANCE["configured"])
+    validated_config = validate_sonic_evaluation_config_provenance(
+        configured["terminations"],
+        configured["events"],
+    )
+    result = validate_sonic_evaluation_manager_provenance(
+        _FakeTerminationManager(),
+        _FakeEventManager(),
+        configured_provenance=validated_config,
+    )
+    assert result == SONIC_EVALUATION_MANAGER_PROVENANCE
+
+    changed_config = deepcopy(configured)
+    changed_config["terminations"]["ee_body_pos"]["params"]["body_names"][2] = (
+        "left_elbow_link"
+    )
+    with pytest.raises(ValueError, match="composed termination/event"):
+        validate_sonic_evaluation_config_provenance(
+            changed_config["terminations"],
+            changed_config["events"],
+        )
+
+    changed_runtime = _FakeTerminationManager()
+    changed_runtime._term_cfgs[0].params["threshold"] = 0.5
+    with pytest.raises(ValueError, match="runtime termination"):
+        validate_sonic_evaluation_manager_provenance(
+            changed_runtime,
+            _FakeEventManager(),
+            configured_provenance=validated_config,
+        )
+
+    changed_event = _FakeEventManager()
+    changed_event.cfg.mode = "startup"
+    with pytest.raises(ValueError, match="runtime reset event"):
+        validate_sonic_evaluation_manager_provenance(
+            _FakeTerminationManager(),
+            changed_event,
+            configured_provenance=validated_config,
+        )
 
 
 def test_action_byte_evidence_is_exact_and_detects_signed_zero_or_row_change():
@@ -694,6 +851,67 @@ def test_post_timeout_cleanup_zeroes_and_reads_all_owned_composer_rows():
     assert report["owned_torque_peak_nm"] == 0.0
     assert torch.count_nonzero(composer.composed_force_as_torch[:, [0, 1, 2]]) == 0
     assert torch.count_nonzero(composer.composed_torque_as_torch[:, [0, 1, 2]]) == 0
+
+
+def _reset_event_fixture(*, force_n: float):
+    composer = _WritableComposer()
+    force = torch.zeros(1, 3, 3)
+    torque = torch.zeros_like(force)
+    force[0, 0, 0] = force_n
+    body_ids = torch.tensor([1, 2, 0])
+    env_ids = torch.tensor([0])
+    composer.set_forces_and_torques(
+        forces=force,
+        torques=torque,
+        body_ids=body_ids,
+        env_ids=env_ids,
+        is_global=False,
+    )
+
+    def clear_wrench(ids):
+        force[ids] = 0.0
+        torque[ids] = 0.0
+
+    command = SimpleNamespace(
+        num_envs=1,
+        device=torch.device("cpu"),
+        application_body_ids=body_ids,
+        robot=SimpleNamespace(permanent_wrench_composer=composer),
+        clear_wrench=clear_wrench,
+        body_wrench_for_envs=lambda ids: (force[ids], torque[ids], ids),
+        wrench_dirty=True,
+        operational_enabled=True,
+    )
+    env = SimpleNamespace(
+        command_manager=SimpleNamespace(
+            get_term=lambda name: command if name == "motion_compliance" else None
+        )
+    )
+    return command, _FakeEventManager(env)
+
+
+def test_configured_reset_event_follows_nonzero_force_and_clears_both_buffers():
+    command, event_manager = _reset_event_fixture(force_n=7.0)
+    report = exercise_sonic_evaluation_reset_event(
+        event_manager,
+        command,
+        global_env_step_count=17,
+    )
+    assert report["pre_reset"]["command_force_peak_n"] == 7.0
+    assert report["pre_reset"]["composer_force_peak_n"] == 7.0
+    assert all(value == 0.0 for value in report["post_reset"].values())
+    assert len(event_manager.apply_calls) == 1
+    assert event_manager.apply_calls[0][0] == "reset"
+    assert event_manager.apply_calls[0][2] == 17
+
+    command, event_manager = _reset_event_fixture(force_n=0.0)
+    with pytest.raises(RuntimeError, match="must follow a nonzero"):
+        exercise_sonic_evaluation_reset_event(
+            event_manager,
+            command,
+            global_env_step_count=17,
+        )
+    assert event_manager.apply_calls == []
 
 
 def test_checkpoint_role_and_deterministic_event_contract_reject_mislabeled_evidence():
@@ -891,7 +1109,7 @@ def _valid_sonic_suite_evidence():
         )
         baseline = mode == "baseline"
         collections[name] = {
-            "schema_version": "sonic_phase6_collection_v2",
+            "schema_version": "sonic_phase6_collection_v3",
             "evidence_kind": "real_sonic_simulator_trace",
             "trial_name": name,
             "protocol": mode,
@@ -942,6 +1160,37 @@ def _valid_sonic_suite_evidence():
                 "term_observation_counts": [[0, 0, 0, 1]],
                 "first_term_step": [[-1, -1, -1, steps]],
             },
+            "manager_provenance": deepcopy(SONIC_EVALUATION_MANAGER_PROVENANCE),
+            "reset_event_evidence": (
+                {
+                    "schema_version": "sonic_phase6_reset_event_evidence_v1",
+                    "event_name": "motion_compliance_reset",
+                    "resolved_func_target": (
+                        "gear_sonic.compliance_control.adapters.sonic.event:"
+                        "reset_compliance_wrench"
+                    ),
+                    "mode": "reset",
+                    "global_env_step_count": 1,
+                    "pre_reset": {
+                        "command_force_peak_n": 6.0,
+                        "command_torque_peak_nm": 0.0,
+                        "composer_force_peak_n": 6.0,
+                        "composer_torque_peak_nm": 0.0,
+                        "force_max_abs_difference_n": 0.0,
+                        "torque_max_abs_difference_nm": 0.0,
+                    },
+                    "post_reset": {
+                        "command_force_peak_n": 0.0,
+                        "command_torque_peak_nm": 0.0,
+                        "composer_force_peak_n": 0.0,
+                        "composer_torque_peak_nm": 0.0,
+                        "force_max_abs_difference_n": 0.0,
+                        "torque_max_abs_difference_nm": 0.0,
+                    },
+                }
+                if mode in {"single_site", "multi_site"}
+                else None
+            ),
             "actual_composer_evidence": {
                 "source": "permanent_wrench_composer_body_local_owned_rows",
                 "reset_owned_force_peak_n": 0.0,
@@ -1045,6 +1294,62 @@ def test_sonic_suite_validator_accepts_protocol_specific_gates_and_pins_evidence
     )
     failed = {check["name"] for check in result["acceptance"]["checks"] if not check["passed"]}
     assert "policy_step_dt_s:single_left" in failed
+
+    changed_manager = deepcopy(collections)
+    changed_manager["single_left"]["manager_provenance"]["runtime"][
+        "terminations"
+    ][0]["effective_params"]["threshold"] = 0.5
+    result = _validate_fake_sonic_suite(
+        paired,
+        changed_manager,
+        report_hashes,
+        trace_hashes,
+        traces,
+    )
+    failed = {check["name"] for check in result["acceptance"]["checks"] if not check["passed"]}
+    assert "manager_provenance:single_left" in failed
+
+    stale_reset = deepcopy(collections)
+    stale_reset["single_left"]["reset_event_evidence"]["post_reset"][
+        "composer_force_peak_n"
+    ] = 1.0
+    result = _validate_fake_sonic_suite(
+        paired,
+        stale_reset,
+        report_hashes,
+        trace_hashes,
+        traces,
+    )
+    failed = {check["name"] for check in result["acceptance"]["checks"] if not check["passed"]}
+    assert "post_reset_exact_zero_composer_force_peak_n:single_left" in failed
+
+    missing_nonzero_reset = deepcopy(collections)
+    missing_nonzero_reset["single_left"]["reset_event_evidence"]["pre_reset"][
+        "command_force_peak_n"
+    ] = 0.0
+    result = _validate_fake_sonic_suite(
+        paired,
+        missing_nonzero_reset,
+        report_hashes,
+        trace_hashes,
+        traces,
+    )
+    failed = {check["name"] for check in result["acceptance"]["checks"] if not check["passed"]}
+    assert "pre_reset_command_force_nonzero:single_left" in failed
+
+    inactive_reset = deepcopy(collections)
+    inactive_reset["overlay_off"]["reset_event_evidence"] = deepcopy(
+        collections["single_left"]["reset_event_evidence"]
+    )
+    result = _validate_fake_sonic_suite(
+        paired,
+        inactive_reset,
+        report_hashes,
+        trace_hashes,
+        traces,
+    )
+    failed = {check["name"] for check in result["acceptance"]["checks"] if not check["passed"]}
+    assert "inactive_protocol_no_reset_event:overlay_off" in failed
 
     boolean_ids = deepcopy(collections)
     for report in boolean_ids.values():

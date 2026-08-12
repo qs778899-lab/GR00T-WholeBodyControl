@@ -3,12 +3,35 @@
 ## Resume here
 
 Task state is **Phase 6 / IN_PROGRESS**. Phases 1 through 5 are accepted.
-Execution was paused again by the user on 2026-08-12. Phase 6 has the portable CPU
-evaluation contract plus a thin SONIC collector/final validator, but it does
-not yet have the required fresh GPU/simulator performance evidence. Read
+Execution resumed from the 2026-08-12 pause. Phase 6 has the portable CPU
+evaluation contract plus a P1-hardened thin SONIC collector/final validator,
+but it does not yet have the required fresh GPU/simulator performance evidence. Read
 `status.md`, this checkpoint, and then run only Phase 6 of `test_matrix.md`;
 do not infer completion from Phase-4 training smoke, C++ deployment tests, or
 synthetic CPU traces.
+
+## Active continuation (2026-08-12)
+
+The two P1 evidence items from the paused checkpoint are implemented:
+
+- exact Hydra and runtime manager provenance now pins the four termination
+  functions, sole reset event, timeout classification, event mode/minimum
+  reset interval, command/body names, explicit thresholds, and effective
+  function defaults;
+- each real `single_site`/`multi_site` collector run waits for observed nonzero
+  command/composer force, invokes the configured reset event through
+  `event_manager.apply`, and proves command and composer rows are exactly zero
+  afterward. The portable trace remains uninterrupted because this evidence
+  event runs after a captured physics transition rather than creating a second
+  recorder reset row.
+
+The collection schema is now `sonic_phase6_collection_v3`. The final validator
+requires exact manager provenance and nonzero-before/zero-after reset evidence
+for all three interaction trials, while requiring no such event in baseline,
+off, or no-contact trials. Focused evaluation/collector tests passed `40 tests
+in 1.40s`; the four help gates and a real composed-Hydra provenance probe also
+passed. No GPU or simulator evidence was created by this P1 step. The immediate
+next action is Phase-6 matrix item 1, not another algorithm change.
 
 ## Current pause checkpoint (2026-08-12)
 
@@ -245,10 +268,9 @@ location alone—are the provenance contract.
   orientation, and whole-body tracking accuracy. This is essential to the
   user requirement that compliance must not displace tracking accuracy as the
   first priority.
-- The final validator does not yet pin termination/event function targets and
-  detailed parameters, and the Phase-6 collector has not yet demonstrated the
-  configured reset event immediately after a nonzero force. These are the two
-  P1 hardening items listed in the paused checkpoint.
+- Exact termination/event provenance and configured reset-event evidence are
+  implemented and CPU-tested, but remain to be exercised by the formal real
+  six-trial collection.
 - The trained artifact uses two wrists. Arbitrary-site tensor/runtime support
   does not prove that this checkpoint supports another site count or all 14
   SONIC tracking bodies.
@@ -263,9 +285,9 @@ location alone—are the provenance contract.
 
 1. Confirm `status.md` still says Phase 6 `IN_PROGRESS`; inspect `git status`
    and do not mix a new algorithm change into the evidence run.
-2. Close only the two paused-checkpoint P1 evidence items, rerun the existing
-   38-test focused baseline plus the new P1 negative tests, and record the new
-   result. Do not tune the policy or force algorithm in this hardening step.
+2. P1 closure is complete: the former 38-test focused baseline plus new P1
+   tests passed as 40 tests. Re-run it only as part of matrix item 1 or after a
+   relevant code change; do not tune the policy or force algorithm here.
 3. After any machine restart, revalidate the native matched NVIDIA driver,
    CUDA/NVML userspace, `sonic_backup`, official asset hashes, and idle
    trainer/simulator state.  At the current pause this is `580.173.02` with no
