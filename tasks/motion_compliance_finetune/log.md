@@ -1053,3 +1053,25 @@
   host query shows no unrelated compute process. The formal scheduler JSON and
   real paired root remain absent. Phase 6 stays `IN_PROGRESS`; the task remains
   `NOT_COMPLETE`.
+
+## 2026-08-12 — User set CHIP runtime/video validation as the first priority
+
+- The user required the CHIP-style implementation to be proven as a fully
+  runnable branch and requested videos suitable for manual effect review before
+  motion-compliance work continues.
+- Read-only inspection confirmed `experiment/chip-compliance` is clean and
+  synchronized with its remote at
+  `3dbfb6f211511bb04fedcd326f3265cdafcfa68c`. Its prior task is a completed
+  engineering/300-frame handoff and explicitly does not claim converged or
+  multi-motion performance; it contains no review-video package.
+- The completed CHIP final audit pins the exact Phase-5-to-Phase-6 tree.
+  Therefore no follow-up file was added to that accepted branch at this pause.
+  The documented safe continuation is a new isolated
+  `experiment/chip-runtime-video-validation` worktree based on `3dbfb6f`, with
+  the old accepted Phase-4/5 evidence kept immutable.
+- That follow-up is now a prerequisite for this motion branch. It must rerun the
+  complete CHIP regression on the current native driver, exercise full natural
+  motion horizons for hard-off/no-contact/single-left/single-right/two-wrist
+  protocols, bind numerical reports and videos by hash, and publish at least
+  five synchronized review MP4s. No new GPU/simulator command was started while
+  recording this priority.

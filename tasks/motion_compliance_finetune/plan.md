@@ -225,6 +225,13 @@ Baseline: NVLabs upstream `main` at
 
 ### Phase 6 — Integration, regression, and low-resource validation
 
+- Cross-branch user priority (2026-08-12): before resuming any motion Phase-6
+  GPU evidence, preserve `experiment/chip-compliance@3dbfb6f` and create a new
+  isolated `experiment/chip-runtime-video-validation` branch from it. First
+  complete the CHIP current-environment full regression, full-horizon runtime
+  protocols, trace-bound metrics, and at least five synchronized human-review
+  videos specified in `phase6_handoff.md`. This prerequisite does not convert
+  either compliance implementation into evidence for the other.
 - Current execution state (2026-08-12): paused by user after matrix item 1,
   fixed pre-data tracking gates, and one completed item-2 functional attempt.
   That 16-environment/five-iteration run reached step 5 and passed independent

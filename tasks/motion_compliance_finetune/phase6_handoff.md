@@ -12,13 +12,67 @@ collection has started. Read `status.md`, this checkpoint, and only the Phase-6
 section of `test_matrix.md`; do not infer Phase-6 completion from the retained
 functional training attempt.
 
-## Latest pause checkpoint (2026-08-12 17:46 +08:00)
+## User-priority gate before this branch resumes
+
+The 2026-08-12 user priority supersedes the immediate item-2 next step: first
+prove the CHIP-style implementation can run normally end to end and publish
+videos suitable for human effect review. Do not launch another motion-compliance
+GPU job until this cross-branch gate passes.
+
+Preserve `experiment/chip-compliance` and its remote at the already validated,
+clean commit `3dbfb6f211511bb04fedcd326f3265cdafcfa68c`. Its completed final audit
+pins an exact accepted tree; modifying that branch now would invalidate the
+existing result before the follow-up is ready. On resume, create an independent
+worktree and branch named `experiment/chip-runtime-video-validation` from that
+commit. The accepted CHIP Phase-4/5 artifact roots remain read-only inputs.
+
+The CHIP-first gate is complete only when all of the following are retained:
+
+1. A current-environment rerun of the complete CHIP Phase-6 matrix, including
+   its resolved IsaacLab/CUDA smokes, checkpoint and ONNX audits, help/dry-run
+   gates, and cache/diff/output hygiene. Historical compatibility-loader results
+   alone are insufficient after the driver/environment change.
+2. Fresh real full-natural-horizon traces, not the prior 300-frame chain smoke,
+   covering release baseline, CHIP hard-off, enabled/no-contact, matched-force
+   single-left, single-right, and simultaneous two-wrist modes. Use both the
+   audited original and mirrored `walk_forward_amateur_001__A001` asset pairs
+   across the retained review set, with exact motion/seed/frame/time alignment.
+3. Tracking-first numerical acceptance fixed before viewing results. At minimum,
+   hard-off preserves the release action path exactly; active wrist position is
+   checked against its yielded target, wrist orientation against the original
+   target, and only intentionally yielded points are excluded from remaining-
+   body MPJPE. Reuse the 5/10 mm endpoint, 0.05/0.10 rad orientation,
+   max(3 mm, 10%) local, and max(5 mm, 10%) global regression ceilings unless
+   a stricter CHIP contract is committed before collection. Require full
+   success, zero falls, finite values, expected force/yield, inactive-hand
+   isolation, and reset-cleared wrench state.
+4. At least five full-horizon paired MP4s: release versus CHIP hard-off,
+   hard-off versus enabled/no-contact, stiff versus compliant single-left,
+   single-right, and simultaneous two-wrist. Use a fixed front-oblique full-body
+   camera with both wrists and feet visible; add a close view only as an extra,
+   not a replacement. Encode H.264/yuv420p with one video frame per 50 Hz policy
+   frame so duration and frame identity remain auditable.
+5. Every video displays branch commit, checkpoint hash prefix, motion, seed,
+   frame/time, protocol, active site(s), applied force, and compliance. A bounded
+   JSON manifest must record `ffprobe` codec/resolution/fps/frame-count/duration,
+   video SHA-256, and the SHA-256 of its exact trace and metrics report. Supply a
+   short manual checklist for falls/foot slide, upper-limb tracking, intended
+   yield direction, jitter, inactive-hand cross-coupling, and reset artifacts.
+
+Video approval supplements rather than replaces the numeric gate. Do not call
+the CHIP follow-up complete merely because an MP4 renders or looks plausible.
+After the complete test/runtime gate passes and the videos are ready for the
+user, return here and resume the motion Phase-6 order below.
+
+## Latest pause checkpoint (2026-08-12 17:56 +08:00)
 
 Implementation state before this documentation-only checkpoint:
 
 - branch: `experiment/motion-compliance`;
-- local and tracked remote implementation head before this documentation:
+- implementation head:
   `2dddfdaee9ce8d4c5debed1c51fbc224ec942606`;
+- local and tracked remote head before the CHIP-priority documentation:
+  `dae2681a823dda53a4d0048c1df5bcd6b4ca1b93`;
 - official merge base:
   `4141c34280abb67c82e115342a8720f4a83d750d`;
 - `main@6d6d8ae9a04b67a977b027acecfe20c65aca0647` and
@@ -95,9 +149,10 @@ host device access, no temporary loader override, and must not terminate
 unrelated jobs.
 
 Stop boundary: Phase 6 remains `IN_PROGRESS`; it is not `PASSED`, and the task
-is `NOT_COMPLETE`. No process is left running for this task. Resume by repeating
-item 2 on an actually idle GPU in the new path below; do not jump to the
-scheduler benchmark or formal collection.
+is `NOT_COMPLETE`. No process is left running for this task. First complete the
+CHIP runtime/video gate above. Only afterward repeat item 2 on an actually idle
+GPU in the new path below; do not jump to the scheduler benchmark or formal
+collection.
 
 ## Prior paused checkpoint (2026-07-28, historical)
 
@@ -310,6 +365,10 @@ location alone—are the provenance contract.
 
 ## Exact Phase-6 continuation order
 
+0. Complete the CHIP-first current-runtime and human-review-video gate above on
+   a new isolated branch from `experiment/chip-compliance@3dbfb6f`. Do not edit
+   the accepted CHIP branch directly and do not continue this list until that
+   prerequisite passes.
 1. Confirm `status.md` still says Phase 6 `IN_PROGRESS`; inspect `git status`
    and do not mix a new algorithm change into the evidence run.
 2. P1 closure is complete: the former 38-test focused baseline plus new P1

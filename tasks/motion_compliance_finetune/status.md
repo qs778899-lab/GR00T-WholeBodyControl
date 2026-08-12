@@ -19,11 +19,40 @@ current_phase: `6`
 
 completion: `NOT_COMPLETE`
 
-execution_state: `PAUSED_BY_USER_AFTER_PHASE6_GPU_FUNCTIONAL_SMOKE_BUSY_GPU`
+execution_state: `PAUSED_BY_USER_CHIP_RUNTIME_VIDEO_GATE_FIRST`
+
+cross_branch_priority: `CHIP_RUNTIME_VIDEO_VALIDATION_REQUIRED_BEFORE_MOTION_RESUME`
+
+chip_validated_source: `experiment/chip-compliance@3dbfb6f211511bb04fedcd326f3265cdafcfa68c`
+
+chip_followup_branch: `experiment/chip-runtime-video-validation` (create only on resume in an isolated worktree)
 
 paused_implementation_head: `2dddfdaee9ce8d4c5debed1c51fbc224ec942606`
 
-remote_head_before_documentation_checkpoint: `origin/experiment/motion-compliance@2dddfdaee9ce8d4c5debed1c51fbc224ec942606`
+remote_head_before_first_pause_documentation: `origin/experiment/motion-compliance@2dddfdaee9ce8d4c5debed1c51fbc224ec942606`
+
+remote_head_before_chip_priority_documentation: `origin/experiment/motion-compliance@dae2681a823dda53a4d0048c1df5bcd6b4ca1b93`
+
+## Cross-branch user priority
+
+- Do not resume motion-compliance Phase-6 item 2 until the CHIP-style branch has
+  passed a fresh current-environment full regression, real full-horizon runtime
+  validation, and a trace-bound manual-review video gate.
+- Preserve the currently clean/pushed CHIP acceptance head `3dbfb6f` unchanged:
+  its final audit pins the exact accepted tree, so adding follow-up files there
+  before validation would invalidate its current pass. On resume, branch from
+  that commit into the isolated `experiment/chip-runtime-video-validation`
+  worktree and keep the old Phase-4/5 evidence immutable.
+- The CHIP follow-up must produce at least five synchronized, full-horizon,
+  side-by-side H.264 review videos: release versus CHIP hard-off, hard-off
+  versus enabled/no-contact, matched-force single-left, single-right, and
+  simultaneous two-wrist stiff-versus-compliant trials. The original and
+  mirrored audited sample motions must both appear in the review set.
+- Each video must be bound by SHA-256 to its trace/report and show commit,
+  checkpoint, motion, seed, frame/time, mode, active sites, force, and
+  compliance. Video inspection is additional evidence; numerical endpoint,
+  orientation, whole-body, force/yield, fall, and reset gates remain
+  authoritative and tracking accuracy remains the first priority.
 
 ## Phase 6 current result
 
@@ -111,10 +140,10 @@ Still required before completion:
   and `phase6_real_paired` remain absent and fresh. No 4096-environment
   benchmark or six-protocol simulator collection was started.
 
-next_action: After confirming the host GPU has no unrelated compute process,
-repeat Phase-6 matrix item 2 in the fresh
-`phase6_residual_gpu_smoke_idle_retry1` path and independently audit step 5.
-Do not overwrite the first attempt and do not start item 3 until the idle-GPU
-repeat passes. Then execute items 3–9 in order without changing the pre-data
-acceptance limits. Do not mark Phase 6 `PASSED` or the task `COMPLETE` before
-all formal evidence passes.
+next_action: Keep this motion worktree paused. From the clean CHIP acceptance
+head, create an isolated `experiment/chip-runtime-video-validation` worktree
+and finish the regression/runtime/video gate specified in `phase6_handoff.md`.
+Only after that gate passes and its videos are ready for human review may this
+branch resume Phase-6 matrix item 2 at the fresh
+`phase6_residual_gpu_smoke_idle_retry1` path. Do not overwrite either branch's
+accepted evidence, relax pre-data limits, or mark this task complete early.
