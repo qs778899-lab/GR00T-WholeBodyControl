@@ -162,3 +162,6 @@
   32-frame rendered smokes; Phase 4 remains `IN_PROGRESS`.
 - Pushed the GPU-wait safety checkpoints through `edab3f3`; the experimental
   worktree is recoverable without changing any protected branch.
+- A second host-visible check after a 30-second observation window remained
+  busy (`26%`, `14052 MiB`) with the same three external GRAIL Python compute
+  processes. No GPU command was launched and no external process was signaled.
