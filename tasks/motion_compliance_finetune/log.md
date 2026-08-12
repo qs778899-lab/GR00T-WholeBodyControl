@@ -970,3 +970,31 @@
   all four CLI help gates, AST parsing, and `git diff --check` passed. This
   closes the two P1 code/test gaps but does not satisfy matrix item 1 or any
   pending performance/tracking gate.
+
+## 2026-08-12 — Paused after post-P1 CPU checkpoint
+
+- The user requested a pause before further execution. No new training,
+  Phase-2/3 real IsaacLab smoke, 4096-environment scheduler benchmark, or
+  six-protocol simulator collection was started.
+- Post-P1 CPU evidence obtained before the pause: combined core/adapter/
+  training/checkpoint/evaluation/collector suite `127 passed, 1 skipped in
+  25.63s`; deployment suite `33 passed, 96 warnings in 3.14s`; official
+  residual contract, trainer help/config, official Phase-4 residual init, four
+  Phase-6 help gates, and real Hydra manager-provenance composition passed.
+- Step-5 and step-6 checkpoint audit JSONs were atomically regenerated and
+  read back with the expected steps, twelve changed residual tensors, frozen
+  55/17 base tensors, and twelve optimizer slots. Their combined orchestration
+  output was truncated before exit statuses were retained, so the exact audit
+  commands remain mandatory on resume and are not promoted as final evidence.
+- The three reserved formal Phase-6 outputs remain absent:
+  `phase6_residual_gpu_smoke_post_restart`, `phase6_scheduler_4096.json`, and
+  `phase6_real_paired`.
+- The environment changed during the checkpoint. An earlier native query saw
+  matched NVIDIA `580.173.02` with unrelated GPU jobs; the final two
+  `nvidia-smi` queries failed to communicate with the driver. No unrelated
+  process was touched. GPU availability is now an explicit resume precondition.
+- Branch checkpoint before documentation: local and tracked remote
+  `experiment/motion-compliance` both at
+  `30f2190d1b70321705e92dde2b5c004fc8bee6d4`. Main and CHIP worktrees were
+  clean and untouched. Phase 6 remains `IN_PROGRESS`; task remains
+  `NOT_COMPLETE`.

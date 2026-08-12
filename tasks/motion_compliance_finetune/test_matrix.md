@@ -299,12 +299,13 @@ Environment contract for the current Phase-6 continuation: the historical
 Phase-2/3/4 commands above preserve the NVIDIA 580.159 compatibility paths that
 were actually used for those accepted phase results.  They are provenance, not
 the current launch contract.  At the 2026-08-12 pause that temporary directory
-is absent and the host kernel module/CUDA/NVML userspace is natively matched at
-580.173.02.  Phase-6 reruns therefore use the native loader without temporary
-`LD_LIBRARY_PATH`, `LD_PRELOAD`, or `VK_ICD_FILENAMES` overrides.  Before any
-GPU result, revalidate the exact current versions, CUDA availability in
-`sonic_backup`, and that unrelated workloads are no longer consuming the GPU.
-If the host version changes, update this Phase-6 contract before execution.
+is absent. The native host kernel module/CUDA/NVML userspace was observed
+matched at 580.173.02 earlier on 2026-08-12, but the final pause query could no
+longer communicate with the NVIDIA driver. Phase-6 reruns may use the native
+loader without temporary `LD_LIBRARY_PATH`, `LD_PRELOAD`, or
+`VK_ICD_FILENAMES` overrides only after revalidating the exact current
+versions, CUDA availability in `sonic_backup`, and an idle GPU. If the host
+state differs, update this Phase-6 contract before execution.
 
 1. Run the complete test suite from Phases 1–5.
 2. Low-resource IsaacLab smoke/performance run in `sonic_backup`: one audited
