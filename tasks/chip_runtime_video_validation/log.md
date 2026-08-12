@@ -165,3 +165,30 @@
 - A second host-visible check after a 30-second observation window remained
   busy (`26%`, `14052 MiB`) with the same three external GRAIL Python compute
   processes. No GPU command was launched and no external process was signaled.
+
+## 2026-08-13 — Phase 4 diagnostic publication gate strengthened
+
+- Added one end-to-end CPU golden test for the separate non-formal rendered
+  diagnostic. It builds a 32-frame dual-wrist 5 N trace with the signed CHIP
+  target relation, uses the production atomic panel writer, and emits real
+  H.264/yuv420p at 960x720 and 50 fps. The test then invokes the independent
+  Phase-4 auditor as a subprocess; checkpoint, motion, trace, summary, video,
+  frame-count, duration, reset, force, and provenance bindings all passed.
+- The focused diagnostic suite passed `6` tests; all new review tests passed
+  `70` tests; the tracker-neutral Python-3.10 suite passed `33` tests; and the
+  resolved accepted suite remained `136` tests with `4` CUDA skips. The proper
+  Torch-bearing portable interpreter passed `139` tests with `42` expected
+  dependency/CUDA skips. An earlier attempt with the dependency-only review
+  environment was rejected because that environment intentionally lacks Torch
+  and is not an accepted full-suite interpreter.
+- Ruff E/F/I and both unstaged/cached diff checks passed. The descendant
+  structural audit again reproduced accepted Phase-4/5 tree digests
+  `34cba440...` / `9efef421...`; its GPU gate remains explicitly
+  `SKIPPED_NOT_ACCEPTED` while the host is busy.
+- The latest host query reported RTX 4090 driver `580.173.02`, 14036 MiB used,
+  and 26% utilization, with the unchanged three unrelated Python compute jobs
+  plus the terminal process. They were not touched. No IsaacLab application,
+  GPU test, diagnostic output root, or formal Phase-5 root was started.
+- The tested diagnostic-publication enhancement is committed as `cf85953`.
+  Phase 4 remains `IN_PROGRESS`; only its native GPU suite and real rendered
+  diagnostic are pending before the required final Phase-1–3 rerun.

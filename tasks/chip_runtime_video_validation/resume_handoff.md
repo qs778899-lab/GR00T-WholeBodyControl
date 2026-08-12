@@ -1,206 +1,188 @@
-# Pause and resume handoff
+# Current continuation handoff
 
-## Exact checkpoint
+## Exact state on 2026-08-13
 
 - Task: `chip_runtime_video_validation`.
 - Worktree: `/tmp/gr00t_chip_runtime_video`.
 - Branch: `experiment/chip-runtime-video-validation`.
-- Accepted source: `experiment/chip-compliance@3dbfb6f211511bb04fedcd326f3265cdafcfa68c`.
-- Last implementation commit: `625b3299bb302a78a3b8cb7fe50a60c8c561730f`.
-- State at pause: Phase 1 and Phase 2 `PASSED`; Phase 3 `IN_PROGRESS` but no
-  Phase-3 implementation or test execution has begun.
-- Completion: `NOT_COMPLETE`. Phases 3, 4, 5, and 6 remain mandatory.
-- Formal result root
-  `/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/runtime_video_validation_v1`
-  was still absent at pause. It must remain absent until Phase 5.
+- Immutable accepted source:
+  `experiment/chip-compliance@3dbfb6f211511bb04fedcd326f3265cdafcfa68c`.
+- Last implementation commit:
+  `cf859530565fa01865fb4abd2a1c61101ccf289e`.
+- Phase 1, Phase 2, and Phase 3: `PASSED`.
+- Phase 4: `IN_PROGRESS` at `WAITING_FOR_IDLE_GPU_PHASE4_SMOKES`.
+- Phase 5 and Phase 6: `PENDING`; overall task: `NOT_COMPLETE`.
+- Protected `main`, accepted CHIP, and motion-compliance branches were not
+  moved by this task.
 
-The user requested a pause, so this document records an intentionally incomplete
-checkpoint. Do not mark Phase 3 passed and do not jump to a later phase.
+The formal root
+`/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/runtime_video_validation_v1`
+and the separate Phase-4 diagnostic root
+`/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/runtime_video_phase4_smoke_v1`
+remain absent. Do not create the formal root before Phase 5. Do not describe a
+short Phase-4 diagnostic as formal performance evidence.
 
-## What is implemented and verified
+## Implemented and verified
 
-### Accepted CHIP source inherited unchanged
+### Inherited CHIP controller remains unchanged
 
-The branch starts from the completed optional CHIP-style SONIC implementation.
-Its tracker-neutral compliance math uses arbitrary named sites and the relation
-`g_hind = g_nominal - C * f_on_robot`; the SONIC adapter owns name resolution,
-coordinate conversion, force application, checkpoint migration, and the gated
-residual. Hard-off remains an exact identity path. The accepted controller,
-residual model, trainer, deployment export, and previous evidence were not
-modified by this runtime/video task.
+The accepted optional CHIP path still owns the controller, force command,
+residual actor/critic, checkpoint migration/resume, finetune workflow, ONNX
+export, and accepted 300-frame numeric evidence. The runtime-video branch does
+not modify those accepted implementation paths. The selected target contract is
+explicitly `selected = nominal - C * force_on_robot`; the separate measured
+physical-yield metric remains compliant-minus-stiff displacement projected
+along applied force.
 
-### Phase 1: source and evidence contract
+### Phase 1: source/evidence contract
 
-Phase 1 added the task plan/status/test matrix/log and the read-only pinned audit
-at `artifacts/phase1_contract_audit.py`. It verified:
+The pinned audit verifies source ancestry, protected refs, official and trained
+checkpoint hashes, residual ONNX, original/mirrored robot and SMPL assets,
+ffmpeg/ffprobe, output-root freshness, diff scope, and cache/temp hygiene.
 
-- the accepted source ancestry and protected local/remote refs;
-- official checkpoint, CHIP step-6 checkpoint, residual ONNX, and original plus
-  mirrored robot/SMPL SHA-256 values;
-- system `ffmpeg` and `ffprobe` availability;
-- the fresh formal-output invariant; and
-- task-only diff, cache, temporary-file, staged-diff, and LFS-aware hygiene.
+### Phase 2: portable tracker-neutral review core
 
-### Phase 2: portable review core
+`gear_sonic/compliance_control/review` provides arbitrary-size trace schemas,
+strict identity/time/reference/force alignment, the fixed tracking-first gates,
+bounded non-pickle NPZ/JSON persistence, descriptor-safe SHA-256 binding,
+ffprobe validation, and atomic panel composition. It contains no SONIC/G1 body
+order or IsaacLab dependency. The top-level compliance package uses lazy exports
+so this review core can be imported without Torch or a simulator.
 
-The new `gear_sonic/compliance_control/review` package is independent of SONIC,
-G1, IsaacLab, and Torch imports. It contains:
+### Phase 3: thin SONIC collection/rendering boundary
 
-- `schema.py`: immutable generic traces, protocol roles, pair definitions, and
-  fixed tracking-first acceptance criteria;
-- `alignment.py`: exact identity, ordering, reference, time, force, compliance,
-  mask, and action alignment checks with no interpolation;
-- `metrics.py` and `suite.py`: endpoint/orientation, invariant whole-body,
-  force/yield/cross-coupling, lifecycle, reset, finiteness, and nine-role gates;
-- `io.py` and `_hashing.py`: bounded `O_NOFOLLOW`, no-pickle NPZ/JSON reads,
-  duplicate-member rejection, SHA-256 binding, atomic no-overwrite writes;
-- `video.py`: strict ffprobe validation for H.264, yuv420p, 50 fps, exact frame
-  count/duration/dimensions, ordered panels, and live artifact rebinding; and
-- `__main__.py`: simulator-free review CLI help/probe entrypoint.
+The additive `adapters/sonic/review` layer now contains:
 
-The top-level compliance package now lazily exports its existing public core API
-so importing the portable review layer does not import Torch or a simulator.
-Existing public names were compatibility-tested.
+- exact nine-role definitions and official-versus-trained load semantics;
+- deterministic single-left, single-right, and simultaneous 5 N wrist forcing;
+- name-resolved 14-keypoint snapshots with explicit world/common force;
+- natural-timeout formal traces and reset-owned composer-row clearing;
+- fixed front-oblique 960x720 capture, visible provenance overlays, and atomic
+  H.264/yuv420p 50-fps panel output; and
+- Hydra configs for all nine roles plus thin collect/evaluate/validate CLIs.
 
-Phase-2 evidence at commit `625b329`:
+The signed selected-target relation and the physical-yield direction are tested
+independently. Phase 3 passed its Hydra, fake-manager, lifecycle, camera, real
+tiny-video, CLI help/dry-run, portable-core, full existing CHIP, compile, Ruff,
+protected-tree, and hygiene gates.
 
-- portable review suite: `32 passed` in an isolated `/usr/bin/python3`-derived
-  Python 3.10 environment;
-- portable review suite: `32 passed` independently in `sonic_backup`;
-- pre-existing core suite: `23 passed, 10 subtests passed`;
-- tiny generated-video positive and adversarial codec/fps/frame/hash tests;
-- Ruff E/F/I, source compilation, CLI help, diff, cache, temporary, and absent
-  formal-root checks all passed; and
-- no AppLauncher, IsaacLab environment, training, GPU rollout, or formal video
-  workflow ran.
+### Phase 4 work already complete
 
-## What is not implemented or proven
+The following current-environment regression work has passed:
 
-### Phase 3: thin SONIC collection and rendering
+- accepted Phase-4/5 evidence-tree digests remain exactly
+  `34cba4405dee146c7dd5f29d4731001737e8ae85f6f4d79e3928317b5bb02503`
+  and
+  `9efef42178353072faa457f49934c6fa67ffbf852628470e1f9bbc384046c81e`;
+- descendant source, release-path, protected-ref, workflow-process, diff, and
+  formal-root structural gates pass;
+- all eight accepted help paths and both accepted no-write dry-run workflows;
+- real ONNX Runtime 1.25.0 dynamic/mixed/hard-off parity;
+- independent accepted Phase-5 recomputation: 300 aligned frames, mean paired
+  displacement `0.00131441758 m`, maximum ONNX error `5.82076609e-10`;
+- resolved existing suite: `136` tests, `4` expected CUDA skips;
+- Torch-bearing portable suite: `139` tests, `42` expected dependency/CUDA
+  skips;
+- all new review tests: `70 passed`; tracker-neutral Python-3.10 tests:
+  `33 passed`; and
+- Ruff E/F/I, built-in compilation, diff, cache, temp, and absent-output gates.
 
-None of the following exists yet for this task:
+The separate diagnostic path is implemented but has not yet run in IsaacLab.
+It has an explicit fixed-cutoff schema, never calls a cutoff a timeout, verifies
+finite observations/actions, checks the two real composer-owned force/torque
+rows are exactly zero after both command resets, and records immutable motion
+and checkpoint provenance. Its independent auditor requires exactly 32 trace
+and video frames, H.264/yuv420p/960x720/50 fps, 0.64 s duration, exact frame and
+timestamp indices, no terminal/timeout/fall, both-wrist 5 N activation, the
+signed target relation, bounded output, and live SHA-256 rebinding.
 
-- a SONIC-specific review adapter under
-  `gear_sonic/compliance_control/adapters/sonic/review`;
-- deterministic configs for all nine roles and a review-only event config that
-  removes startup/reset randomization and forces a plane terrain;
-- a complete-natural-timeout collector with exact pre-transition trace samples,
-  action bytes, termination/reset evidence, and one video frame per sample;
-- a bounded fixed front-oblique H.264/yuv420p panel writer with provenance and
-  force/compliance overlays;
-- thin collector, portable evaluator/compositor, and final-validator CLIs; or
-- the Phase-3 fake-manager, Hydra composition, camera, help/dry-run, and full CPU
-  regression tests.
+An end-to-end CPU golden test exercises that publication path using the real
+atomic video writer and the independent audit subprocess. It passed all six
+focused diagnostic tests. This proves the evidence machinery, not the robot
+behavior.
 
-The existing `run_chip_phase5_rollout.py` is only a two-role, fixed-step numeric
-collector. It is not the formal nine-role/full-horizon/video workflow and must
-not be presented as such.
+## Current blocker and safety boundary
 
-### Phase 4: current-environment regression
+The latest host-visible read-only query reported:
 
-No new-tree real simulator smoke, native-driver profiler/parity regression,
-checkpoint/ONNX re-audit, 32-frame rendered diagnostic, or complete accepted
-CHIP regression matrix has run for this branch.
+- NVIDIA GeForce RTX 4090, driver `580.173.02`;
+- 14036 MiB of 24564 MiB used and 26% GPU utilization;
+- unrelated compute PIDs `2472251`, `2660761`, and `2661453`, each using about
+  4.1 GiB, plus the terminal GPU process `195750`.
 
-### Phase 5: formal evidence and videos
+The Python jobs are unrelated GRAIL stair replay/video work. Never signal,
+terminate, renice, or otherwise alter them. Do not launch any CHIP GPU test
+until a fresh host query shows no unrelated compute application. The current
+native driver is the required `580.173.02`; the old temporary 580.159
+compatibility directory is absent and should not be reconstructed unless a real
+native failure demonstrates that it is necessary.
 
-No formal rollout has run. The required 18 full traces (nine roles for original
-and mirrored motion), ten paired review MP4s, metric reports, independent
-manifests, manual checklist, runtime/FPS/memory data, and capacity audit do not
-exist. Consequently there are currently no videos suitable for human review.
+One discarded test invocation used the dependency-only Python-3.10 review
+environment for the complete old suite and failed because that environment
+intentionally has no Torch. It is not an acceptance result. Use
+`/home/lab/Desktop/GR00T-WholeBodyControl/.venv_sim/bin/python` for the accepted
+portable full suite and `/tmp/chip_review_system_venv/bin/python` only for
+`test_chip_review_core.py`.
 
-### Phase 6: final audit and handoff
+## Work not yet implemented or proven
 
-No final recomputation, protected-ref/evidence-tree audit, process/output/cache
-audit, completion mark, or final video handoff has run.
+### Remaining Phase 4 GPU gates
 
-## First issue to resolve on resume
+No current-branch native CUDA or IsaacLab process has run. Still mandatory:
 
-The accepted CHIP contract and implementation define the selected target as
-`nominal - C * force_on_robot`. The Phase-2 synthetic review fixture currently
-constructs its selected target with a positive `+0.10 m` shift for a positive
-`5 N` force. The generic review suite uses the norm of selected-target shift, so
-this unrealistic fixture still passed. This is a test-coverage issue, not
-evidence that the accepted controller math is wrong.
+1. resolved full discovery with CUDA tests enabled and no skips;
+2. the 4096-environment/14-site profiler gate rejecting `aten::nonzero` and
+   `aten::_local_scalar_dense`;
+3. one-environment disabled and enabled 100-step Phase-2 simulator smokes;
+4. the resolved Phase-3 observation/action/value shape and hard-off parity
+   smoke; and
+5. one real 32-frame `simultaneous_compliant` rendered diagnostic followed by
+   `phase4_rendered_smoke_audit.py` and the non-skipped descendant GPU/process
+   audit.
 
-At the same time, the accepted Phase-5 evaluation intentionally defines physical
-policy yield as
-`compliant_actual_site - stiff_actual_site` projected **along** the matched
-force. That positive measured-yield check should not be flipped merely because
-the hindsight observation has a minus sign: the selected observation target and
-the robot's physical displacement under applied force are different quantities.
+After those pass, rerun every Phase-1–3 test and all final Phase-4 hygiene
+checks. Only then mark Phase 4 `PASSED` and advance to Phase 5.
 
-Before writing the real collector:
+### Phase 5 formal full-clip evidence
 
-1. change/add a deterministic fixture that asserts the selected target exactly
-   follows `nominal - C * force_on_robot` for active sites and is exact nominal
-   for inactive/hard-off sites;
-2. preserve a separate positive projection gate for measured compliant-versus-
-   stiff physical yield along force;
-3. run the complete Phase-2 portable tests again after any Phase-2 test/core
-   correction; and
-4. make the Phase-3 fake-manager test compare the actual SONIC target builder
-   against that signed contract.
+None of the requested formal videos exists yet. Phase 5 must collect all 18
+full natural-timeout traces: nine roles for both original and mirrored motions.
+It must evaluate the fixed tracking-first thresholds without relaxing them,
+then generate ten trace-bound side-by-side MP4s (five comparisons per motion),
+independently hash/probe every artifact, produce the manual-review checklist,
+and record FPS, peak CUDA memory, total size, and largest log. These MP4s—not
+the short diagnostic—are the videos to provide for human effect review.
 
-Do not infer force direction from wrist names or body index order. Record the
-world vector, common-frame vector, target delta, and measured paired displacement
-explicitly so the numeric trace and video overlay can be audited together.
+### Phase 6 final handoff
 
-## Phase-3 implementation boundary already audited
+The final all-tests/audits rerun, formal evidence recomputation, protected-ref
+verification, capacity/cache/process checks, COMPLETE status, clickable video
+index, final commit, and push remain pending.
 
-Use three narrow layers and do not modify accepted controller/model/trainer code:
+## Exact safe continuation order
 
-1. Generic review code remains under `compliance_control/review`.
-2. SONIC-only name/index/frame/protocol/camera logic goes under
-   `adapters/sonic/review`.
-3. Scripts under `gear_sonic/scripts` stay thin and import AppLauncher only
-   after ordinary argument parsing, so `--help` and `--dry-run` cannot launch a
-   simulator or create an output directory.
+1. Read repository `AGENTS.md`, then `status.md`, `plan.md`, this handoff, and
+   the Phase-4 section of `test_matrix.md`.
+2. Work only in `/tmp/gr00t_chip_runtime_video` on
+   `experiment/chip-runtime-video-validation`. Require a clean worktree and a
+   synchronized remote branch before new implementation.
+3. Reconfirm both output roots are absent and rerun a host-visible NVML process
+   query. If any unrelated compute process remains, stop before GPU launch and
+   keep Phase 4 `IN_PROGRESS`.
+4. Once idle, execute the five remaining Phase-4 GPU gates serially. Use the
+   current native driver environment first; do not preload the obsolete
+   compatibility path.
+5. Write the real diagnostic only below a new dedicated Phase-4 diagnostic
+   root. On failure preserve the failed attempt for diagnosis and use a new
+   versioned root; never overwrite or silently relabel it.
+6. Run the independent rendered-smoke and descendant audits after all CHIP
+   processes exit. Then rerun all Phase-1–3 tests and Phase-4 hygiene gates.
+7. Update `status.md` only from the actual results. Do not enter Phase 5 unless
+   every Phase-4 item passes.
+8. Run Phase 5 only in a fresh idle window, from the still-missing strict formal
+   root. A failed fixed acceptance gate stops the phase; thresholds and trace
+   horizons are immutable.
 
-Compose every one of the nine roles for both motion inputs. Pin one environment,
-the release 14-body ordered contract, named left/right wrist offsets, 50 Hz,
-seed 0, deterministic first frame, complete natural timeout, plane terrain, no
-observation corruption, and no stochastic startup/reset augmentation. The
-review event config should retain only lifecycle-safe compliance reset behavior.
-
-For stiff/compliant A/B roles, drive the same deterministic 5 N force schedule
-and site mask into the simulator in both runs. The stiff actor receives exact
-hard-off/zero compliance conditioning; the compliant actor receives the active
-command. Record the final safety-limited force actually applied, not the
-requested value. Stop immediately on the one natural timeout so no auto-reset
-suffix enters the trace.
-
-## Safe resume procedure
-
-1. Read `/home/lab/Desktop/GR00T-WholeBodyControl/AGENTS.md`, this file,
-   `status.md`, `plan.md`, and the Phase-3 section of `test_matrix.md`.
-2. Enter `/tmp/gr00t_chip_runtime_video`. If `/tmp` was cleared, recreate a
-   worktree for the already-pushed
-   `experiment/chip-runtime-video-validation` branch from the main repository;
-   do not branch from current `main` or cherry-pick onto the accepted CHIP branch.
-3. Require a clean worktree and verify `HEAD`/remote ancestry. At this pause the
-   protected refs were exactly:
-   - `main` and `origin/main`: `6d6d8ae9a04b67a977b027acecfe20c65aca0647`;
-   - CHIP local/remote: `3dbfb6f211511bb04fedcd326f3265cdafcfa68c`;
-   - motion local/remote: `9c290f29b31017be1ff54c23bbe497d9278249ae`.
-4. Re-run the Phase-1 read-only contract audit and require the formal root to be
-   absent. Revalidate hashes instead of trusting this snapshot.
-5. Execute only Phase 3, beginning with the signed-target test above. Run every
-   Phase-3 test in `test_matrix.md`; fix and rerun the same tests on failure.
-6. Only after all Phase-3 tests pass, mark Phase 3 `PASSED`, advance status to
-   Phase 4, and commit/push a clean checkpoint.
-7. Phase 5 must wait for host-visible NVML to show the native RTX 4090 idle. An
-   unrelated GRAIL process was previously observed; never terminate it. The
-   sandboxed `nvidia-smi` check at pause could not access the driver, so this
-   must be checked with the approved host execution path immediately before a
-   GPU run.
-
-## Pause integrity
-
-Before this pause documentation was written, the runtime-video worktree had no
-uncommitted files, its local branch matched
-`origin/experiment/chip-runtime-video-validation@625b329`, the protected refs
-matched the hashes above, and the formal output root was absent. No task
-simulator or training process was started during the pause audit. The
-documentation commit created for this pause is the only intended change after
-`625b329`.
+`log.md` contains the chronological command/result history. `status.md` is the
+machine-readable current state. This handoff is the authoritative restart map;
+the older Phase-2 pause claims have been superseded.

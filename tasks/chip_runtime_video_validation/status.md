@@ -18,7 +18,7 @@ execution_state: `WAITING_FOR_IDLE_GPU_PHASE4_SMOKES`
 
 last_completed_phase: `3`
 
-last_implementation_commit: `edab3f315c8717074c67f34e19c83bea7b1db1e3`
+last_implementation_commit: `cf859530565fa01865fb4abd2a1c61101ccf289e`
 
 | Phase | Name | Status |
 |---|---|---|
@@ -50,6 +50,15 @@ last_implementation_commit: `edab3f315c8717074c67f34e19c83bea7b1db1e3`
   have passed. Native GPU smokes and the separate 32-frame rendered diagnostic
   remain pending because unrelated compute currently occupies the RTX 4090.
   Those processes have not been touched.
+- The diagnostic evidence contract now has an end-to-end CPU golden test. It
+  writes 32 trace-aligned frames through the real atomic H.264/yuv420p writer,
+  persists bounded trace/summary artifacts, and requires the independent
+  auditor to recheck checkpoint/motion/trace/video hashes and exact ffprobe
+  properties. This validates the publication/audit path without claiming a
+  simulator result or creating either runtime output root.
+- The latest host-visible idle check still showed the native RTX 4090 at 26%
+  utilization with 14036 MiB used and the same three unrelated Python compute
+  jobs. Phase 4 therefore remains safely at the GPU wait boundary.
 
 ## Phase 1 result
 
