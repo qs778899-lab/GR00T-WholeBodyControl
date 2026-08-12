@@ -219,3 +219,26 @@
   present and their CPU time continued increasing at approximately one second
   per wall second, proving they are active external jobs rather than stale CUDA
   contexts. No GPU test was launched and no process was modified.
+
+## 2026-08-13 — External GPU boundary formally blocked
+
+- A third consecutive goal turn began with a fresh authoritative state check.
+  The branch and remote remained synchronized at `d289869`; both the Phase-4
+  diagnostic root and Phase-5 formal root remained absent; no task file was
+  dirty.
+- Host NVML again reported the native RTX 4090 / driver `580.173.02`, 14040 MiB
+  used, and 26% utilization. The same unrelated PIDs `2472251`, `2660761`, and
+  `2661453` each retained about 4.1 GiB and remained in running state. Their
+  elapsed/CPU times were approximately `9.57 h / 10.41 h`, `6.35 h / 7.12 h`,
+  and `6.34 h / 7.11 h`, respectively, so the condition is active external
+  compute rather than a stale allocation.
+- Every Phase-4 non-GPU gate has already passed. The remaining native CUDA,
+  profiler, IsaacLab disabled/enabled, real-shape, and rendered-diagnostic gates
+  cannot safely run concurrently; Phase 5 cannot begin before Phase 4 passes.
+  No further in-scope work can produce the missing real evidence until the GPU
+  becomes idle.
+- Recorded `BLOCKED_EXTERNAL_ACTIVE_GPU_JOBS` without changing the Phase-4
+  `IN_PROGRESS` or overall `NOT_COMPLETE` completion facts. No external process
+  was signaled or modified. Resume requires a fresh empty host NVML compute list
+  (apart from resolving any explicitly audited non-compute UI context) and must
+  continue from the exact Phase-4 order in `resume_handoff.md`.

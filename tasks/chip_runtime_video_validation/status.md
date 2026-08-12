@@ -8,13 +8,17 @@ source_commit: `3dbfb6f211511bb04fedcd326f3265cdafcfa68c`
 
 branch: `experiment/chip-runtime-video-validation`
 
-overall_status: `IN_PROGRESS`
+overall_status: `BLOCKED`
 
 current_phase: `4`
 
 completion: `NOT_COMPLETE`
 
-execution_state: `WAITING_FOR_IDLE_GPU_PHASE4_SMOKES`
+execution_state: `BLOCKED_EXTERNAL_ACTIVE_GPU_JOBS`
+
+blocked_since: `2026-08-13`
+
+resume_condition: `Host NVML shows no unrelated compute application on the RTX 4090.`
 
 last_completed_phase: `3`
 
@@ -69,6 +73,12 @@ last_implementation_commit: `10f64e50e2d3a764eef8cc21e13f4afc36bfad6d`
 - A subsequent one-minute host monitor remained at 26–27% utilization with
   14026–14039 MiB used. The three unrelated Python jobs were confirmed active,
   not stale contexts: each accumulated roughly one CPU second per wall second.
+- Three consecutive goal turns have now observed the same active PIDs
+  `2472251`, `2660761`, and `2661453`. The latest check still showed 14040 MiB
+  used and 26% utilization; the jobs were in running state with approximately
+  10.4, 7.1, and 7.1 CPU-hours. No safe Phase-4 GPU gate can start until those
+  unrelated jobs exit. Phase 4 remains `IN_PROGRESS`, and the task remains
+  `NOT_COMPLETE`; `BLOCKED` describes only the external execution boundary.
 
 ## Phase 1 result
 
@@ -124,9 +134,10 @@ last_implementation_commit: `10f64e50e2d3a764eef8cc21e13f4afc36bfad6d`
   release-tree/ref checks, staged/unstaged diff checks, formal-root absence,
   and cache/temporary hygiene passed. No simulator or GPU process ran.
 
-next_action: Execute only Phase 4. Re-run the accepted Phase-6 matrix at the
-documented descendant boundary, native disabled/enabled/profiler and real-shape
-smokes, checkpoint/ONNX Runtime audits, and both dry-run workflows. Only after a
-fresh host-visible idle-GPU check, collect one separate 32-frame rendered smoke;
-never terminate unrelated compute. Keep accepted evidence byte-identical and do
-not create the Phase-5 formal output root.
+next_action: Resume only after a fresh host-visible NVML query reports no
+unrelated compute application. Then execute only the remaining Phase-4 native
+CUDA suite, profiler, disabled/enabled simulator smokes, real-shape smoke, and
+separate 32-frame rendered diagnostic. Never terminate unrelated compute. Keep
+accepted evidence byte-identical and do not create the Phase-5 formal output
+root. After any resume, change `overall_status` back to `IN_PROGRESS` before
+launching work and preserve Phase 4 as the current phase until every gate passes.

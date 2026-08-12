@@ -10,8 +10,11 @@
 - Last implementation commit:
   `10f64e50e2d3a764eef8cc21e13f4afc36bfad6d`.
 - Phase 1, Phase 2, and Phase 3: `PASSED`.
-- Phase 4: `IN_PROGRESS` at `WAITING_FOR_IDLE_GPU_PHASE4_SMOKES`.
+- Phase 4: `IN_PROGRESS` at `BLOCKED_EXTERNAL_ACTIVE_GPU_JOBS`.
 - Phase 5 and Phase 6: `PENDING`; overall task: `NOT_COMPLETE`.
+- Task execution status: `BLOCKED` after the same active external GPU jobs were
+  observed in three consecutive goal turns. This is a resumable environment
+  boundary, not a completed or failed Phase 4.
 - Protected `main`, accepted CHIP, and motion-compliance branches were not
   moved by this task.
 
@@ -123,6 +126,13 @@ until a fresh host query shows no unrelated compute application. The current
 native driver is the required `580.173.02`; the old temporary 580.159
 compatibility directory is absent and should not be reconstructed unless a real
 native failure demonstrates that it is necessary.
+
+The latest third-turn audit still found PIDs `2472251`, `2660761`, and
+`2661453` running, with 14040 MiB used and 26% GPU utilization. Their CPU time
+continued increasing, so waiting for an external-state change is mandatory.
+When that condition clears, set task `overall_status` back to `IN_PROGRESS` and
+resume the exact remaining Phase-4 list below; do not restart earlier passed
+phases or advance directly to Phase 5.
 
 One discarded test invocation used the dependency-only Python-3.10 review
 environment for the complete old suite and failed because that environment
