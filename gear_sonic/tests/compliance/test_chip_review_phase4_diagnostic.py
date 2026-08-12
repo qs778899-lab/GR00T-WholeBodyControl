@@ -215,5 +215,6 @@ def test_collector_diagnostic_dry_run_is_labelled_and_no_write(tmp_path: Path):
     plan = json.loads(completed.stdout)
     assert plan["diagnostic_frames"] == 32
     assert plan["publication_kind"] == "diagnostic_fixed_cutoff_nonformal"
+    assert len(plan["motion_sha256"]) == 64
     assert plan["app_launcher_started"] is False
     assert not output_root.exists()

@@ -94,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
         else args.trained_checkpoint
     )
     checkpoint_sha256 = _sha256(checkpoint)
+    motion_sha256 = _sha256(args.motion_file)
     if args.dry_run:
         plan = build_review_dry_run_plan(
             role,
@@ -105,6 +106,7 @@ def main(argv: list[str] | None = None) -> int:
             seed=args.seed,
         )
         plan["checkpoint_sha256"] = checkpoint_sha256
+        plan["motion_sha256"] = motion_sha256
         plan["branch_commit"] = _branch_commit()
         plan["diagnostic_frames"] = args.diagnostic_frames
         plan["publication_kind"] = (
@@ -141,6 +143,8 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             role=role,
             motion_id=args.motion_id,
+            motion_file=args.motion_file,
+            motion_sha256=motion_sha256,
             seed=args.seed,
             checkpoint=checkpoint,
             checkpoint_sha256=checkpoint_sha256,

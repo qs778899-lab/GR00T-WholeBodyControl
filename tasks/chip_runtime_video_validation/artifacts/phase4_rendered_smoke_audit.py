@@ -17,6 +17,9 @@ _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _TRAINED_CHECKPOINT_SHA256 = (
     "71bce134e7d2d5f83f5ad9a4576650c419a2d70bcc764a4e68480242dfc67c02"
 )
+_ROBOT_MOTION_SHA256 = (
+    "005aaba3906fa6b99a8b4e89e9d01845d90c5699abf0b5072cc07b099e894f2b"
+)
 _FORMAL_OUTPUT_ROOT = Path(
     "/home/lab/Desktop/GR00T-WholeBodyControl/compliance_control/runs/chip/"
     "runtime_video_validation_v1"
@@ -33,6 +36,8 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--branch-commit", required=True)
+    parser.add_argument("--trained-checkpoint", type=Path, required=True)
+    parser.add_argument("--motion-file", type=Path, required=True)
     parser.add_argument(
         "--formal-output-root",
         type=Path,
@@ -47,6 +52,18 @@ def _sha256_stream(stream) -> str:
     for chunk in iter(lambda: stream.read(1024 * 1024), b""):
         digest.update(chunk)
     return digest.hexdigest()
+
+
+def _regular_sha256(path: Path, *, label: str) -> str:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise ValueError(f"{label} must be a regular non-symlink file") from error
+    with os.fdopen(descriptor, "rb") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError(f"{label} must be a regular non-symlink file")
+        return _sha256_stream(stream)
 
 
 def _load_trace(path: Path, expected_fields: tuple[str, ...]) -> tuple[dict, str]:
@@ -187,6 +204,13 @@ def main(argv: list[str] | None = None) -> int:
     trace_path = role_root / "trace.npz"
     summary_path = role_root / "summary.json"
     video_path = role_root / "panel.mp4"
+    if _regular_sha256(
+        args.trained_checkpoint,
+        label="trained checkpoint",
+    ) != _TRAINED_CHECKPOINT_SHA256:
+        raise AssertionError("trained checkpoint SHA-256 mismatch")
+    if _regular_sha256(args.motion_file, label="robot motion") != _ROBOT_MOTION_SHA256:
+        raise AssertionError("robot motion SHA-256 mismatch")
 
     if str(_REPOSITORY_ROOT) not in sys.path:
         sys.path.insert(0, str(_REPOSITORY_ROOT))
@@ -218,6 +242,8 @@ def main(argv: list[str] | None = None) -> int:
         "checkpoint_load_semantics": "native_strict_resume",
         "branch_commit": args.branch_commit,
         "motion_id": _EXPECTED_MOTION,
+        "motion_file": str(args.motion_file.resolve()),
+        "motion_sha256": _ROBOT_MOTION_SHA256,
         "seed": 0,
         "frame_count": _EXPECTED_FRAMES,
         "trace_kind": "diagnostic_fixed_cutoff_nonformal",
@@ -245,6 +271,8 @@ def main(argv: list[str] | None = None) -> int:
     for name, expected in expected_summary.items():
         if summary.get(name) != expected:
             raise AssertionError(f"diagnostic summary mismatch: {name}")
+    if Path(summary.get("checkpoint", "")).resolve() != args.trained_checkpoint.resolve():
+        raise AssertionError("diagnostic checkpoint path provenance mismatch")
     if int(summary.get("source_motion_frame_count", 0)) <= _EXPECTED_FRAMES:
         raise AssertionError("diagnostic source motion is not longer than its cutoff")
     if summary.get("trace_sha256") != trace_sha256:

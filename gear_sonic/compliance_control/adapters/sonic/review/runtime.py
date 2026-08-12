@@ -156,6 +156,8 @@ def collect_sonic_review_role(
     config: object,
     role: ReviewRole,
     motion_id: str,
+    motion_file: Path,
+    motion_sha256: str,
     seed: int,
     checkpoint: Path,
     checkpoint_sha256: str,
@@ -177,6 +179,10 @@ def collect_sonic_review_role(
 
     if paths.role_name != role.name or paths.motion_id != motion_id:
         raise ValueError("artifact layout does not match role/motion")
+    if not motion_file.is_file() or motion_file.is_symlink():
+        raise FileNotFoundError(motion_file)
+    if _sha256(motion_file) != motion_sha256:
+        raise ValueError("motion SHA-256 changed before collection")
     if diagnostic_frame_limit is not None and (
         type(diagnostic_frame_limit) is not int or diagnostic_frame_limit < 8
     ):
@@ -404,6 +410,8 @@ def collect_sonic_review_role(
             "checkpoint_load_semantics": checkpoint_load_semantics,
             "branch_commit": branch_commit,
             "motion_id": motion_id,
+            "motion_file": str(motion_file.resolve()),
+            "motion_sha256": motion_sha256,
             "seed": seed,
             "frame_count": run_frame_count,
             "source_motion_frame_count": expected_frame_count,
