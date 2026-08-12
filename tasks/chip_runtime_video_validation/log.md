@@ -69,3 +69,22 @@
   data or accepted evidence was deleted.
 - Phase 2 is `PASSED`; Phase 3 is now the only in-progress phase. No simulator,
   GPU, accepted evidence, or formal output was touched.
+
+## 2026-08-12 — User-requested pause before Phase 3 implementation
+
+- Re-read the repository engineering rules and the current Phase-3 status.
+- Confirmed the worktree was clean at pushed commit `625b329`; protected main,
+  accepted CHIP, and motion local/remote refs still matched their pinned hashes.
+- Confirmed the formal Phase-5 output root remained absent. The sandbox could
+  not access the NVIDIA driver during this pause audit, so no claim about current
+  GPU idleness is recorded; host-visible NVML remains a mandatory preflight.
+- Performed only read-only Phase-3 boundary inspection. No adapter, config,
+  collector, renderer, simulator, training run, or formal artifact was started.
+- Identified a resume-first test-coverage issue: the accepted implementation
+  correctly uses `selected = nominal - C * force_on_robot`, while the portable
+  synthetic fixture uses a positive selected-target shift. Its norm-only target
+  check therefore does not exercise the signed relation. The distinct accepted
+  physical-yield metric remains compliant-minus-stiff displacement projected
+  along force. `resume_handoff.md` records how to test both without conflation.
+- Set execution state to `PAUSED_BY_USER`; Phase 3 remains `IN_PROGRESS` and the
+  overall task remains `NOT_COMPLETE`.

@@ -14,7 +14,11 @@ current_phase: `3`
 
 completion: `NOT_COMPLETE`
 
-execution_state: `RUNNING_PHASE3_THIN_COLLECTION_RENDERING`
+execution_state: `PAUSED_BY_USER`
+
+last_completed_phase: `2`
+
+last_implementation_commit: `625b3299bb302a78a3b8cb7fe50a60c8c561730f`
 
 | Phase | Name | Status |
 |---|---|---|
@@ -37,8 +41,11 @@ execution_state: `RUNNING_PHASE3_THIN_COLLECTION_RENDERING`
   step-6 checkpoint, accepted ONNX, ffmpeg, and ffprobe are present.
 - Formal output root `compliance_control/runs/chip/runtime_video_validation_v1`
   was absent before task creation.
-- The GPU currently has unrelated GRAIL compute. It must not be terminated;
-  Phase 5 waits for a verified idle window while Phases 1–3 proceed on CPU.
+- Unrelated GRAIL GPU compute was last observed before the pause. It must never
+  be terminated; Phase 5 requires a fresh host-visible idle-window check.
+- The user paused the task before any Phase-3 implementation. Phase 3 remains
+  `IN_PROGRESS`, has not passed its test matrix, and must be resumed rather than
+  skipped. No Phase-4 simulator run or Phase-5 formal output has started.
 
 ## Phase 1 result
 
@@ -71,7 +78,10 @@ execution_state: `RUNNING_PHASE3_THIN_COLLECTION_RENDERING`
 - Ruff, source compilation, CLI help, diff, formal-root absence, and cache/
   temporary hygiene gates passed. No IsaacLab application or GPU task ran.
 
-next_action: Implement only the Phase-3 thin SONIC review adapter, deterministic
-nine-role collector, frame-exact renderer, portable evaluator/final-validator
-CLIs, and run every Phase-3 fake-manager/Hydra/help/regression gate. Do not start
-the Phase-4 real simulator or create the formal Phase-5 output root.
+next_action: Read `resume_handoff.md`, then execute only Phase 3. First pin and
+test the signed CHIP target relation (`selected = nominal - C * force_on_robot`)
+while retaining the accepted measured physical-yield projection along force.
+Then implement the thin SONIC review adapter, deterministic nine-role collector,
+frame-exact renderer, portable evaluator/final-validator CLIs, and run every
+Phase-3 fake-manager/Hydra/help/regression gate. Do not start Phase 4 or create
+the formal Phase-5 output root.
