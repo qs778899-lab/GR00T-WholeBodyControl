@@ -25,7 +25,13 @@ cross_branch_priority: `CHIP_RUNTIME_VIDEO_VALIDATION_REQUIRED_BEFORE_MOTION_RES
 
 chip_validated_source: `experiment/chip-compliance@3dbfb6f211511bb04fedcd326f3265cdafcfa68c`
 
-chip_followup_branch: `experiment/chip-runtime-video-validation` (create only on resume in an isolated worktree)
+chip_followup_branch: `experiment/chip-runtime-video-validation`
+
+chip_followup_checkpoint: `dd49c7f7f4f9bfdc8dd0f27ca8a6169ffdbb38a1`
+
+chip_followup_state: `PHASE_4_IN_PROGRESS_BLOCKED_EXTERNAL_ACTIVE_GPU_JOBS`
+
+saved_motion_head_before_checkpoint_update: `9c290f29b31017be1ff54c23bbe497d9278249ae`
 
 paused_implementation_head: `2dddfdaee9ce8d4c5debed1c51fbc224ec942606`
 
@@ -39,10 +45,15 @@ remote_head_before_chip_priority_documentation: `origin/experiment/motion-compli
   passed a fresh current-environment full regression, real full-horizon runtime
   validation, and a trace-bound manual-review video gate.
 - Preserve the currently clean/pushed CHIP acceptance head `3dbfb6f` unchanged:
-  its final audit pins the exact accepted tree, so adding follow-up files there
-  before validation would invalidate its current pass. On resume, branch from
-  that commit into the isolated `experiment/chip-runtime-video-validation`
-  worktree and keep the old Phase-4/5 evidence immutable.
+  its final audit pins the exact accepted tree. The isolated follow-up branch
+  now exists at `experiment/chip-runtime-video-validation@dd49c7f` in
+  `/tmp/gr00t_chip_runtime_video`; continue there and keep the old Phase-4/5
+  evidence immutable.
+- The CHIP follow-up has passed Phases 1–3 and all currently executable Phase-4
+  CPU/structural/ONNX/collector-publication gates. Its remaining real CUDA,
+  IsaacLab, 32-frame rendered diagnostic, full-horizon collection, and review
+  videos wait on the same unrelated active GPU jobs. Never bypass this gate or
+  treat its CPU-generated golden video as robot-behavior evidence.
 - The CHIP follow-up must produce at least five synchronized, full-horizon,
   side-by-side H.264 review videos: release versus CHIP hard-off, hard-off
   versus enabled/no-contact, matched-force single-left, single-right, and
@@ -140,10 +151,11 @@ Still required before completion:
   and `phase6_real_paired` remain absent and fresh. No 4096-environment
   benchmark or six-protocol simulator collection was started.
 
-next_action: Keep this motion worktree paused. From the clean CHIP acceptance
-head, create an isolated `experiment/chip-runtime-video-validation` worktree
-and finish the regression/runtime/video gate specified in `phase6_handoff.md`.
-Only after that gate passes and its videos are ready for human review may this
-branch resume Phase-6 matrix item 2 at the fresh
+next_action: Keep this motion worktree paused. Resume the existing isolated
+`experiment/chip-runtime-video-validation@dd49c7f` worktree only after host
+NVML reports no unrelated compute application, and finish its Phase-4 through
+Phase-6 regression/runtime/video gate specified in `phase6_handoff.md`. Only
+after that gate passes and its videos are ready for human review may this branch
+resume Phase-6 matrix item 2 at the fresh
 `phase6_residual_gpu_smoke_idle_retry1` path. Do not overwrite either branch's
 accepted evidence, relax pre-data limits, or mark this task complete early.

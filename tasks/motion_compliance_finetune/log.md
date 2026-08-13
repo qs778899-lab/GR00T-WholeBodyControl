@@ -1075,3 +1075,29 @@
   protocols, bind numerical reports and videos by hash, and publish at least
   five synchronized review MP4s. No new GPU/simulator command was started while
   recording this priority.
+
+## 2026-08-13 — All-branch save checkpoint refreshed
+
+- Rechecked all four worktrees. `main@6d6d8ae`, accepted
+  `experiment/chip-compliance@3dbfb6f`, CHIP follow-up
+  `experiment/chip-runtime-video-validation@dd49c7f`, and this motion branch at
+  `9c290f2` were all clean and exactly synchronized with their tracked remotes
+  before this documentation-only update.
+- Replaced the stale future instruction to create the CHIP follow-up: it already
+  exists in `/tmp/gr00t_chip_runtime_video`. It has passed Phases 1–3 and all
+  non-GPU Phase-4 gates, including production collector assembly and atomic
+  video evidence tests. It remains Phase 4 `IN_PROGRESS` and externally blocked
+  by active unrelated GRAIL jobs on the RTX 4090; its pushed checkpoint is
+  `dd49c7f7f4f9bfdc8dd0f27ca8a6169ffdbb38a1`.
+- The accepted CHIP branch was deliberately not edited because its completed
+  exact-tree Phase-6 audit is itself the authoritative saved record. Main was
+  also not edited. Only this motion task's cross-branch status/handoff/log were
+  refreshed.
+- Confirmed the retained contention-affected motion training attempt is still
+  present. The strict idle retry root, 4096-environment scheduler JSON, and six
+  real paired traces remain absent. No GPU, training, benchmark, collector, or
+  simulator command ran during this save operation.
+- Motion remains Phase 6 `IN_PROGRESS`, `NOT_COMPLETE`, and paused behind the
+  CHIP runtime/video gate. After the external GPU condition clears, resume CHIP
+  first; return here at Phase-6 item 2 only after its formal numeric and manual
+  review-video gates pass.

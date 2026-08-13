@@ -22,9 +22,18 @@ GPU job until this cross-branch gate passes.
 Preserve `experiment/chip-compliance` and its remote at the already validated,
 clean commit `3dbfb6f211511bb04fedcd326f3265cdafcfa68c`. Its completed final audit
 pins an exact accepted tree; modifying that branch now would invalidate the
-existing result before the follow-up is ready. On resume, create an independent
-worktree and branch named `experiment/chip-runtime-video-validation` from that
-commit. The accepted CHIP Phase-4/5 artifact roots remain read-only inputs.
+existing result. The independent follow-up worktree and branch now exist at
+`/tmp/gr00t_chip_runtime_video` and
+`experiment/chip-runtime-video-validation@dd49c7f7f4f9bfdc8dd0f27ca8a6169ffdbb38a1`.
+The accepted CHIP Phase-4/5 artifact roots remain read-only inputs.
+
+That follow-up has passed Phases 1–3 and all Phase-4 work that does not require
+an idle GPU. Its production collector assembly, atomic diagnostic trace/video/
+summary publication, H.264/yuv420p/50-fps probe, checkpoint/motion/hash binding,
+accepted evidence-tree digests, and current CPU/ONNX regressions are retained
+and pushed. Phase 4 is still `IN_PROGRESS`; execution is formally blocked by
+three unrelated active GRAIL GPU processes. The short CPU golden MP4 validates
+the evidence pipeline only and is not a human review of simulated robot motion.
 
 The CHIP-first gate is complete only when all of the following are retained:
 
@@ -64,7 +73,25 @@ the CHIP follow-up complete merely because an MP4 renders or looks plausible.
 After the complete test/runtime gate passes and the videos are ready for the
 user, return here and resume the motion Phase-6 order below.
 
-## Latest pause checkpoint (2026-08-12 17:56 +08:00)
+## Cross-branch save checkpoint (2026-08-13)
+
+- This motion worktree was clean and synchronized with
+  `origin/experiment/motion-compliance@9c290f29b31017be1ff54c23bbe497d9278249ae`
+  before this documentation-only update.
+- The accepted CHIP branch was clean and synchronized at `3dbfb6f`; the CHIP
+  runtime/video follow-up was clean and synchronized at `dd49c7f`; main was
+  clean and synchronized at `6d6d8ae`. No implementation or evidence path on
+  any other branch was changed.
+- The retained contention-affected motion functional attempt remains present.
+  The accepted idle retry, scheduler JSON, and paired real-collection roots
+  remain absent. No motion training, benchmark, or simulator process was
+  launched while saving this checkpoint.
+- Resume CHIP first only when the RTX 4090 has no unrelated compute process.
+  After CHIP produces and passes its formal full-horizon numerical/video gate,
+  return to this branch at Phase-6 item 2. Do not rerun or overwrite the retained
+  busy-GPU motion attempt.
+
+## Previous pause checkpoint (2026-08-12 17:56 +08:00)
 
 Implementation state before this documentation-only checkpoint:
 
@@ -365,10 +392,11 @@ location alone—are the provenance contract.
 
 ## Exact Phase-6 continuation order
 
-0. Complete the CHIP-first current-runtime and human-review-video gate above on
-   a new isolated branch from `experiment/chip-compliance@3dbfb6f`. Do not edit
-   the accepted CHIP branch directly and do not continue this list until that
-   prerequisite passes.
+0. Resume the existing CHIP-first runtime/video worktree at
+   `experiment/chip-runtime-video-validation@dd49c7f` after its external GPU
+   blocker clears. Complete its Phase-4 through Phase-6 numerical and
+   human-review-video gate. Do not edit the accepted CHIP branch directly and
+   do not continue this list until that prerequisite passes.
 1. Confirm `status.md` still says Phase 6 `IN_PROGRESS`; inspect `git status`
    and do not mix a new algorithm change into the evidence run.
 2. P1 closure is complete: the former 38-test focused baseline plus new P1
